@@ -1,0 +1,31 @@
+[workspace]
+members = [ "rust/wvc-datafusion" ]
+
+[workspace.package]
+version = "0.0.1"
+homepage = "https://github.com/wherobots/wherobots-vectorized-compute"
+repository = "https://github.com/wherobots/wherobots-vectorized-compute"
+description = "Apache DataFusion Comet: High performance accelerator for Apache Spark"
+readme = "README.md"
+edition = "2021"
+
+# Same rust-version, arrow, and datafusion dependencies as datafusion-comet
+# https://github.com/apache/datafusion-comet/blob/main/native/Cargo.toml
+rust-version = "1.79"
+
+[workspace.dependencies]
+arrow = { version = "53.3.0", features = ["prettyprint", "ffi", "chrono-tz"] }
+arrow-array = { version = "53.3.0" }
+arrow-buffer = { version = "53.3.0" }
+arrow-data = { version = "53.3.0" }
+arrow-schema = { version = "53.3.0" }
+parquet = { version = "53.3.0", default-features = false }
+datafusion = { version = "44.0.0", default-features = false }
+datafusion-common = { version = "44.0.0", default-features = false }
+datafusion-functions = { version = "44.0.0", default-features = false }
+datafusion-functions-nested = { version = "44.0.0", default-features = false }
+datafusion-expr = { version = "44.0.0", default-features = false }
+datafusion-expr-common = { version = "44.0.0", default-features = false }
+datafusion-execution = { version = "44.0.0", default-features = false }
+datafusion-physical-plan = { version = "44.0.0", default-features = false }
+datafusion-physical-expr = { version = "44.0.0", default-features = false }
