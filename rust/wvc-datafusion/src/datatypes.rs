@@ -5,35 +5,83 @@ use datafusion::logical_expr::{Signature, Volatility};
 
 #[derive(Debug)]
 pub struct ExtensionType {
-    extension_name: &'static str,
+    extension_name: String,
     storage_type: DataType,
+    extension_metadata: Option<String>,
 }
 
 impl ExtensionType {
-    pub const fn new(extension_name: &'static str, storage_type: DataType) -> Self {
+    pub fn new(ext_name: &str, storage_type: DataType, extension_metadata: Option<String>) -> Self {
+        let extension_name = ext_name.to_string();
         Self {
             extension_name,
             storage_type,
+            extension_metadata,
         }
     }
 
     pub fn to_field(&self, name: &str) -> Field {
-        let field = Field::new(name, self.storage_type.clone(), false);
-        return field.with_metadata(HashMap::from([(
+        let mut field = Field::new(name, self.storage_type.clone(), false);
+        let mut metadata = HashMap::from([(
             "ARROW:extension:name".to_string(),
-            self.extension_name.to_string(),
-        )]));
+            self.extension_name.clone(),
+        )]);
+
+        match &self.extension_metadata {
+            Some(extension_metadata) => {
+                metadata.insert(
+                    "ARROW:extension:metadata".to_string(),
+                    extension_metadata.clone(),
+                );
+            }
+            None => {}
+        }
+
+        field.set_metadata(metadata);
+        return field;
     }
 
     pub fn wrap_struct(&self) -> DataType {
-        return DataType::Struct(Fields::from(vec![self.to_field(self.extension_name)]));
+        let field = self.to_field(&self.extension_name);
+        return DataType::Struct(Fields::from(vec![field]));
+    }
+
+    pub fn unwrap_struct(storage_type: &DataType) -> Option<ExtensionType> {
+        match storage_type {
+            DataType::Struct(fields) => {
+                if fields.len() != 1 {
+                    return None;
+                }
+
+                let field = &fields[0];
+                let metadata = field.metadata();
+
+                match metadata.get("ARROW:extension:name") {
+                    Some(extension_name) => {
+                        if extension_name != field.name() {
+                            return None;
+                        }
+                    }
+                    None => return None,
+                }
+
+                Some(ExtensionType::new(
+                    field.name(),
+                    field.data_type().clone(),
+                    metadata.get("ARROW:extension:metadata").cloned(),
+                ))
+            }
+            _ => return None,
+        }
     }
 }
 
-pub const GEOARROW_WKT: ExtensionType = ExtensionType::new("geoarrow.wkt", DataType::Binary);
+pub fn geoarrow_wkt() -> ExtensionType {
+    ExtensionType::new("geoarrow.wkt", DataType::Binary, None)
+}
 
 pub fn any_single_geometry_type_input() -> Signature {
-    Signature::uniform(1, vec![GEOARROW_WKT.wrap_struct()], Volatility::Immutable)
+    Signature::uniform(1, vec![geoarrow_wkt().wrap_struct()], Volatility::Immutable)
 }
 
 #[cfg(test)]
@@ -50,26 +98,60 @@ mod tests {
 
     #[test]
     fn extension_type_field() {
-        let ext_type = ExtensionType::new("foofy", DataType::Binary);
+        let ext_type = ExtensionType::new("foofy", DataType::Binary, None);
 
         let field = ext_type.to_field("some name");
         assert_eq!(field.name(), "some name");
         assert_eq!(*field.data_type(), DataType::Binary);
 
         let metadata = field.metadata();
+        assert_eq!(metadata.len(), 1);
         assert!(metadata.contains_key("ARROW:extension:name"));
         assert_eq!(metadata["ARROW:extension:name"], "foofy");
     }
 
     #[test]
+    fn extension_type_field_with_metadata() {
+        let ext_type = ExtensionType::new(
+            "foofy",
+            DataType::Binary,
+            Some("foofy metadata".to_string()),
+        );
+        let field = ext_type.to_field("some name");
+        let metadata = field.metadata();
+        assert_eq!(metadata.len(), 2);
+        assert!(metadata.contains_key("ARROW:extension:name"));
+        assert_eq!(metadata["ARROW:extension:name"], "foofy");
+        assert!(metadata.contains_key("ARROW:extension:metadata"));
+        assert_eq!(metadata["ARROW:extension:metadata"], "foofy metadata");
+    }
+
+    #[test]
     fn extension_type_struct() {
-        let ext_struct = ExtensionType::new("foofy", DataType::Binary);
-        match ext_struct.wrap_struct() {
+        let ext_type = ExtensionType::new(
+            "foofy",
+            DataType::Binary,
+            Some("foofy metadata".to_string()),
+        );
+        let ext_struct = &ext_type.wrap_struct();
+        match ext_struct {
             DataType::Struct(fields) => {
                 assert_eq!(fields.len(), 1);
                 assert_eq!(fields[0].name(), "foofy");
             }
             _ => panic!("not a struct"),
+        }
+
+        match ExtensionType::unwrap_struct(ext_struct) {
+            Some(ext_type) => {
+                assert_eq!(ext_type.extension_name, "foofy");
+                assert_eq!(
+                    ext_type.extension_metadata,
+                    Some("foofy metadata".to_string())
+                );
+                assert_eq!(ext_type.storage_type, DataType::Binary);
+            }
+            None => panic!("unwrap did not detect valid extension type"),
         }
     }
 
@@ -81,7 +163,7 @@ mod tests {
         data_types_with_scalar_udf(&[DataType::Binary], &udf).expect_err("should fail");
 
         // Pass with an extension type wrapped in a struct
-        let valid_type = GEOARROW_WKT.wrap_struct();
+        let valid_type = geoarrow_wkt().wrap_struct();
         data_types_with_scalar_udf(&[valid_type], &udf).expect("should pass");
 
         // The matching includes the field metadata, so this fails to match
@@ -91,7 +173,8 @@ mod tests {
             DataType::Binary,
             false,
         )]));
-        data_types_with_scalar_udf(&[valid_type_with_other_metadata], &udf).expect_err("should fail");
+        data_types_with_scalar_udf(&[valid_type_with_other_metadata], &udf)
+            .expect_err("should fail");
     }
 
     #[derive(Debug)]
