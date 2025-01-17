@@ -3,11 +3,38 @@ use std::collections::HashMap;
 use arrow_schema::{DataType, Field, Fields};
 use datafusion::logical_expr::{Signature, Volatility};
 
+/// Parsed representation of an Arrow extension type
+///
+/// Because arrow-rs doesn't transport extension names or metadata alongside
+/// a DataType, and DataFusion does not provide a built-in mechanism for
+/// user-defined types we have to do a bit of wrapping and unwrapping to represent
+/// them in a way that can be plugged in to user-defined functions. In particular,
+/// we need to be able to:
+///
+/// - Declare function signatures in such a way that ST_something(some_geometry)
+///   can find the user-defined function implementation (or error if some_geometry
+///   is not geometry).
+/// - Declare output types
+///
+/// Strictly speaking we don't need to use the Arrow extension type (i.e., name
+/// + metadata) to do this; however, GeoArrow uses it and representing the types
+/// in this way means we don't have to try very hard to integrate with geoarrow-rs
+/// or geoarrow-c via FFI.
+///
+/// This wrapping/unwrapping can disappear when there is a built-in logical type
+/// representation.
 #[derive(Debug)]
 pub struct ExtensionType {
     extension_name: String,
     storage_type: DataType,
     extension_metadata: Option<String>,
+}
+
+/// Simple logical type representation that is either a built-in Arrow data type
+/// or an ExtensionType.
+pub enum LogicalType {
+    Normal(DataType),
+    Extension(ExtensionType),
 }
 
 impl ExtensionType {
@@ -41,12 +68,12 @@ impl ExtensionType {
         return field;
     }
 
-    pub fn wrap_struct(&self) -> DataType {
+    pub fn to_data_type(&self) -> DataType {
         let field = self.to_field(&self.extension_name);
         return DataType::Struct(Fields::from(vec![field]));
     }
 
-    pub fn unwrap_struct(storage_type: &DataType) -> Option<ExtensionType> {
+    pub fn from_data_type(storage_type: &DataType) -> Option<ExtensionType> {
         match storage_type {
             DataType::Struct(fields) => {
                 if fields.len() != 1 {
@@ -77,11 +104,15 @@ impl ExtensionType {
 }
 
 pub fn geoarrow_wkt() -> ExtensionType {
-    ExtensionType::new("geoarrow.wkt", DataType::Binary, None)
+    ExtensionType::new("geoarrow.wkt", DataType::Utf8, None)
 }
 
 pub fn any_single_geometry_type_input() -> Signature {
-    Signature::uniform(1, vec![geoarrow_wkt().wrap_struct()], Volatility::Immutable)
+    Signature::uniform(
+        1,
+        vec![geoarrow_wkt().to_data_type()],
+        Volatility::Immutable,
+    )
 }
 
 #[cfg(test)]
@@ -133,7 +164,7 @@ mod tests {
             DataType::Binary,
             Some("foofy metadata".to_string()),
         );
-        let ext_struct = &ext_type.wrap_struct();
+        let ext_struct = &ext_type.to_data_type();
         match ext_struct {
             DataType::Struct(fields) => {
                 assert_eq!(fields.len(), 1);
@@ -142,7 +173,7 @@ mod tests {
             _ => panic!("not a struct"),
         }
 
-        match ExtensionType::unwrap_struct(ext_struct) {
+        match ExtensionType::from_data_type(ext_struct) {
             Some(ext_type) => {
                 assert_eq!(ext_type.extension_name, "foofy");
                 assert_eq!(
@@ -163,7 +194,7 @@ mod tests {
         data_types_with_scalar_udf(&[DataType::Binary], &udf).expect_err("should fail");
 
         // Pass with an extension type wrapped in a struct
-        let valid_type = geoarrow_wkt().wrap_struct();
+        let valid_type = geoarrow_wkt().to_data_type();
         data_types_with_scalar_udf(&[valid_type], &udf).expect("should pass");
 
         // The matching includes the field metadata, so this fails to match
