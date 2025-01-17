@@ -3,6 +3,14 @@ use std::collections::HashMap;
 use arrow_schema::{DataType, Field, Fields};
 use datafusion::logical_expr::{Signature, Volatility};
 
+/// Check if an argument is a wrapped geometry type
+pub fn is_geometry_type(data_type: &DataType) -> bool {
+    match ExtensionType::from_data_type(data_type) {
+        Some(extension_type) => extension_type.extension_name.starts_with("geoarrow."),
+        None => false,
+    }
+}
+
 /// Parsed representation of an Arrow extension type
 ///
 /// Because arrow-rs doesn't transport extension names or metadata alongside
