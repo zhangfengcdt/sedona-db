@@ -77,6 +77,7 @@ impl ScalarUDFImpl for SimpleSpatialUdf {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        // TODO: call data_types_with_scalar_udf to coerce non-spatial arguments
         let mut out: Vec<DataType> = vec![];
         for data_type in arg_types {
             out.push(data_type.clone());
