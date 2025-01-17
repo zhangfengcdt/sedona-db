@@ -14,7 +14,8 @@ use datafusion::logical_expr::{Signature, Volatility};
 /// - Declare function signatures in such a way that ST_something(some_geometry)
 ///   can find the user-defined function implementation (or error if some_geometry
 ///   is not geometry).
-/// - Declare output types
+/// - Declare an output type so that geometry can be recognized by the next ST
+///   function.
 ///
 /// Strictly speaking we don't need to use the Arrow extension type (i.e., name
 /// + metadata) to do this; however, GeoArrow uses it and representing the types
@@ -32,6 +33,7 @@ pub struct ExtensionType {
 
 /// Simple logical type representation that is either a built-in Arrow data type
 /// or an ExtensionType.
+#[derive(Debug)]
 pub enum LogicalType {
     Normal(DataType),
     Extension(ExtensionType),
