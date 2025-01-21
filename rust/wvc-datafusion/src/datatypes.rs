@@ -3,14 +3,6 @@ use std::collections::HashMap;
 use arrow_schema::{DataType, Field, Fields};
 use datafusion::logical_expr::{Signature, Volatility};
 
-/// Check if an argument is a wrapped geometry type
-pub fn is_geometry_type(data_type: &DataType) -> bool {
-    match ExtensionType::from_data_type(data_type) {
-        Some(extension_type) => extension_type.extension_name.starts_with("geoarrow."),
-        None => false,
-    }
-}
-
 /// Parsed representation of an Arrow extension type
 ///
 /// Because arrow-rs doesn't transport extension names or metadata alongside
@@ -32,7 +24,7 @@ pub fn is_geometry_type(data_type: &DataType) -> bool {
 ///
 /// This wrapping/unwrapping can disappear when there is a built-in logical type
 /// representation.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ExtensionType {
     extension_name: String,
     storage_type: DataType,
@@ -41,10 +33,34 @@ pub struct ExtensionType {
 
 /// Simple logical type representation that is either a built-in Arrow data type
 /// or an ExtensionType.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum LogicalType {
     Normal(DataType),
     Extension(ExtensionType),
+}
+
+impl From<DataType> for LogicalType {
+    fn from(value: DataType) -> Self {
+        match ExtensionType::from_data_type(&value) {
+            Some(extension_type) => LogicalType::Extension(extension_type),
+            None => LogicalType::Normal(value),
+        }
+    }
+}
+
+impl From<Field> for LogicalType {
+    fn from(value: Field) -> Self {
+        match ExtensionType::from_field(&value) {
+            Some(extension_type) => LogicalType::Extension(extension_type),
+            None => LogicalType::Normal(value.data_type().clone()),
+        }
+    }
+}
+
+impl From<ExtensionType> for LogicalType {
+    fn from(value: ExtensionType) -> Self {
+        return LogicalType::Extension(value);
+    }
 }
 
 impl ExtensionType {
@@ -101,19 +117,13 @@ impl ExtensionType {
         let metadata = field.metadata();
 
         match metadata.get("ARROW:extension:name") {
-            Some(extension_name) => {
-                if extension_name != field.name() {
-                    return None;
-                }
-            }
+            Some(extension_name) => Some(ExtensionType::new(
+                extension_name,
+                field.data_type().clone(),
+                metadata.get("ARROW:extension:metadata").cloned(),
+            )),
             None => return None,
         }
-
-        Some(ExtensionType::new(
-            field.name(),
-            field.data_type().clone(),
-            metadata.get("ARROW:extension:metadata").cloned(),
-        ))
     }
 
     /// Unwrap a DataType that is potentially an extension type wrapped in a Struct
@@ -228,6 +238,21 @@ mod tests {
             }
             None => panic!("unwrap did not detect valid extension type"),
         }
+    }
+
+    #[test]
+    fn logical_type() {
+        let logical_type_normal: LogicalType = DataType::Boolean.into();
+        assert_eq!(logical_type_normal, LogicalType::Normal(DataType::Boolean));
+
+        let logical_type_ext: LogicalType = geoarrow_wkt().into();
+        assert_eq!(logical_type_ext, LogicalType::Extension(geoarrow_wkt()));
+
+        let logical_type_ext2: LogicalType = geoarrow_wkt().to_data_type().into();
+        assert_eq!(logical_type_ext2, logical_type_ext);
+
+        let logical_type_ext3: LogicalType = geoarrow_wkt().to_field("foofy").into();
+        assert_eq!(logical_type_ext3, logical_type_ext);
     }
 
     #[test]
