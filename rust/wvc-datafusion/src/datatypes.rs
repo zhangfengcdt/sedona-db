@@ -57,6 +57,10 @@ impl ExtensionType {
         }
     }
 
+    /// Wraps this ExtensionType as a Field whose data_type is the actual storage type
+    ///
+    /// This is how an Arrow extension type would be normally wrapped if it were a column
+    /// in a RecordBatch.
     pub fn to_field(&self, name: &str) -> Field {
         let mut field = Field::new(name, self.storage_type.clone(), false);
         let mut metadata = HashMap::from([(
@@ -78,11 +82,45 @@ impl ExtensionType {
         return field;
     }
 
+    /// Wrap this ExtensionType as a Struct DataType
+    ///
+    /// This is the representation required internally until DataFusion can represent
+    /// a non-standard Arrow type. This representation is a Struct that contains exactly
+    /// one field whose name is the extension name and whose field metadata contains the
+    /// extension name and metadata.
     pub fn to_data_type(&self) -> DataType {
         let field = self.to_field(&self.extension_name);
         return DataType::Struct(Fields::from(vec![field]));
     }
 
+    /// Unwrap a Field into an ExtensionType if the field represents one
+    ///
+    /// Returns None if the field does not have Arrow extension metadata
+    /// for the extension name. This is the inverse of to_field().
+    pub fn from_field(field: &Field) -> Option<ExtensionType> {
+        let metadata = field.metadata();
+
+        match metadata.get("ARROW:extension:name") {
+            Some(extension_name) => {
+                if extension_name != field.name() {
+                    return None;
+                }
+            }
+            None => return None,
+        }
+
+        Some(ExtensionType::new(
+            field.name(),
+            field.data_type().clone(),
+            metadata.get("ARROW:extension:metadata").cloned(),
+        ))
+    }
+
+    /// Unwrap a DataType that is potentially an extension type wrapped in a Struct
+    ///
+    /// Returns None if the storage type is not a Struct, if the Struct contains
+    /// any number of fields != 1, if its only field is does not contain extension
+    /// metadata, or if its extension name does not match the name of the struct.
     pub fn from_data_type(storage_type: &DataType) -> Option<ExtensionType> {
         match storage_type {
             DataType::Struct(fields) => {
@@ -91,28 +129,24 @@ impl ExtensionType {
                 }
 
                 let field = &fields[0];
-                let metadata = field.metadata();
-
-                match metadata.get("ARROW:extension:name") {
-                    Some(extension_name) => {
-                        if extension_name != field.name() {
-                            return None;
+                let maybe_extension_type = ExtensionType::from_field(field);
+                match maybe_extension_type {
+                    Some(extension_type) => {
+                        if &extension_type.extension_name == field.name() {
+                            Some(extension_type)
+                        } else {
+                            None
                         }
                     }
-                    None => return None,
+                    None => None,
                 }
-
-                Some(ExtensionType::new(
-                    field.name(),
-                    field.data_type().clone(),
-                    metadata.get("ARROW:extension:metadata").cloned(),
-                ))
             }
             _ => return None,
         }
     }
 }
 
+/// GeoArrow Well-known text ExtensionType
 pub fn geoarrow_wkt() -> ExtensionType {
     ExtensionType::new("geoarrow.wkt", DataType::Utf8, None)
 }
