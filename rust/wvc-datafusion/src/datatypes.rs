@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use arrow_schema::{DataType, Field, Fields};
+use arrow_schema::{DataType, Field, Fields, Schema, SchemaBuilder};
 use datafusion::logical_expr::{Signature, Volatility};
 
 /// Parsed representation of an Arrow extension type
@@ -154,6 +154,21 @@ impl ExtensionType {
             _ => return None,
         }
     }
+}
+
+/// Wrap a Schema possibly containing Extension Types such that extension types are preserved
+pub fn wrap_arrow_schema(schema: Schema) -> Schema {
+    let mut builder = SchemaBuilder::with_capacity(schema.fields().len());
+    for field in schema.fields() {
+        let field_out = match ExtensionType::from_field(field) {
+            Some(ext) => Field::new(field.name(), ext.to_data_type(), false).into(),
+            None => field.clone(),
+        };
+
+        builder.push(field_out);
+    }
+
+    return builder.finish();
 }
 
 /// GeoArrow Well-known text ExtensionType
