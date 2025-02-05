@@ -156,12 +156,36 @@ impl ExtensionType {
     }
 }
 
-/// Wrap a Schema possibly containing Extension Types such that extension types are preserved
-pub fn wrap_arrow_schema(schema: Schema) -> Schema {
+/// Wrap a Schema possibly containing Extension Types
+///
+/// The resulting Schema will have all Extension types wrapped such that they
+/// are propagated through operations that only supply a data type (e.g., UDF
+/// execution). This is the projection that should be applied to input that
+/// might contain extension types.
+pub fn wrap_arrow_schema(schema: &Schema) -> Schema {
     let mut builder = SchemaBuilder::with_capacity(schema.fields().len());
     for field in schema.fields() {
         let field_out = match ExtensionType::from_field(field) {
             Some(ext) => Field::new(field.name(), ext.to_data_type(), false).into(),
+            None => field.clone(),
+        };
+
+        builder.push(field_out);
+    }
+
+    return builder.finish();
+}
+
+/// Unwrap a Schema that contains wrapped extension types
+///
+/// The resulting schema will have extension types represented with field metadata
+/// instead of as wrapped structs. This is the projection that should be applied
+/// when writing to output.
+pub fn unwrap_arrow_schema(schema: &Schema) -> Schema {
+    let mut builder = SchemaBuilder::with_capacity(schema.fields().len());
+    for field in schema.fields() {
+        let field_out = match ExtensionType::from_data_type(field.data_type()) {
+            Some(ext) => ext.to_field(field.name()).into(),
             None => field.clone(),
         };
 
@@ -268,6 +292,23 @@ mod tests {
 
         let logical_type_ext3: LogicalType = geoarrow_wkt().to_field("foofy").into();
         assert_eq!(logical_type_ext3, logical_type_ext);
+    }
+
+    #[test]
+    fn schema_wrap_unwrap() {
+        let mut builder = SchemaBuilder::new();
+        builder.push(Field::new("field1", DataType::Boolean, true));
+        builder.push(geoarrow_wkt().to_field("field2"));
+        let schema_normal = builder.finish();
+
+        let schema_wrapped = wrap_arrow_schema(&schema_normal);
+        assert_eq!(schema_wrapped.field(0).name(), "field1");
+        assert_eq!(*schema_wrapped.field(0).data_type(), DataType::Boolean);
+        assert_eq!(schema_wrapped.field(1).name(), "field2");
+        assert!(schema_wrapped.field(1).data_type().is_nested());
+
+        let schema_unwrapped = unwrap_arrow_schema(&schema_wrapped);
+        assert_eq!(schema_unwrapped, schema_normal);
     }
 
     #[test]
