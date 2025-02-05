@@ -2,12 +2,9 @@ use std::{collections::HashMap, sync::Arc};
 
 use arrow_schema::{DataType, Field, Fields, Schema, SchemaBuilder};
 use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::array::{ArrayRef, StructArray};
 use datafusion::common::internal_err;
 use datafusion::error::Result;
-use datafusion::{
-    arrow::array::{ArrayRef, StructArray},
-    logical_expr::{Signature, Volatility},
-};
 
 /// Parsed representation of an Arrow extension type
 ///
@@ -291,31 +288,16 @@ pub fn unwrap_arrow_batch(batch: RecordBatch) -> RecordBatch {
     RecordBatch::try_new(Arc::new(schema), columns).unwrap()
 }
 
-/// GeoArrow Well-known text ExtensionType
-pub fn geoarrow_wkt() -> ExtensionType {
-    ExtensionType::new("geoarrow.wkt", DataType::Utf8, None)
-}
-
-pub fn any_single_geometry_type_input() -> Signature {
-    Signature::uniform(
-        1,
-        vec![geoarrow_wkt().to_data_type()],
-        Volatility::Immutable,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::array::create_array;
-    use datafusion::error::DataFusionError;
-    use datafusion::error::Result;
-    use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
-    use datafusion_expr::ScalarUDF;
-    use std::any::Any;
-
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
     use super::*;
+
+    /// GeoArrow Well-known text ExtensionType
+    pub fn geoarrow_wkt() -> ExtensionType {
+        ExtensionType::new("geoarrow.wkt", DataType::Utf8, None)
+    }
 
     #[test]
     fn extension_type_field() {
@@ -447,58 +429,5 @@ mod tests {
 
         let batch_unwrapped = unwrap_arrow_batch(batch_wrapped);
         assert_eq!(batch_unwrapped, batch);
-    }
-
-    #[test]
-    fn geometry_type_signature() {
-        let udf = ScalarUDF::from(DoNothing::new());
-
-        // Fail with an invalid type
-        data_types_with_scalar_udf(&[DataType::Binary], &udf).expect_err("should fail");
-
-        // Pass with an extension type wrapped in a struct
-        let valid_type = geoarrow_wkt().to_data_type();
-        data_types_with_scalar_udf(&[valid_type], &udf).expect("should pass");
-
-        // The matching includes the field metadata, so this fails to match
-        // This can be overcome by implementing coerce_types() instead of signature()
-        let valid_type_with_other_metadata = DataType::Struct(Fields::from(vec![Field::new(
-            "geoarrow.wkt",
-            DataType::Binary,
-            false,
-        )]));
-        data_types_with_scalar_udf(&[valid_type_with_other_metadata], &udf)
-            .expect_err("should fail");
-    }
-
-    #[derive(Debug)]
-    struct DoNothing {
-        signature: Signature,
-    }
-
-    impl DoNothing {
-        fn new() -> Self {
-            let signature = any_single_geometry_type_input();
-            Self { signature }
-        }
-    }
-
-    impl ScalarUDFImpl for DoNothing {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-        fn name(&self) -> &str {
-            "do_nothing"
-        }
-        fn signature(&self) -> &Signature {
-            &self.signature
-        }
-        fn return_type(&self, _: &[DataType]) -> Result<DataType> {
-            Ok(DataType::Int32)
-        }
-        // The actual implementation would add one to the argument
-        fn invoke_batch(&self, _: &[ColumnarValue], _number_rows: usize) -> Result<ColumnarValue> {
-            Err(DataFusionError::NotImplemented("".to_string()))
-        }
     }
 }
