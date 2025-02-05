@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use arrow_schema::{DataType, Field, Fields, Schema, SchemaBuilder};
+use datafusion::arrow::array::RecordBatch;
 use datafusion::common::internal_err;
 use datafusion::error::Result;
 use datafusion::{
@@ -96,7 +97,7 @@ impl From<LogicalArray> for ArrayRef {
                     Ok(wrapped) => wrapped,
                     Err(err) => panic!("{}", err),
                 }
-            },
+            }
         }
     }
 }
@@ -252,6 +253,34 @@ pub fn unwrap_arrow_schema(schema: &Schema) -> Schema {
     return builder.finish();
 }
 
+pub fn wrap_arrow_batch(batch: RecordBatch) -> RecordBatch {
+    let mut columns = Vec::with_capacity(batch.num_columns());
+    for i in 0..batch.num_columns() {
+        let column_out = match ExtensionType::from_field(batch.schema().field(i)) {
+            Some(ext) => ext.wrap_storage(batch.column(i).clone()).unwrap(),
+            None => batch.column(i).clone(),
+        };
+        columns.push(column_out);
+    }
+
+    let schema = wrap_arrow_schema(&batch.schema());
+    RecordBatch::try_new(Arc::new(schema), columns).unwrap()
+}
+
+pub fn unwrap_arrow_batch(batch: RecordBatch) -> RecordBatch {
+    let mut columns = Vec::with_capacity(batch.num_columns());
+    for i in 0..batch.num_columns() {
+        let logical_array: LogicalArray = batch.column(i).clone().into();
+        match logical_array {
+            LogicalArray::Normal(array) => columns.push(array),
+            LogicalArray::Extension(_, array) => columns.push(array),
+        }
+    }
+
+    let schema = unwrap_arrow_schema(&batch.schema());
+    RecordBatch::try_new(Arc::new(schema), columns).unwrap()
+}
+
 /// GeoArrow Well-known text ExtensionType
 pub fn geoarrow_wkt() -> ExtensionType {
     ExtensionType::new("geoarrow.wkt", DataType::Utf8, None)
@@ -270,7 +299,6 @@ mod tests {
     use datafusion::arrow::array::create_array;
     use datafusion::error::DataFusionError;
     use datafusion::error::Result;
-    use datafusion::functions::math::log;
     use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
     use datafusion_expr::ScalarUDF;
     use std::any::Any;
@@ -388,8 +416,27 @@ mod tests {
             LogicalArray::Extension(extension_type, array) => {
                 assert_eq!(extension_type, &geoarrow_wkt());
                 assert_eq!(array.data_type(), &DataType::Utf8)
-            },
+            }
         }
+    }
+
+    #[test]
+    fn batch_wrap_unwrap() {
+        let schema = Schema::new(vec![
+            Field::new("col1", DataType::Utf8, false),
+            geoarrow_wkt().to_field("col2"),
+        ]);
+
+        let col1 = create_array!(Utf8, ["POINT (0 1)", "POINT (2, 3)"]);
+        let col2 = col1.clone();
+
+        let batch = RecordBatch::try_new(schema.into(), vec![col1, col2]).unwrap();
+        let batch_wrapped = wrap_arrow_batch(batch.clone());
+        assert_eq!(batch_wrapped.column(0).data_type(), &DataType::Utf8);
+        assert!(batch_wrapped.column(1).data_type().is_nested());
+
+        let batch_unwrapped = unwrap_arrow_batch(batch_wrapped);
+        assert_eq!(batch_unwrapped, batch);
     }
 
     #[test]
