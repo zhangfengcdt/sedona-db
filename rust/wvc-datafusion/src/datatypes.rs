@@ -253,6 +253,11 @@ pub fn unwrap_arrow_schema(schema: &Schema) -> Schema {
     return builder.finish();
 }
 
+/// Wrap a record batch possibly containing extension types encoded as field metadata
+///
+/// The resulting batch will wrap columns with extension types as struct arrays
+/// that can be passed to APIs that operate purely on ArrayRefs (e.g., UDFs).
+/// This is the projection that should be applied when wrapping an input stream.
 pub fn wrap_arrow_batch(batch: RecordBatch) -> RecordBatch {
     let mut columns = Vec::with_capacity(batch.num_columns());
     for i in 0..batch.num_columns() {
@@ -267,6 +272,11 @@ pub fn wrap_arrow_batch(batch: RecordBatch) -> RecordBatch {
     RecordBatch::try_new(Arc::new(schema), columns).unwrap()
 }
 
+/// Unwrap a record batch such that the output expresses
+///
+/// The resulting output will have extension types represented with field metadata
+/// instead of as wrapped structs. This is the projection that should be applied
+/// when writing to output.
 pub fn unwrap_arrow_batch(batch: RecordBatch) -> RecordBatch {
     let mut columns = Vec::with_capacity(batch.num_columns());
     for i in 0..batch.num_columns() {
