@@ -1,7 +1,12 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use arrow_schema::{DataType, Field, Fields, Schema, SchemaBuilder};
-use datafusion::logical_expr::{Signature, Volatility};
+use datafusion::common::internal_err;
+use datafusion::error::Result;
+use datafusion::{
+    arrow::array::{ArrayRef, StructArray},
+    logical_expr::{Signature, Volatility},
+};
 
 /// Parsed representation of an Arrow extension type
 ///
@@ -63,6 +68,39 @@ impl From<ExtensionType> for LogicalType {
     }
 }
 
+/// Simple logical array representation to handle the wrapping and unwrapping of
+/// ArrayRef values
+pub enum LogicalArray {
+    Normal(ArrayRef),
+    Extension(ExtensionType, ArrayRef),
+}
+
+impl From<ArrayRef> for LogicalArray {
+    fn from(value: ArrayRef) -> LogicalArray {
+        match ExtensionType::from_data_type(value.data_type()) {
+            Some(extension_type) => {
+                let struct_array = StructArray::from(value.to_data());
+                LogicalArray::Extension(extension_type, struct_array.column(0).clone())
+            }
+            None => LogicalArray::Normal(value),
+        }
+    }
+}
+
+impl From<LogicalArray> for ArrayRef {
+    fn from(value: LogicalArray) -> Self {
+        match value {
+            LogicalArray::Normal(array) => array,
+            LogicalArray::Extension(extension_type, array) => {
+                match extension_type.wrap_storage(array) {
+                    Ok(wrapped) => wrapped,
+                    Err(err) => panic!("{}", err),
+                }
+            },
+        }
+    }
+}
+
 impl ExtensionType {
     pub fn new(ext_name: &str, storage_type: DataType, extension_metadata: Option<String>) -> Self {
         let extension_name = ext_name.to_string();
@@ -107,6 +145,25 @@ impl ExtensionType {
     pub fn to_data_type(&self) -> DataType {
         let field = self.to_field(&self.extension_name);
         return DataType::Struct(Fields::from(vec![field]));
+    }
+
+    /// Wrap storage array as a StructArray
+    pub fn wrap_storage(&self, array: ArrayRef) -> Result<ArrayRef> {
+        if array.data_type() != &self.storage_type {
+            return internal_err!(
+                "Type to wrap ({}) does not match storage type ({})",
+                array.data_type(),
+                &self.storage_type
+            );
+        }
+
+        let wrapped = StructArray::new(
+            vec![self.to_field(&self.extension_name)].into(),
+            vec![array],
+            None,
+        );
+
+        return Ok(Arc::new(wrapped));
     }
 
     /// Unwrap a Field into an ExtensionType if the field represents one
@@ -210,8 +267,10 @@ pub fn any_single_geometry_type_input() -> Signature {
 
 #[cfg(test)]
 mod tests {
+    use datafusion::arrow::array::create_array;
     use datafusion::error::DataFusionError;
     use datafusion::error::Result;
+    use datafusion::functions::math::log;
     use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
     use datafusion_expr::ScalarUDF;
     use std::any::Any;
@@ -309,6 +368,28 @@ mod tests {
 
         let schema_unwrapped = unwrap_arrow_schema(&schema_wrapped);
         assert_eq!(schema_unwrapped, schema_normal);
+    }
+
+    #[test]
+    fn array_wrap_unwrap() {
+        let array: ArrayRef = create_array!(Utf8, ["POINT (0 1)", "POINT (2, 3)"]);
+        let logical_array: LogicalArray = array.clone().into();
+        match &logical_array {
+            LogicalArray::Normal(array) => assert_eq!(array.data_type(), &DataType::Utf8),
+            LogicalArray::Extension(_, _) => panic!("Expected normal array!"),
+        }
+
+        let logical_array_ext = LogicalArray::Extension(geoarrow_wkt(), array);
+        let wrapped_array: ArrayRef = logical_array_ext.into();
+        assert!(wrapped_array.data_type().is_nested());
+        let logical_array_ext_roundtrip: LogicalArray = wrapped_array.into();
+        match &logical_array_ext_roundtrip {
+            LogicalArray::Normal(_) => panic!("Expected extension array"),
+            LogicalArray::Extension(extension_type, array) => {
+                assert_eq!(extension_type, &geoarrow_wkt());
+                assert_eq!(array.data_type(), &DataType::Utf8)
+            },
+        }
     }
 
     #[test]
