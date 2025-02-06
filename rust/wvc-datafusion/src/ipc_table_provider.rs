@@ -10,7 +10,10 @@ use arrow_schema::SchemaRef;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
 
+use crate::projection::{wrap_arrow_batch, wrap_arrow_schema};
+
 pub fn ipc_stream_exec(reader: StreamReader<BufReader<File>>) -> Result<LazyMemoryExec> {
+    // In theory could have multiple files here (for multiple generators)
     let generator = IpcStreamProvider::new(reader);
     let schema = generator.schema();
     let dyn_generator: Arc<RwLock<dyn LazyBatchGenerator>> = Arc::new(RwLock::new(generator));
@@ -28,7 +31,7 @@ impl IpcStreamProvider {
     }
 
     pub fn schema(&self) -> SchemaRef {
-        return self.reader.schema();
+        Arc::new(wrap_arrow_schema(&self.reader.schema()))
     }
 }
 
@@ -43,7 +46,7 @@ impl LazyBatchGenerator for IpcStreamProvider {
         let maybe_next = self.reader.next();
         match maybe_next {
             Some(next_result) => match next_result {
-                Ok(batch) => Ok(Some(batch)),
+                Ok(batch) => Ok(Some(wrap_arrow_batch(batch))),
                 Err(err) => Err(DataFusionError::ArrowError(err, None)),
             },
             None => Ok(None),
