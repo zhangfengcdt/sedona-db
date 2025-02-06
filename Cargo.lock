@@ -2306,9 +2306,11 @@ name = "wvc-datafusion"
 version = "0.0.1"
 dependencies = [
  "arrow-array",
+ "arrow-ipc",
  "arrow-schema",
  "datafusion",
  "datafusion-expr",
+ "parking_lot",
 ]
 
 [[package]]

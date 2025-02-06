@@ -5,6 +5,8 @@ edition = "2021"
 
 [dependencies]
 arrow-schema = { workspace = true }
+arrow-ipc = { workspace = true }
 arrow-array = { workspace = true }
 datafusion = { workspace = true }
 datafusion-expr = { workspace = true }
+parking_lot = { workspace = true }

@@ -1,86 +1,52 @@
-use std::any::Any;
-use std::fmt::Formatter;
+use parking_lot::RwLock;
+use std::fmt::{Display, Formatter};
+use std::fs::File;
+use std::io::BufReader;
 use std::sync::Arc;
 
+use arrow_array::RecordBatch;
+use arrow_ipc::reader::StreamReader;
 use arrow_schema::SchemaRef;
-use datafusion::common::Statistics;
-use datafusion::error::Result;
-use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
+use datafusion::error::{DataFusionError, Result};
+use datafusion::physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
 
-#[derive(Debug, Clone)]
-struct CustomExec {
-    path: String,
-    projected_schema: SchemaRef,
+pub fn ipc_stream_exec(reader: StreamReader<BufReader<File>>) -> Result<LazyMemoryExec> {
+    let generator = IpcStreamProvider::new(reader);
+    let schema = generator.schema();
+    let dyn_generator: Arc<RwLock<dyn LazyBatchGenerator>> = Arc::new(RwLock::new(generator));
+    LazyMemoryExec::try_new(schema, vec![dyn_generator])
 }
 
-impl DisplayAs for CustomExec {
-    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "CustomExec")
+#[derive(Debug)]
+pub struct IpcStreamProvider {
+    reader: StreamReader<BufReader<File>>,
+}
+
+impl IpcStreamProvider {
+    pub fn new(reader: StreamReader<BufReader<File>>) -> IpcStreamProvider {
+        Self { reader }
+    }
+
+    pub fn schema(&self) -> SchemaRef {
+        return self.reader.schema();
     }
 }
 
-impl ExecutionPlan for CustomExec {
-    fn name(&self) -> &str {
-        todo!()
+impl Display for IpcStreamProvider {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "IpcStreamProvider")
     }
+}
 
-    fn properties(&self) -> &PlanProperties {
-        todo!()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn schema(&self) -> SchemaRef {
-        self.projected_schema.clone()
-    }
-
-    fn children(&self) -> Vec<&Arc<(dyn ExecutionPlan + 'static)>> {
-        vec![]
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        _: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(self)
-    }
-
-    fn execute(
-        &self,
-        _partition: usize,
-        _context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        // let users: Vec<User> = {
-        //     let db = self.db.inner.lock().unwrap();
-        //     db.data.values().cloned().collect()
-        // };
-
-        // let mut id_array = UInt8Builder::with_capacity(users.len());
-        // let mut account_array = UInt64Builder::with_capacity(users.len());
-
-        // for user in users {
-        //     id_array.append_value(user.id);
-        //     account_array.append_value(user.bank_account);
-        // }
-
-        // Ok(Box::pin(MemoryStream::try_new(
-        //     vec![RecordBatch::try_new(
-        //         self.projected_schema.clone(),
-        //         vec![
-        //             Arc::new(id_array.finish()),
-        //             Arc::new(account_array.finish()),
-        //         ],
-        //     )?],
-        //     self.schema(),
-        //     None,
-        // )?))
-        todo!()
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(Statistics::new_unknown(&self.projected_schema))
+impl LazyBatchGenerator for IpcStreamProvider {
+    fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        let maybe_next = self.reader.next();
+        match maybe_next {
+            Some(next_result) => match next_result {
+                Ok(batch) => Ok(Some(batch)),
+                Err(err) => Err(DataFusionError::ArrowError(err, None)),
+            },
+            None => Ok(None),
+        }
     }
 }
