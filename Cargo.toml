@@ -21,6 +21,7 @@ arrow-buffer = { version = "53.3.0" }
 arrow-data = { version = "53.3.0" }
 arrow-ipc = { version = "53.3.0" }
 arrow-schema = { version = "53.3.0" }
+async-trait = "0.1.73"
 parking_lot = "0.12"
 parquet = { version = "53.3.0", default-features = false }
 datafusion = { version = "44.0.0", default-features = false }
