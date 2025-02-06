@@ -2308,10 +2308,8 @@ dependencies = [
  "arrow-array",
  "arrow-ipc",
  "arrow-schema",
- "async-trait",
  "datafusion",
  "datafusion-expr",
- "parking_lot",
 ]
 
 [[package]]
