@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
-use arrow_schema::{DataType, Field, Fields};
 use arrow_array::{ArrayRef, StructArray};
+use arrow_schema::{DataType, Field, Fields};
 use datafusion::common::internal_err;
 use datafusion::error::Result;
 

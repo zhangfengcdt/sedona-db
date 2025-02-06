@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use arrow_array::RecordBatch;
 use arrow_schema::{Field, Schema, SchemaBuilder};
-use datafusion::arrow::array::RecordBatch;
 
 use crate::datatypes::{ExtensionType, LogicalArray};
 
