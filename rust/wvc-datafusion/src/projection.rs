@@ -1,7 +1,18 @@
+use std::any::Any;
+use std::fmt::Debug;
 use std::sync::Arc;
 
-use arrow_array::RecordBatch;
-use arrow_schema::{Field, Schema, SchemaBuilder};
+use arrow_array::{new_null_array, RecordBatch};
+use arrow_schema::{DataType, Field, Schema, SchemaBuilder};
+use datafusion::common::tree_node::Transformed;
+use datafusion::common::ToDFSchema;
+use datafusion::error::Result;
+use datafusion::optimizer::{OptimizerConfig, OptimizerRule};
+use datafusion::scalar::ScalarValue;
+use datafusion_expr::dml::CopyTo;
+use datafusion_expr::{
+    ColumnarValue, Expr, LogicalPlan, Projection, ScalarUDF, ScalarUDFImpl, Signature, TableScan,
+};
 
 use crate::datatypes::{ExtensionType, LogicalArray};
 
@@ -82,10 +93,241 @@ pub fn unwrap_arrow_batch(batch: RecordBatch) -> RecordBatch {
     RecordBatch::try_new(Arc::new(schema), columns).unwrap()
 }
 
+pub fn wrap_table_scan(plan: &LogicalPlan, scan: &TableScan) -> Result<Transformed<LogicalPlan>> {
+    let projected_schema = plan.schema();
+    let wrap_udf = ScalarUDF::new_from_impl(WrapExtensionUdf::new());
+    let mut wrap_count = 0;
+
+    let mut exprs = Vec::with_capacity(projected_schema.fields().len());
+    for i in 0..exprs.capacity() {
+        let this_column = Expr::Column(projected_schema.columns()[i].clone());
+        let this_name = projected_schema.field(i).name();
+
+        if let Some(ext) = ExtensionType::from_field(projected_schema.field(i)) {
+            let dummy_array = new_null_array(&ext.to_data_type(), 1);
+            let wrap_call = wrap_udf
+                .call(vec![
+                    this_column.clone(),
+                    Expr::Literal(ScalarValue::try_from_array(&dummy_array, 0)?),
+                ])
+                .alias_qualified(Some(scan.table_name.clone()), this_name);
+            println!("Wrap: {}", wrap_call);
+
+            exprs.push(wrap_call);
+            wrap_count += 1;
+        } else {
+            exprs.push(this_column.alias_qualified(Some(scan.table_name.clone()), this_name));
+        }
+    }
+
+    if wrap_count > 0 {
+        let projection = Projection::try_new(exprs, plan.clone().into())?;
+        Ok(Transformed::yes(LogicalPlan::Projection(projection)))
+    } else {
+        Ok(Transformed::no(plan.clone()))
+    }
+}
+
+pub fn unwrap_logical_plan(plan: &LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+    let projected_schema = plan.schema();
+    let original_schema = plan.schema().as_arrow();
+    let schema_unwrapped = unwrap_arrow_schema(original_schema);
+    if &schema_unwrapped == original_schema {
+        return Ok(Transformed::no(plan.clone()));
+    }
+
+    let unwrap_udf = ScalarUDF::new_from_impl(UnwrapExtensionUdf::new());
+    let mut exprs = Vec::with_capacity(original_schema.fields().len());
+    for i in 0..exprs.capacity() {
+        let this_column = Expr::Column(projected_schema.columns()[i].clone());
+        let this_name = original_schema.field(i).name();
+        let this_qualifier = projected_schema.qualified_field(i).0;
+
+        if let Some(ext) = ExtensionType::from_data_type(original_schema.field(i).data_type()) {
+            let dummy_array = new_null_array(&ext.to_data_type(), 1);
+            let unwrap_call = unwrap_udf
+                .call(vec![
+                    this_column.clone(),
+                    Expr::Literal(ScalarValue::try_from_array(&dummy_array, 0)?),
+                ])
+                .alias_qualified(this_qualifier.cloned(), this_name);
+            println!("Unwrap: {}", unwrap_call);
+
+            exprs.push(unwrap_call);
+        } else {
+            exprs.push(this_column.alias_qualified(this_qualifier.cloned(), this_name));
+        }
+    }
+
+    let projection = Projection::try_new_with_schema(
+        exprs,
+        plan.clone().into(),
+        schema_unwrapped.to_dfschema_ref()?,
+    )?;
+    Ok(Transformed::yes(LogicalPlan::Projection(projection)))
+}
+
+#[derive(Debug)]
+pub struct WrapExtensionUdf {
+    signature: Signature,
+}
+
+impl WrapExtensionUdf {
+    pub fn new() -> Self {
+        let signature = Signature::any(2, datafusion_expr::Volatility::Immutable);
+        return Self { signature };
+    }
+}
+
+impl ScalarUDFImpl for WrapExtensionUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        return "wrap_extension_internal";
+    }
+
+    fn signature(&self) -> &Signature {
+        return &self.signature;
+    }
+
+    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+        debug_assert_eq!(args.len(), 2);
+        Ok(args[1].clone())
+    }
+
+    fn invoke_batch(&self, args: &[ColumnarValue], _num_rows: usize) -> Result<ColumnarValue> {
+        if let Some(extension_type) = ExtensionType::from_data_type(&args[1].data_type()) {
+            match &args[0] {
+                ColumnarValue::Array(array) => {
+                    let array_out = extension_type.wrap_storage(array.clone())?;
+                    Ok(ColumnarValue::Array(array_out))
+                }
+                ColumnarValue::Scalar(scalar_value) => {
+                    let array_in = scalar_value.to_array()?;
+                    let array_out = extension_type.wrap_storage(array_in)?;
+                    let scalar_out = ScalarValue::try_from_array(&array_out, 0)?;
+                    Ok(ColumnarValue::Scalar(scalar_out))
+                }
+            }
+        } else {
+            Ok(args[0].clone())
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct UnwrapExtensionUdf {
+    signature: Signature,
+}
+
+impl UnwrapExtensionUdf {
+    pub fn new() -> Self {
+        let signature = Signature::any(2, datafusion_expr::Volatility::Immutable);
+        return Self { signature };
+    }
+}
+
+impl ScalarUDFImpl for UnwrapExtensionUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        return "unwrap_extension_internal";
+    }
+
+    fn signature(&self) -> &Signature {
+        return &self.signature;
+    }
+
+    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+        debug_assert_eq!(args.len(), 1);
+        if let Some(extension_type) = ExtensionType::from_data_type(&args[0]) {
+            Ok(extension_type.to_field("").data_type().clone())
+        } else {
+            Ok(args[0].clone())
+        }
+    }
+
+    fn invoke_batch(&self, args: &[ColumnarValue], _num_rows: usize) -> Result<ColumnarValue> {
+        match &args[0] {
+            ColumnarValue::Array(array) => {
+                let logical_array: LogicalArray = array.clone().into();
+                match logical_array {
+                    LogicalArray::Normal(array) => Ok(ColumnarValue::Array(array)),
+                    LogicalArray::Extension(_, array) => Ok(ColumnarValue::Array(array)),
+                }
+            }
+            ColumnarValue::Scalar(scalar_value) => {
+                let array_in = scalar_value.to_array()?;
+                let logical_array: LogicalArray = array_in.into();
+                let array_out = match logical_array {
+                    LogicalArray::Normal(array) => array,
+                    LogicalArray::Extension(_, array) => array,
+                };
+
+                let scalar_out = ScalarValue::try_from_array(&array_out, 0)?;
+                Ok(ColumnarValue::Scalar(scalar_out))
+            }
+        }
+    }
+}
+
+#[derive(Default, Debug)]
+pub struct MyOptimizerRule {}
+
+impl OptimizerRule for MyOptimizerRule {
+    fn name(&self) -> &str {
+        "my_optimizer_rule"
+    }
+
+    fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>> {
+        // First, we need to recurse into the plan and add a wrap_table_scan()
+        // to all scan nodes at the far ends of the plan.
+        let maybe_wrapped_input = plan.transform_up_with_subqueries(|node| {
+            match &node {
+                // For a table scan, we need the wrap to occur after the scan
+                LogicalPlan::TableScan(scan) => wrap_table_scan(&node, scan),
+                _ => Ok(Transformed::no(node.clone())),
+            }
+        })?;
+
+        // Next, we need to unwrap the output
+        match &maybe_wrapped_input.data {
+            // For a copy, we need the unwrap to occur before the COPY
+            LogicalPlan::Copy(copy_to) => {
+                let unwrapped_plan = unwrap_logical_plan(&maybe_wrapped_input.data)?;
+                if unwrapped_plan.transformed {
+                    let copy_to_out = CopyTo {
+                        input: unwrapped_plan.data.into(),
+                        output_url: copy_to.output_url.clone(),
+                        partition_by: copy_to.partition_by.clone(),
+                        file_type: copy_to.file_type.clone(),
+                        options: copy_to.options.clone(),
+                    };
+                    Ok(Transformed::yes(LogicalPlan::Copy(copy_to_out)))
+                } else {
+                    Ok(Transformed::no(maybe_wrapped_input.data.clone()))
+                }
+            }
+            // For everything else, we just add the unwrap projection (if needed)
+            // the end of th plan.
+            _ => unwrap_logical_plan(&maybe_wrapped_input.data),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use arrow_array::{create_array, record_batch};
     use arrow_schema::DataType;
-    use datafusion::arrow::array::create_array;
+    use datafusion::prelude::SessionContext;
 
     use super::*;
 
@@ -128,5 +370,43 @@ mod tests {
 
         let batch_unwrapped = unwrap_arrow_batch(batch_wrapped);
         assert_eq!(batch_unwrapped, batch);
+    }
+
+    #[tokio::test]
+    async fn optimizer_rule_wrap() {
+        let schema = Schema::new(vec![
+            Field::new("col1", DataType::Utf8, false),
+            geoarrow_wkt().to_field("col2"),
+        ]);
+
+        let col1 = create_array!(Utf8, ["POINT (0 1)", "POINT (2, 3)"]);
+        let col2 = col1.clone();
+
+        let batch_no_extensions = record_batch!(("col1", Utf8, ["abc", "def"])).unwrap();
+
+        let batch = RecordBatch::try_new(schema.into(), vec![col1, col2]).unwrap();
+        let batch_wrapped = wrap_arrow_batch(batch.clone());
+
+        let ctx = SessionContext::new();
+        ctx.add_optimizer_rule(Arc::new(MyOptimizerRule {}));
+
+        let results_no_extensions = ctx
+            .read_batch(batch_no_extensions.clone())
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(results_no_extensions.len(), 1);
+        assert_eq!(results_no_extensions[0], batch_no_extensions);
+
+        let results = ctx
+            .read_batch(batch.clone())
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].schema(), batch_wrapped.schema());
+        assert_eq!(results[0], batch_wrapped);
     }
 }

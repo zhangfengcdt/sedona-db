@@ -31,3 +31,4 @@ datafusion-expr-common = { version = "44.0.0", default-features = false }
 datafusion-execution = { version = "44.0.0", default-features = false }
 datafusion-physical-plan = { version = "44.0.0", default-features = false }
 datafusion-physical-expr = { version = "44.0.0", default-features = false }
+tokio = { version = "1.43" }

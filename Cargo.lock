@@ -2310,6 +2310,7 @@ dependencies = [
  "arrow-schema",
  "datafusion",
  "datafusion-expr",
+ "tokio",
 ]
 
 [[package]]

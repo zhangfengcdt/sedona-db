@@ -9,3 +9,4 @@ arrow-ipc = { workspace = true }
 arrow-array = { workspace = true }
 datafusion = { workspace = true }
 datafusion-expr = { workspace = true }
+tokio = { workspace = true }
