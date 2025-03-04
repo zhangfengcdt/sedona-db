@@ -5,7 +5,7 @@ use std::sync::Arc;
 use arrow_array::{new_null_array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaBuilder};
 use datafusion::common::tree_node::Transformed;
-use datafusion::common::ToDFSchema;
+use datafusion::common::DFSchema;
 use datafusion::error::Result;
 use datafusion::optimizer::{OptimizerConfig, OptimizerRule};
 use datafusion::scalar::ScalarValue;
@@ -74,7 +74,7 @@ pub fn wrap_arrow_batch(batch: RecordBatch) -> RecordBatch {
     RecordBatch::try_new(Arc::new(schema), columns).unwrap()
 }
 
-/// Unwrap a record batch such that the output expresses
+/// Unwrap a record batch such that the output expresses extension types as fields
 ///
 /// The resulting output will have extension types represented with field metadata
 /// instead of as wrapped structs. This is the projection that should be applied
@@ -93,6 +93,10 @@ pub fn unwrap_arrow_batch(batch: RecordBatch) -> RecordBatch {
     RecordBatch::try_new(Arc::new(schema), columns).unwrap()
 }
 
+/// Possibly project LogicalPlan such that the outout expresses extension types as data types
+///
+/// This is a "lazy" version of wrap_arrow_batch() that appends a projection node
+/// after scanning a data source (if any extension fields exist in the projected schema).
 pub fn wrap_table_scan(plan: &LogicalPlan, scan: &TableScan) -> Result<Transformed<LogicalPlan>> {
     let projected_schema = plan.schema();
     let wrap_udf = ScalarUDF::new_from_impl(WrapExtensionUdf::new());
@@ -111,7 +115,6 @@ pub fn wrap_table_scan(plan: &LogicalPlan, scan: &TableScan) -> Result<Transform
                     Expr::Literal(ScalarValue::try_from_array(&dummy_array, 0)?),
                 ])
                 .alias_qualified(Some(scan.table_name.clone()), this_name);
-            println!("Wrap: {}", wrap_call);
 
             exprs.push(wrap_call);
             wrap_count += 1;
@@ -138,20 +141,17 @@ pub fn unwrap_logical_plan(plan: &LogicalPlan) -> Result<Transformed<LogicalPlan
 
     let unwrap_udf = ScalarUDF::new_from_impl(UnwrapExtensionUdf::new());
     let mut exprs = Vec::with_capacity(original_schema.fields().len());
+    let mut qualifiers = Vec::with_capacity(exprs.capacity());
     for i in 0..exprs.capacity() {
         let this_column = Expr::Column(projected_schema.columns()[i].clone());
         let this_name = original_schema.field(i).name();
         let this_qualifier = projected_schema.qualified_field(i).0;
+        qualifiers.push(this_qualifier.cloned());
 
-        if let Some(ext) = ExtensionType::from_data_type(original_schema.field(i).data_type()) {
-            let dummy_array = new_null_array(&ext.to_data_type(), 1);
+        if let Some(_) = ExtensionType::from_data_type(original_schema.field(i).data_type()) {
             let unwrap_call = unwrap_udf
-                .call(vec![
-                    this_column.clone(),
-                    Expr::Literal(ScalarValue::try_from_array(&dummy_array, 0)?),
-                ])
+                .call(vec![this_column.clone()])
                 .alias_qualified(this_qualifier.cloned(), this_name);
-            println!("Unwrap: {}", unwrap_call);
 
             exprs.push(unwrap_call);
         } else {
@@ -159,11 +159,11 @@ pub fn unwrap_logical_plan(plan: &LogicalPlan) -> Result<Transformed<LogicalPlan
         }
     }
 
-    let projection = Projection::try_new_with_schema(
-        exprs,
-        plan.clone().into(),
-        schema_unwrapped.to_dfschema_ref()?,
-    )?;
+    let dfschema_unwrapped =
+        DFSchema::from_field_specific_qualified_schema(qualifiers, &Arc::new(schema_unwrapped))?;
+
+    let projection =
+        Projection::try_new_with_schema(exprs, plan.clone().into(), Arc::new(dfschema_unwrapped))?;
     Ok(Transformed::yes(LogicalPlan::Projection(projection)))
 }
 
@@ -174,7 +174,7 @@ pub struct WrapExtensionUdf {
 
 impl WrapExtensionUdf {
     pub fn new() -> Self {
-        let signature = Signature::any(2, datafusion_expr::Volatility::Immutable);
+        let signature = Signature::any(2, datafusion_expr::Volatility::Volatile);
         return Self { signature };
     }
 }
@@ -224,7 +224,7 @@ pub struct UnwrapExtensionUdf {
 
 impl UnwrapExtensionUdf {
     pub fn new() -> Self {
-        let signature = Signature::any(2, datafusion_expr::Volatility::Immutable);
+        let signature = Signature::any(1, datafusion_expr::Volatility::Volatile);
         return Self { signature };
     }
 }
@@ -276,11 +276,11 @@ impl ScalarUDFImpl for UnwrapExtensionUdf {
 }
 
 #[derive(Default, Debug)]
-pub struct MyOptimizerRule {}
+pub struct ExtensionSandwichOptimizerRule {}
 
-impl OptimizerRule for MyOptimizerRule {
+impl OptimizerRule for ExtensionSandwichOptimizerRule {
     fn name(&self) -> &str {
-        "my_optimizer_rule"
+        "extension_sandwich"
     }
 
     fn rewrite(
@@ -288,18 +288,17 @@ impl OptimizerRule for MyOptimizerRule {
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
+        println!("{}", plan);
+
         // First, we need to recurse into the plan and add a wrap_table_scan()
         // to all scan nodes at the far ends of the plan.
-        let maybe_wrapped_input = plan.transform_up_with_subqueries(|node| {
-            match &node {
-                // For a table scan, we need the wrap to occur after the scan
-                LogicalPlan::TableScan(scan) => wrap_table_scan(&node, scan),
-                _ => Ok(Transformed::no(node.clone())),
-            }
+        let maybe_wrapped_input = plan.transform_up_with_subqueries(|node| match &node {
+            LogicalPlan::TableScan(scan) => wrap_table_scan(&node, scan),
+            _ => Ok(Transformed::no(node.clone())),
         })?;
 
         // Next, we need to unwrap the output
-        match &maybe_wrapped_input.data {
+        let plan_out = match &maybe_wrapped_input.data {
             // For a copy, we need the unwrap to occur before the COPY
             LogicalPlan::Copy(copy_to) => {
                 let unwrapped_plan = unwrap_logical_plan(&maybe_wrapped_input.data)?;
@@ -317,9 +316,13 @@ impl OptimizerRule for MyOptimizerRule {
                 }
             }
             // For everything else, we just add the unwrap projection (if needed)
-            // the end of th plan.
+            // the end of the plan.
             _ => unwrap_logical_plan(&maybe_wrapped_input.data),
-        }
+        }?;
+
+        println!("{}", plan_out.data);
+
+        Ok(plan_out)
     }
 }
 
@@ -327,7 +330,7 @@ impl OptimizerRule for MyOptimizerRule {
 mod tests {
     use arrow_array::{create_array, record_batch};
     use arrow_schema::DataType;
-    use datafusion::prelude::SessionContext;
+    use datafusion::{execution::SessionStateBuilder, prelude::SessionContext};
 
     use super::*;
 
@@ -373,22 +376,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn optimizer_rule_wrap() {
-        let schema = Schema::new(vec![
-            Field::new("col1", DataType::Utf8, false),
-            geoarrow_wkt().to_field("col2"),
-        ]);
-
+    async fn optimizer_rule_wrap_unwrap() {
         let col1 = create_array!(Utf8, ["POINT (0 1)", "POINT (2, 3)"]);
         let col2 = col1.clone();
-
         let batch_no_extensions = record_batch!(("col1", Utf8, ["abc", "def"])).unwrap();
 
-        let batch = RecordBatch::try_new(schema.into(), vec![col1, col2]).unwrap();
-        let batch_wrapped = wrap_arrow_batch(batch.clone());
-
-        let ctx = SessionContext::new();
-        ctx.add_optimizer_rule(Arc::new(MyOptimizerRule {}));
+        let state = SessionStateBuilder::new()
+            .with_optimizer_rule(Arc::new(ExtensionSandwichOptimizerRule {}))
+            .build();
+        let ctx = SessionContext::from(state);
 
         let results_no_extensions = ctx
             .read_batch(batch_no_extensions.clone())
@@ -399,8 +395,16 @@ mod tests {
         assert_eq!(results_no_extensions.len(), 1);
         assert_eq!(results_no_extensions[0], batch_no_extensions);
 
+        let schema = Schema::new(vec![
+            Field::new("col1", DataType::Utf8, false),
+            geoarrow_wkt().to_field("col2"),
+        ]);
+        let batch = RecordBatch::try_new(schema.into(), vec![col1, col2]).unwrap();
+        let batch_wrapped = wrap_arrow_batch(batch.clone());
         let results = ctx
             .read_batch(batch.clone())
+            .unwrap()
+            .limit(0, Some(1))
             .unwrap()
             .collect()
             .await
