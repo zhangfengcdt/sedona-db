@@ -35,6 +35,7 @@ jobs:
         run: |
           rustup toolchain install stable --no-self-update
           rustup default stable
+      - uses: Swatinem/rust-cache@v2
       - name: Clippy
         run: |
           pushd rust
