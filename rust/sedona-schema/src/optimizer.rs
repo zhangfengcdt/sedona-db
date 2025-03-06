@@ -201,7 +201,7 @@ impl UserDefinedLogicalNodeCore for IdentityExtensionNode {
     }
 
     fn schema(&self) -> &datafusion::common::DFSchemaRef {
-        &self.input.schema()
+        self.input.schema()
     }
 
     fn expressions(&self) -> Vec<Expr> {
@@ -242,7 +242,11 @@ impl ExtensionPlanner for IdentityExtensionPlanner {
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         _session_state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        if let Some(_) = node.as_any().downcast_ref::<IdentityExtensionNode>() {
+        if node
+            .as_any()
+            .downcast_ref::<IdentityExtensionNode>()
+            .is_some()
+        {
             assert_eq!(logical_inputs.len(), 1);
             assert_eq!(physical_inputs.len(), 1);
             Ok(Some(Arc::new(IdentityExec {

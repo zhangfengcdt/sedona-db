@@ -29,7 +29,7 @@ pub fn wrap_arrow_schema(schema: &Schema) -> Schema {
         builder.push(field_out);
     }
 
-    return builder.finish();
+    builder.finish()
 }
 
 /// Unwrap a Schema that contains wrapped extension types
@@ -48,7 +48,7 @@ pub fn unwrap_arrow_schema(schema: &Schema) -> Schema {
         builder.push(field_out);
     }
 
-    return builder.finish();
+    builder.finish()
 }
 
 /// Wrap a record batch possibly containing extension types encoded as field metadata
@@ -164,7 +164,7 @@ pub(crate) fn unwrap_expressions(schema: &DFSchema) -> Result<Option<(DFSchema, 
         let (this_qualifier, this_field) = schema.qualified_field(i);
         qualifiers.push(this_qualifier.cloned());
 
-        if let Some(_) = ExtensionType::from_data_type(this_field.data_type()) {
+        if ExtensionType::from_data_type(this_field.data_type()).is_some() {
             let unwrap_call = unwrap_udf
                 .call(vec![this_column.clone()])
                 .alias_qualified(this_qualifier.cloned(), this_field.name());
@@ -207,11 +207,11 @@ impl ScalarUDFImpl for WrapExtensionUdf {
     }
 
     fn name(&self) -> &str {
-        return "wrap_extension_internal";
+        "wrap_extension_internal"
     }
 
     fn signature(&self) -> &Signature {
-        return &self.signature;
+        &self.signature
     }
 
     fn return_type(&self, args: &[DataType]) -> Result<DataType> {
@@ -257,11 +257,11 @@ impl ScalarUDFImpl for UnwrapExtensionUdf {
     }
 
     fn name(&self) -> &str {
-        return "unwrap_extension_internal";
+        "unwrap_extension_internal"
     }
 
     fn signature(&self) -> &Signature {
-        return &self.signature;
+        &self.signature
     }
 
     fn return_type(&self, args: &[DataType]) -> Result<DataType> {

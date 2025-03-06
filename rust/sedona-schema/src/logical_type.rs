@@ -20,7 +20,7 @@ use datafusion::error::Result;
 ///   function.
 ///
 /// Strictly speaking we don't need to use the Arrow extension type (i.e., name
-/// + metadata) to do this; however, GeoArrow uses it and representing the types
+/// and metadata) to do this; however, GeoArrow uses it and representing the types
 /// in this way means we don't have to try very hard to integrate with geoarrow-rs
 /// or geoarrow-c via FFI.
 ///
@@ -62,7 +62,7 @@ impl From<Field> for LogicalType {
 
 impl From<ExtensionType> for LogicalType {
     fn from(value: ExtensionType) -> Self {
-        return LogicalType::Extension(value);
+        LogicalType::Extension(value)
     }
 }
 
@@ -120,18 +120,15 @@ impl ExtensionType {
             self.extension_name.clone(),
         )]);
 
-        match &self.extension_metadata {
-            Some(extension_metadata) => {
-                metadata.insert(
-                    "ARROW:extension:metadata".to_string(),
-                    extension_metadata.clone(),
-                );
-            }
-            None => {}
+        if let Some(extension_metadata) = &self.extension_metadata {
+            metadata.insert(
+                "ARROW:extension:metadata".to_string(),
+                extension_metadata.clone(),
+            );
         }
 
         field.set_metadata(metadata);
-        return field;
+        field
     }
 
     /// Wrap this ExtensionType as a Struct DataType
@@ -142,7 +139,7 @@ impl ExtensionType {
     /// extension name and metadata.
     pub fn to_data_type(&self) -> DataType {
         let field = self.to_field(&self.extension_name);
-        return DataType::Struct(Fields::from(vec![field]));
+        DataType::Struct(Fields::from(vec![field]))
     }
 
     /// Wrap storage array as a StructArray
@@ -161,7 +158,7 @@ impl ExtensionType {
             None,
         );
 
-        return Ok(Arc::new(wrapped));
+        Ok(Arc::new(wrapped))
     }
 
     /// Unwrap a Field into an ExtensionType if the field represents one
@@ -171,14 +168,13 @@ impl ExtensionType {
     pub fn from_field(field: &Field) -> Option<ExtensionType> {
         let metadata = field.metadata();
 
-        match metadata.get("ARROW:extension:name") {
-            Some(extension_name) => Some(ExtensionType::new(
+        metadata.get("ARROW:extension:name").map(|extension_name| {
+            ExtensionType::new(
                 extension_name,
                 field.data_type().clone(),
                 metadata.get("ARROW:extension:metadata").cloned(),
-            )),
-            None => return None,
-        }
+            )
+        })
     }
 
     /// Unwrap a DataType that is potentially an extension type wrapped in a Struct
@@ -206,7 +202,7 @@ impl ExtensionType {
                     None => None,
                 }
             }
-            _ => return None,
+            _ => None,
         }
     }
 }
