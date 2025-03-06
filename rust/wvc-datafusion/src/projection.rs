@@ -1,25 +1,15 @@
 use std::any::Any;
 use std::fmt::Debug;
-use std::hash::Hash;
 use std::sync::Arc;
 
 use arrow_array::{new_null_array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaBuilder};
-use async_trait::async_trait;
-use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion::common::{DFSchema, Statistics};
+use datafusion::common::tree_node::Transformed;
+use datafusion::common::DFSchema;
 use datafusion::error::Result;
-use datafusion::execution::context::QueryPlanner;
-use datafusion::execution::{SendableRecordBatchStream, SessionState, TaskContext};
-use datafusion::optimizer::{OptimizerConfig, OptimizerRule};
-use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, PlanProperties,
-};
-use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
 use datafusion::scalar::ScalarValue;
 use datafusion_expr::{
-    ColumnarValue, Expr, Extension, LogicalPlan, Projection, ScalarUDF, ScalarUDFImpl, Signature,
-    TableScan, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
+    ColumnarValue, Expr, LogicalPlan, Projection, ScalarUDF, ScalarUDFImpl, Signature, TableScan,
 };
 
 use crate::datatypes::{ExtensionType, LogicalArray};
@@ -286,231 +276,10 @@ impl ScalarUDFImpl for UnwrapExtensionUdf {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Hash)]
-pub struct IdentityExtensionNode {
-    input: LogicalPlan,
-}
-
-impl UserDefinedLogicalNodeCore for IdentityExtensionNode {
-    fn name(&self) -> &str {
-        "IdentityExtensionNode"
-    }
-
-    fn inputs(&self) -> Vec<&LogicalPlan> {
-        vec![&self.input]
-    }
-
-    fn schema(&self) -> &datafusion::common::DFSchemaRef {
-        &self.input.schema()
-    }
-
-    fn expressions(&self) -> Vec<Expr> {
-        vec![]
-    }
-
-    fn fmt_for_explain(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str("IdentityExtensionNode::")?;
-        Ok(())
-    }
-
-    fn with_exprs_and_inputs(
-        &self,
-        exprs: Vec<Expr>,
-        inputs: Vec<LogicalPlan>,
-    ) -> Result<IdentityExtensionNode> {
-        assert_eq!(exprs.len(), 0);
-        assert_eq!(inputs.len(), 1);
-        Ok(Self {
-            input: inputs[0].clone(),
-        })
-    }
-}
-
-/// Physical planner for IdentityExtensionNode
-struct IdentityExtensionPlanner {}
-
-#[async_trait]
-impl ExtensionPlanner for IdentityExtensionPlanner {
-    async fn plan_extension(
-        &self,
-        _planner: &dyn PhysicalPlanner,
-        node: &dyn UserDefinedLogicalNode,
-        logical_inputs: &[&LogicalPlan],
-        physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &SessionState,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        if let Some(_) = node.as_any().downcast_ref::<IdentityExtensionNode>() {
-            assert_eq!(logical_inputs.len(), 1);
-            assert_eq!(physical_inputs.len(), 1);
-            Ok(Some(Arc::new(IdentityExec {
-                input: physical_inputs[0].clone(),
-            })))
-        } else {
-            Ok(None)
-        }
-    }
-}
-
-#[derive(Default, Debug)]
-pub struct ExtensionSandwichOptimizerRule {}
-
-impl OptimizerRule for ExtensionSandwichOptimizerRule {
-    fn name(&self) -> &str {
-        "extension_sandwich"
-    }
-
-    fn rewrite(
-        &self,
-        plan: LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Transformed<LogicalPlan>> {
-        // First, check for any instance of this optimization (basically: any call to
-        // wrap_extension_internal()). After the first pass we don't need anything else
-        // although our function calls may get bounced around and inlined into eachother
-        // by other optimizations.
-        let mut already_optimized = false;
-        plan.apply(|plan| {
-            if let LogicalPlan::Projection(projection) = plan {
-                for expr in &projection.expr {
-                    expr.apply(|expr| {
-                        if let Expr::ScalarFunction(fun) = expr {
-                            if fun.name() == "wrap_extension_internal" {
-                                already_optimized = true;
-                                return Ok(TreeNodeRecursion::Stop);
-                            }
-                        }
-                        Ok(TreeNodeRecursion::Continue)
-                    })?;
-                }
-            }
-
-            Ok(TreeNodeRecursion::Continue)
-        })?;
-
-        if already_optimized {
-            return Ok(Transformed::no(plan));
-        }
-
-        // First, we need to recurse into the plan and add a wrap_table_scan()
-        // to all scan nodes at the far ends of the plan.
-        let maybe_wrapped_input = plan.transform_up_with_subqueries(|node| match &node {
-            LogicalPlan::TableScan(scan) => wrap_table_scan(&node, scan),
-            _ => Ok(Transformed::no(node.clone())),
-        })?;
-
-        // Next, we need to unwrap the output
-        let plan_out = match &maybe_wrapped_input.data {
-            // For a copy, we need the unwrap to occur before the COPY
-            LogicalPlan::Copy(_) => {
-                todo!()
-            }
-            // For everything else, we just add the unwrap projection (if needed)
-            // the end of the plan. We put an "identity" node as its input to prevent
-            // subsequent optimizer passes from doing anything to it!
-            _ => {
-                let plan_identity = LogicalPlan::Extension(Extension {
-                    node: Arc::new(IdentityExtensionNode {
-                        input: maybe_wrapped_input.data.clone(),
-                    }),
-                });
-
-                let unwrapped_after_identity = unwrap_logical_plan(&plan_identity)?;
-                if unwrapped_after_identity.transformed {
-                    Transformed::yes(unwrapped_after_identity.data)
-                } else {
-                    maybe_wrapped_input
-                }
-            }
-        };
-
-        Ok(plan_out)
-    }
-}
-
-#[derive(Debug)]
-struct IdentityExtensionQueryPlanner {}
-
-#[async_trait]
-impl QueryPlanner for IdentityExtensionQueryPlanner {
-    async fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-        session_state: &SessionState,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let physical_planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
-            IdentityExtensionPlanner {},
-        )]);
-        physical_planner
-            .create_physical_plan(logical_plan, session_state)
-            .await
-    }
-}
-
-struct IdentityExec {
-    input: Arc<dyn ExecutionPlan>,
-}
-
-impl Debug for IdentityExec {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "IdentityExec")
-    }
-}
-
-impl DisplayAs for IdentityExec {
-    fn fmt_as(&self, _t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "IdentityExec")
-    }
-}
-
-#[async_trait]
-impl ExecutionPlan for IdentityExec {
-    fn name(&self) -> &'static str {
-        Self::static_name()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
-        self.input.properties()
-    }
-
-    fn required_input_distribution(&self) -> Vec<Distribution> {
-        self.input.required_input_distribution()
-    }
-
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![&self.input]
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(IdentityExec {
-            input: children[0].clone(),
-        }))
-    }
-
-    fn execute(
-        &self,
-        partition: usize,
-        context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        self.input.execute(partition, context)
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.input.statistics()
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use arrow_array::{create_array, record_batch};
+    use arrow_array::create_array;
     use arrow_schema::DataType;
-    use datafusion::{execution::SessionStateBuilder, prelude::SessionContext};
 
     use super::*;
 
@@ -553,50 +322,5 @@ mod tests {
 
         let batch_unwrapped = unwrap_arrow_batch(batch_wrapped);
         assert_eq!(batch_unwrapped, batch);
-    }
-
-    #[tokio::test]
-    async fn optimizer_rule_wrap_unwrap() {
-        let col1 = create_array!(Utf8, ["POINT (0 1)", "POINT (2 3)"]);
-        let col2 = col1.clone();
-        let batch_no_extensions = record_batch!(("col1", Utf8, ["abc", "def"])).unwrap();
-
-        let state = SessionStateBuilder::new()
-            .with_optimizer_rule(Arc::new(ExtensionSandwichOptimizerRule {}))
-            .with_query_planner(Arc::new(IdentityExtensionQueryPlanner {}))
-            .build();
-        let ctx = SessionContext::from(state);
-
-        let results_no_extensions = ctx
-            .read_batch(batch_no_extensions.clone())
-            .unwrap()
-            .collect()
-            .await
-            .unwrap();
-        assert_eq!(results_no_extensions.len(), 1);
-        assert_eq!(results_no_extensions[0], batch_no_extensions);
-
-        let schema = Schema::new(vec![
-            Field::new("col1", DataType::Utf8, true),
-            geoarrow_wkt().to_field("col2"),
-        ]);
-        let batch = RecordBatch::try_new(schema.into(), vec![col1, col2]).unwrap();
-        let df = ctx.read_batch(batch.clone()).unwrap();
-
-        // No optimizer rules applied yet, so we get the original schema
-        assert_eq!(*df.schema().as_arrow(), *batch.schema());
-
-        // Optimizer stuff gets applied on collect
-        let results = df.collect().await.unwrap();
-        assert_eq!(results.len(), 1);
-
-        // ..but strips extensions from the final node (OK for now)
-        let batch_without_extensions = record_batch!(
-            ("col1", Utf8, ["POINT (0 1)", "POINT (2 3)"]),
-            ("col2", Utf8, ["POINT (0 1)", "POINT (2 3)"])
-        )
-        .unwrap();
-        assert_eq!(results[0].schema(), batch_without_extensions.schema());
-        assert_eq!(results[0], batch_without_extensions);
     }
 }
