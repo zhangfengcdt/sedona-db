@@ -12,7 +12,7 @@ use datafusion_expr::{
     ColumnarValue, Expr, LogicalPlan, Projection, ScalarUDF, ScalarUDFImpl, Signature, TableScan,
 };
 
-use crate::datatypes::{ExtensionType, LogicalArray};
+use crate::logical_type::{ExtensionType, LogicalArray};
 
 /// Wrap a Schema possibly containing Extension Types
 ///

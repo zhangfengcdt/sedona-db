@@ -8,7 +8,7 @@ use datafusion::error::Result;
 use datafusion::logical_expr::{Signature, Volatility};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
-use crate::datatypes::LogicalType;
+use crate::logical_type::LogicalType;
 
 pub type ScalarFunctionImplementation =
     Arc<dyn Fn(&[ColumnarValue], usize) -> Result<ColumnarValue> + Send + Sync>;
