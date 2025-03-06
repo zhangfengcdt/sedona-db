@@ -588,12 +588,12 @@ mod tests {
 
         // Optimizer stuff gets applied on collect
         let results = df.collect().await.unwrap();
-        assert_eq!(results.len(), 2);
+        assert_eq!(results.len(), 1);
 
         // ..but strips extensions from the final node (OK for now)
         let batch_without_extensions = record_batch!(
-            ("col1", Utf8, ["POINT (0 1)", "POINT (2, 3)"]),
-            ("col2", Utf8, ["POINT (0 1)", "POINT (2, 3)"])
+            ("col1", Utf8, ["POINT (0 1)", "POINT (2 3)"]),
+            ("col2", Utf8, ["POINT (0 1)", "POINT (2 3)"])
         )
         .unwrap();
         assert_eq!(results[0].schema(), batch_without_extensions.schema());
