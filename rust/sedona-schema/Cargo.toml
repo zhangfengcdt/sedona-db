@@ -1,5 +1,5 @@
 [package]
-name = "sedona-datafusion"
+name = "sedona-schema"
 version = { workspace = true }
 edition = "2021"
 
