@@ -4,13 +4,11 @@ use std::sync::Arc;
 
 use arrow_array::{new_null_array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaBuilder};
-use datafusion::common::tree_node::Transformed;
 use datafusion::common::DFSchema;
 use datafusion::error::Result;
+use datafusion::prelude::DataFrame;
 use datafusion::scalar::ScalarValue;
-use datafusion_expr::{
-    ColumnarValue, Expr, LogicalPlan, Projection, ScalarUDF, ScalarUDFImpl, Signature,
-};
+use datafusion_expr::{ColumnarValue, Expr, ScalarUDF, ScalarUDFImpl, Signature};
 
 use crate::logical_type::{ExtensionType, LogicalArray};
 
@@ -91,21 +89,23 @@ pub fn unwrap_arrow_batch(batch: RecordBatch) -> RecordBatch {
     RecordBatch::try_new(Arc::new(schema), columns).unwrap()
 }
 
-/// Possibly project LogicalPlan such that the outout expresses extension types as data types
+/// Possibly project a DataFrame such that the outout expresses extension types as data types
 ///
-/// This is a "lazy" version of wrap_arrow_batch() that appends a projection node
-/// after scanning a data source (if any extension fields exist in the projected schema).
-pub fn wrap_logical_plan(plan: &LogicalPlan) -> Result<Transformed<LogicalPlan>> {
-    let projected_schema = plan.schema();
+/// This is a "lazy" version of wrap_arrow_batch() that appends a projection to a DataFrame.
+pub fn wrap_dataframe(df: DataFrame) -> DataFrame {
+    return df;
+}
+
+pub(crate) fn wrap_expressions(schema: &DFSchema) -> Result<Option<Vec<Expr>>> {
     let wrap_udf = WrapExtensionUdf::udf();
     let mut wrap_count = 0;
 
-    let mut exprs = Vec::with_capacity(projected_schema.fields().len());
+    let mut exprs = Vec::with_capacity(schema.fields().len());
     for i in 0..exprs.capacity() {
-        let this_column = Expr::Column(projected_schema.columns()[i].clone());
-        let (this_qualifier, this_field) = projected_schema.qualified_field(i);
+        let this_column = Expr::Column(schema.columns()[i].clone());
+        let (this_qualifier, this_field) = schema.qualified_field(i);
 
-        if let Some(ext) = ExtensionType::from_field(projected_schema.field(i)) {
+        if let Some(ext) = ExtensionType::from_field(schema.field(i)) {
             let dummy_array = new_null_array(&ext.to_data_type(), 1);
             let wrap_call = wrap_udf
                 .call(vec![
@@ -122,53 +122,46 @@ pub fn wrap_logical_plan(plan: &LogicalPlan) -> Result<Transformed<LogicalPlan>>
     }
 
     if wrap_count > 0 {
-        let projection = Projection::try_new(exprs, plan.clone().into())?;
-        Ok(Transformed::yes(LogicalPlan::Projection(projection)))
+        Ok(Some(exprs))
     } else {
-        Ok(Transformed::no(plan.clone()))
+        Ok(None)
     }
 }
 
-/// Possibly project a logical plan such that the result unwraps any struct-wrapped data types
-///
-/// The reverse of `wrap_table_scan()` intended for use on the output of a plan.
-/// While this function correctly sets the DFSchema output to have the correct fields metadata,
-/// this field metadata is obliterated by DataFusion internals and is not actually propagated
-/// when used as part of an optimizer rule.
-pub fn unwrap_logical_plan(plan: &LogicalPlan) -> Result<Transformed<LogicalPlan>> {
-    let projected_schema = plan.schema();
-    let original_schema = plan.schema().as_arrow();
-    let schema_unwrapped = unwrap_arrow_schema(original_schema);
-    if &schema_unwrapped == original_schema {
-        return Ok(Transformed::no(plan.clone()));
-    }
-
+pub(crate) fn unwrap_expressions(schema: &DFSchema) -> Result<Option<(DFSchema, Vec<Expr>)>> {
     let unwrap_udf = UnwrapExtensionUdf::udf();
-    let mut exprs = Vec::with_capacity(original_schema.fields().len());
+    let mut exprs = Vec::with_capacity(schema.fields().len());
     let mut qualifiers = Vec::with_capacity(exprs.capacity());
+    let mut unwrap_count = 0;
+
     for i in 0..exprs.capacity() {
-        let this_column = Expr::Column(projected_schema.columns()[i].clone());
-        let this_name = original_schema.field(i).name();
-        let this_qualifier = projected_schema.qualified_field(i).0;
+        let this_column = Expr::Column(schema.columns()[i].clone());
+        let (this_qualifier, this_field) = schema.qualified_field(i);
         qualifiers.push(this_qualifier.cloned());
 
-        if let Some(_) = ExtensionType::from_data_type(original_schema.field(i).data_type()) {
+        if let Some(_) = ExtensionType::from_data_type(this_field.data_type()) {
             let unwrap_call = unwrap_udf
                 .call(vec![this_column.clone()])
-                .alias_qualified(this_qualifier.cloned(), this_name);
+                .alias_qualified(this_qualifier.cloned(), this_field.name());
 
             exprs.push(unwrap_call);
+            unwrap_count += 1;
         } else {
-            exprs.push(this_column.alias_qualified(this_qualifier.cloned(), this_name));
+            exprs.push(this_column.alias_qualified(this_qualifier.cloned(), this_field.name()));
         }
     }
 
-    let dfschema_unwrapped =
-        DFSchema::from_field_specific_qualified_schema(qualifiers, &Arc::new(schema_unwrapped))?;
+    if unwrap_count > 0 {
+        let schema_unwrapped = unwrap_arrow_schema(schema.as_arrow());
+        let dfschema_unwrapped = DFSchema::from_field_specific_qualified_schema(
+            qualifiers,
+            &Arc::new(schema_unwrapped),
+        )?;
 
-    let projection =
-        Projection::try_new_with_schema(exprs, plan.clone().into(), Arc::new(dfschema_unwrapped))?;
-    Ok(Transformed::yes(LogicalPlan::Projection(projection)))
+        Ok(Some((dfschema_unwrapped, exprs)))
+    } else {
+        Ok(None)
+    }
 }
 
 #[derive(Debug)]

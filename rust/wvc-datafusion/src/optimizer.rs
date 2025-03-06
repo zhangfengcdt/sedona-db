@@ -4,7 +4,7 @@ use std::hash::Hash;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::projection::{unwrap_logical_plan, wrap_logical_plan};
+use crate::projection::{unwrap_expressions, wrap_expressions};
 use async_trait::async_trait;
 use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion::common::Statistics;
@@ -19,7 +19,7 @@ use datafusion::physical_plan::{
 };
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
 use datafusion_expr::{
-    Expr, Extension, LogicalPlan, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
+    Expr, Extension, LogicalPlan, Projection, UserDefinedLogicalNode, UserDefinedLogicalNodeCore
 };
 
 /// Add the extension sandwich optmizer rule to a SessionStateBuilder
@@ -150,6 +150,35 @@ impl OptimizerRule for ExtensionSandwichOptimizerRule {
         };
 
         Ok(plan_out)
+    }
+}
+
+/// Possibly project LogicalPlan such that the outout expresses extension types as data types
+///
+/// This is a "lazy" version of wrap_arrow_batch() that appends a projection node
+/// after scanning a data source (if any extension fields exist in the projected schema).
+pub fn wrap_logical_plan(plan: &LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+    if let Some(exprs) = wrap_expressions(plan.schema())? {
+        let projection = Projection::try_new(exprs, plan.clone().into())?;
+        Ok(Transformed::yes(LogicalPlan::Projection(projection)))
+    } else {
+        Ok(Transformed::no(plan.clone()))
+    }
+}
+
+/// Possibly project a logical plan such that the result unwraps any struct-wrapped data types
+///
+/// The reverse of `wrap_table_scan()` intended for use on the output of a plan.
+/// While this function correctly sets the DFSchema output to have the correct fields metadata,
+/// this field metadata is obliterated by DataFusion internals and is not actually propagated
+/// when used as part of an optimizer rule.
+pub fn unwrap_logical_plan(plan: &LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+    if let Some((df_schema, exprs)) = unwrap_expressions(plan.schema())? {
+        let projection =
+            Projection::try_new_with_schema(exprs, plan.clone().into(), Arc::new(df_schema))?;
+        Ok(Transformed::yes(LogicalPlan::Projection(projection)))
+    } else {
+        Ok(Transformed::no(plan.clone()))
     }
 }
 
