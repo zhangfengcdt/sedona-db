@@ -13,7 +13,7 @@ use datafusion::error::Result;
 /// them in a way that can be plugged in to user-defined functions. In particular,
 /// we need to be able to:
 ///
-/// - Declare function signatures in such a way that ST_something(some_geometry)
+/// - Declare function signatures in such a way that ST_Something(some_geometry)
 ///   can find the user-defined function implementation (or error if some_geometry
 ///   is not geometry).
 /// - Declare an output type so that geometry can be recognized by the next ST
