@@ -1,5 +1,5 @@
 [package]
-name = "wvc-datafusion"
+name = "sedona-datafusion"
 version = { workspace = true }
 edition = "2021"
 

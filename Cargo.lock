@@ -1802,6 +1802,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
+name = "sedona-datafusion"
+version = "0.0.1"
+dependencies = [
+ "arrow-array",
+ "arrow-ipc",
+ "arrow-schema",
+ "async-trait",
+ "datafusion",
+ "datafusion-expr",
+ "tokio",
+]
+
+[[package]]
 name = "semver"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2300,19 +2313,6 @@ name = "writeable"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e9df38ee2d2c3c5948ea468a8406ff0db0b29ae1ffde1bcf20ef305bcc95c51"
-
-[[package]]
-name = "wvc-datafusion"
-version = "0.0.1"
-dependencies = [
- "arrow-array",
- "arrow-ipc",
- "arrow-schema",
- "async-trait",
- "datafusion",
- "datafusion-expr",
- "tokio",
-]
 
 [[package]]
 name = "yoke"
