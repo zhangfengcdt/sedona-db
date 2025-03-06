@@ -372,21 +372,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn optimizer_rule_wrap_unwrap() {
+    async fn optimizer_rule_wrap_unwrap() -> Result<()> {
         let col1 = create_array!(Utf8, ["POINT (0 1)", "POINT (2 3)"]);
         let col2 = col1.clone();
-        let batch_no_extensions = record_batch!(("col1", Utf8, ["abc", "def"])).unwrap();
+        let batch_no_extensions = record_batch!(("col1", Utf8, ["abc", "def"]))?;
 
         let builder = SessionStateBuilder::new();
         let state = add_extension_sandwich_optimizer_rule(builder, vec![]).build();
         let ctx = SessionContext::from(state);
 
         let results_no_extensions = ctx
-            .read_batch(batch_no_extensions.clone())
-            .unwrap()
+            .read_batch(batch_no_extensions.clone())?
             .collect()
-            .await
-            .unwrap();
+            .await?;
         assert_eq!(results_no_extensions.len(), 1);
         assert_eq!(results_no_extensions[0], batch_no_extensions);
 
@@ -394,23 +392,24 @@ mod tests {
             Field::new("col1", DataType::Utf8, true),
             geoarrow_wkt().to_field("col2"),
         ]);
-        let batch = RecordBatch::try_new(schema.into(), vec![col1, col2]).unwrap();
-        let df = ctx.read_batch(batch.clone()).unwrap();
+        let batch = RecordBatch::try_new(schema.into(), vec![col1, col2])?;
+        let df = ctx.read_batch(batch.clone())?;
 
         // No optimizer rules applied yet, so we get the original schema
         assert_eq!(*df.schema().as_arrow(), *batch.schema());
 
         // Optimizer stuff gets applied on collect
-        let results = df.collect().await.unwrap();
+        let results = df.collect().await?;
         assert_eq!(results.len(), 1);
 
         // ..but strips extensions from the final node (OK for now)
         let batch_without_extensions = record_batch!(
             ("col1", Utf8, ["POINT (0 1)", "POINT (2 3)"]),
             ("col2", Utf8, ["POINT (0 1)", "POINT (2 3)"])
-        )
-        .unwrap();
+        )?;
         assert_eq!(results[0].schema(), batch_without_extensions.schema());
         assert_eq!(results[0], batch_without_extensions);
+
+        Ok(())
     }
 }

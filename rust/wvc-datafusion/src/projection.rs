@@ -22,7 +22,7 @@ pub fn wrap_arrow_schema(schema: &Schema) -> Schema {
     let mut builder = SchemaBuilder::with_capacity(schema.fields().len());
     for field in schema.fields() {
         let field_out = match ExtensionType::from_field(field) {
-            Some(ext) => Field::new(field.name(), ext.to_data_type(), false).into(),
+            Some(ext) => Field::new(field.name(), ext.to_data_type(), true).into(),
             None => field.clone(),
         };
 
@@ -299,8 +299,9 @@ impl ScalarUDFImpl for UnwrapExtensionUdf {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::create_array;
+    use arrow_array::{create_array, record_batch};
     use arrow_schema::DataType;
+    use datafusion::prelude::SessionContext;
 
     use super::*;
 
@@ -343,5 +344,54 @@ mod tests {
 
         let batch_unwrapped = unwrap_arrow_batch(batch_wrapped);
         assert_eq!(batch_unwrapped, batch);
+    }
+
+    #[tokio::test]
+    async fn df_wrap_unwrap() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("col1", DataType::Utf8, true),
+            geoarrow_wkt().to_field("col2"),
+        ]);
+        let col1 = create_array!(Utf8, ["POINT (0 1)", "POINT (2 3)"]);
+        let col2 = col1.clone();
+
+        let batch_no_extensions = record_batch!(("col1", Utf8, ["POINT (0 1)", "POINT (2 3)"]))?;
+        let batch = RecordBatch::try_new(schema.clone().into(), vec![col1, col2])?;
+
+        let ctx = SessionContext::new();
+
+        // A batch with no extensions should be unchanged by wrap_df()
+        let df_no_extensions = wrap_df(ctx.read_batch(batch_no_extensions.clone())?)?;
+        let results_no_extensions = df_no_extensions.clone().collect().await?;
+        assert_eq!(results_no_extensions.len(), 1);
+        assert_eq!(results_no_extensions[0], batch_no_extensions);
+
+        // A batch with no extensions should be unchanged by unwrap_df()
+        let (schema_roundtrip_no_extensions, roundtrip_no_extensions) =
+            unwrap_df(df_no_extensions.clone())?;
+        assert_eq!(&schema_roundtrip_no_extensions, df_no_extensions.schema());
+        assert_eq!(
+            roundtrip_no_extensions.collect().await?[0],
+            batch_no_extensions
+        );
+
+        // A batch with extensions should have extension fields wrapped as structs by df_wrap()
+        let df = wrap_df(ctx.read_batch(batch.clone())?)?;
+        let results = df.clone().collect().await?;
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], wrap_arrow_batch(batch.clone()));
+
+        // unwrap_df() will result in a batch with no extensions in the results
+        // (but with the extension information communicated in the returned schema)
+        let batch_without_extensions = record_batch!(
+            ("col1", Utf8, ["POINT (0 1)", "POINT (2 3)"]),
+            ("col2", Utf8, ["POINT (0 1)", "POINT (2 3)"])
+        )?;
+        let (schema_roundtrip, roundtrip) = unwrap_df(df)?;
+        assert_eq!(schema_roundtrip.as_arrow(), &schema);
+
+        assert_eq!(roundtrip.collect().await?[0], batch_without_extensions);
+
+        Ok(())
     }
 }

@@ -114,7 +114,7 @@ impl ExtensionType {
     /// This is how an Arrow extension type would be normally wrapped if it were a column
     /// in a RecordBatch.
     pub fn to_field(&self, name: &str) -> Field {
-        let mut field = Field::new(name, self.storage_type.clone(), false);
+        let mut field = Field::new(name, self.storage_type.clone(), true);
         let mut metadata = HashMap::from([(
             "ARROW:extension:name".to_string(),
             self.extension_name.clone(),
