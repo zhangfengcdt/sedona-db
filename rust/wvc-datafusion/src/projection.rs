@@ -9,7 +9,7 @@ use datafusion::common::DFSchema;
 use datafusion::error::Result;
 use datafusion::scalar::ScalarValue;
 use datafusion_expr::{
-    ColumnarValue, Expr, LogicalPlan, Projection, ScalarUDF, ScalarUDFImpl, Signature, TableScan,
+    ColumnarValue, Expr, LogicalPlan, Projection, ScalarUDF, ScalarUDFImpl, Signature,
 };
 
 use crate::logical_type::{ExtensionType, LogicalArray};
@@ -95,15 +95,15 @@ pub fn unwrap_arrow_batch(batch: RecordBatch) -> RecordBatch {
 ///
 /// This is a "lazy" version of wrap_arrow_batch() that appends a projection node
 /// after scanning a data source (if any extension fields exist in the projected schema).
-pub fn wrap_table_scan(plan: &LogicalPlan, scan: &TableScan) -> Result<Transformed<LogicalPlan>> {
+pub fn wrap_logical_plan(plan: &LogicalPlan) -> Result<Transformed<LogicalPlan>> {
     let projected_schema = plan.schema();
-    let wrap_udf = ScalarUDF::new_from_impl(WrapExtensionUdf::new());
+    let wrap_udf = WrapExtensionUdf::udf();
     let mut wrap_count = 0;
 
     let mut exprs = Vec::with_capacity(projected_schema.fields().len());
     for i in 0..exprs.capacity() {
         let this_column = Expr::Column(projected_schema.columns()[i].clone());
-        let this_name = projected_schema.field(i).name();
+        let (this_qualifier, this_field) = projected_schema.qualified_field(i);
 
         if let Some(ext) = ExtensionType::from_field(projected_schema.field(i)) {
             let dummy_array = new_null_array(&ext.to_data_type(), 1);
@@ -112,12 +112,12 @@ pub fn wrap_table_scan(plan: &LogicalPlan, scan: &TableScan) -> Result<Transform
                     this_column.clone(),
                     Expr::Literal(ScalarValue::try_from_array(&dummy_array, 0)?),
                 ])
-                .alias_qualified(Some(scan.table_name.clone()), this_name);
+                .alias_qualified(this_qualifier.cloned(), this_field.name());
 
             exprs.push(wrap_call);
             wrap_count += 1;
         } else {
-            exprs.push(this_column.alias_qualified(Some(scan.table_name.clone()), this_name));
+            exprs.push(this_column.alias_qualified(this_qualifier.cloned(), this_field.name()));
         }
     }
 
@@ -132,6 +132,9 @@ pub fn wrap_table_scan(plan: &LogicalPlan, scan: &TableScan) -> Result<Transform
 /// Possibly project a logical plan such that the result unwraps any struct-wrapped data types
 ///
 /// The reverse of `wrap_table_scan()` intended for use on the output of a plan.
+/// While this function correctly sets the DFSchema output to have the correct fields metadata,
+/// this field metadata is obliterated by DataFusion internals and is not actually propagated
+/// when used as part of an optimizer rule.
 pub fn unwrap_logical_plan(plan: &LogicalPlan) -> Result<Transformed<LogicalPlan>> {
     let projected_schema = plan.schema();
     let original_schema = plan.schema().as_arrow();
@@ -140,7 +143,7 @@ pub fn unwrap_logical_plan(plan: &LogicalPlan) -> Result<Transformed<LogicalPlan
         return Ok(Transformed::no(plan.clone()));
     }
 
-    let unwrap_udf = ScalarUDF::new_from_impl(UnwrapExtensionUdf::new());
+    let unwrap_udf = UnwrapExtensionUdf::udf();
     let mut exprs = Vec::with_capacity(original_schema.fields().len());
     let mut qualifiers = Vec::with_capacity(exprs.capacity());
     for i in 0..exprs.capacity() {
@@ -174,9 +177,9 @@ pub struct WrapExtensionUdf {
 }
 
 impl WrapExtensionUdf {
-    pub fn new() -> Self {
-        let signature = Signature::any(2, datafusion_expr::Volatility::Volatile);
-        return Self { signature };
+    pub fn udf() -> ScalarUDF {
+        let signature = Signature::any(2, datafusion_expr::Volatility::Immutable);
+        ScalarUDF::new_from_impl(Self { signature })
     }
 }
 
@@ -224,9 +227,9 @@ pub struct UnwrapExtensionUdf {
 }
 
 impl UnwrapExtensionUdf {
-    pub fn new() -> Self {
-        let signature = Signature::any(1, datafusion_expr::Volatility::Volatile);
-        return Self { signature };
+    pub fn udf() -> ScalarUDF {
+        let signature = Signature::any(1, datafusion_expr::Volatility::Immutable);
+        ScalarUDF::new_from_impl(Self { signature })
     }
 }
 

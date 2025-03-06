@@ -4,7 +4,7 @@ use std::hash::Hash;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::projection::{unwrap_logical_plan, wrap_table_scan};
+use crate::projection::{unwrap_logical_plan, wrap_logical_plan};
 use async_trait::async_trait;
 use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion::common::Statistics;
@@ -59,13 +59,21 @@ pub fn add_extension_sandwich_optimizer_rule(
 struct ExtensionSandwichOptimizerRule {}
 
 impl ExtensionSandwichOptimizerRule {
+    /// Implementation of the logical plan wrap transformation
+    ///
+    /// A thin wrapper around [`wrap_logical_plan`].
     fn apply_wrap(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         plan.transform_up_with_subqueries(|node| match &node {
-            LogicalPlan::TableScan(scan) => wrap_table_scan(&node, scan),
+            LogicalPlan::TableScan(_) => wrap_logical_plan(&node),
             _ => Ok(Transformed::no(node.clone())),
         })
     }
 
+    /// Implementation of the logical plan unwrap transformation
+    ///
+    /// In addition to unwrapping via a projection, we need to put some kind of node
+    /// that DataFusion won't optimize projections across (i.e., we always want this projection
+    /// at the end of the plan and don't want it optimized out).
     fn apply_unwrap(plan: Transformed<LogicalPlan>) -> Result<Transformed<LogicalPlan>> {
         let plan_identity = LogicalPlan::Extension(Extension {
             node: Arc::new(IdentityExtensionNode {
@@ -81,6 +89,10 @@ impl ExtensionSandwichOptimizerRule {
         }
     }
 
+    /// Check if the optimizer rule was already applied
+    ///
+    /// We don't need to apply the rule more than once (and there are usually several
+    /// optimizer passes).
     fn rule_already_applied(plan: &LogicalPlan) -> Result<bool> {
         let mut already_optimized = false;
         plan.apply(|plan| {
@@ -115,19 +127,14 @@ impl OptimizerRule for ExtensionSandwichOptimizerRule {
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        // First, check for any instance of this optimization (basically: any call to
-        // wrap_extension_internal()). After the first pass we don't need anything else
-        // although our function calls may get bounced around and inlined into eachother
-        // by other optimizations.
         if Self::rule_already_applied(&plan)? {
             return Ok(Transformed::no(plan));
         }
 
-        // First, we need to recurse into the plan and add a wrap_table_scan()
-        // to all scan nodes at the far ends of the plan.
+        // Wrap the input if needed
         let maybe_wrapped_input = Self::apply_wrap(plan)?;
 
-        // Next, we need to unwrap the output
+        // Wrap the output if needed
         let plan_out = match &maybe_wrapped_input.data {
             // For a copy, we need the unwrap to occur before the COPY
             LogicalPlan::Copy(copy_to) => {
@@ -138,9 +145,7 @@ impl OptimizerRule for ExtensionSandwichOptimizerRule {
                     vec![unwrapped_input.data],
                 )?)
             }
-            // For everything else, we just add the unwrap projection (if needed)
-            // the end of the plan. We put an "identity" node as its input to prevent
-            // subsequent optimizer passes from doing anything to it!
+            // For everything else, we just add the unwrap projection at the end of the plan
             _ => Self::apply_unwrap(maybe_wrapped_input)?,
         };
 
@@ -148,6 +153,10 @@ impl OptimizerRule for ExtensionSandwichOptimizerRule {
     }
 }
 
+/// Implementation of a LogicalPlan node that preserves its input
+///
+/// This is needed to prevent the wrap and unwrap projections from optimizing into eachother
+/// by logical plan optimization.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Hash)]
 struct IdentityExtensionNode {
     input: LogicalPlan,
@@ -189,6 +198,9 @@ impl UserDefinedLogicalNodeCore for IdentityExtensionNode {
 }
 
 /// Physical planner for IdentityExtensionNode
+///
+/// Needed for the query planner to translate a LogicalPlan containing the
+/// IdentityExtensionNode into a physical plan.
 struct IdentityExtensionPlanner {}
 
 #[async_trait]
@@ -213,6 +225,10 @@ impl ExtensionPlanner for IdentityExtensionPlanner {
     }
 }
 
+/// QueryPlanner that can translate the IdentityExtensionNode into a physical plan
+///
+/// The SessionState only allows one planner, so this also keeps track of other
+/// extension planners if needed to dispatch them to the appropriate ExtensionPlanner.
 struct IdentityExtensionQueryPlanner {
     other_extension_planners: Vec<Arc<dyn ExtensionPlanner + Send + Sync>>,
 }
@@ -248,6 +264,9 @@ impl QueryPlanner for IdentityExtensionQueryPlanner {
     }
 }
 
+/// Implementation of an ExecutionPlan for an identity node
+///
+/// This ExecutionPlan passes along its input and its input properties.
 struct IdentityExec {
     input: Arc<dyn ExecutionPlan>,
 }

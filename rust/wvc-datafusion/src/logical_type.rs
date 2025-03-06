@@ -25,7 +25,8 @@ use datafusion::error::Result;
 /// or geoarrow-c via FFI.
 ///
 /// This wrapping/unwrapping can disappear when there is a built-in logical type
-/// representation.
+/// and/or DataFusion is better at propagating metadata through various pieces of
+/// infrastructure.
 #[derive(Debug, PartialEq)]
 pub struct ExtensionType {
     extension_name: String,
