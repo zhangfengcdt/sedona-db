@@ -19,7 +19,7 @@ use datafusion::physical_plan::{
 };
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
 use datafusion_expr::{
-    Expr, Extension, LogicalPlan, Projection, UserDefinedLogicalNode, UserDefinedLogicalNodeCore
+    Expr, Extension, LogicalPlan, Projection, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
 };
 
 /// Add the extension sandwich optmizer rule to a SessionStateBuilder

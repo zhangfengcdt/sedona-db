@@ -89,13 +89,32 @@ pub fn unwrap_arrow_batch(batch: RecordBatch) -> RecordBatch {
     RecordBatch::try_new(Arc::new(schema), columns).unwrap()
 }
 
-/// Possibly project a DataFrame such that the outout expresses extension types as data types
+/// Possibly project a DataFrame such that the output expresses extension types as data types
 ///
 /// This is a "lazy" version of wrap_arrow_batch() that appends a projection to a DataFrame.
-pub fn wrap_dataframe(df: DataFrame) -> DataFrame {
-    return df;
+pub fn wrap_df(df: DataFrame) -> Result<DataFrame> {
+    if let Some(exprs) = wrap_expressions(df.schema())? {
+        df.select(exprs)
+    } else {
+        Ok(df)
+    }
 }
 
+/// Possibly project a DataFrame such that the output expresses extension types as data types
+///
+/// This is a "lazy" version of unwrap_arrow_batch() that appends a projection to a DataFrame.
+pub fn unwrap_df(df: DataFrame) -> Result<(DFSchema, DataFrame)> {
+    if let Some((schema, exprs)) = unwrap_expressions(df.schema())? {
+        Ok((schema, df.select(exprs)?))
+    } else {
+        Ok((df.schema().clone(), df))
+    }
+}
+
+/// Implementation underlying wrap_df
+///
+/// Returns None if there is no need to wrap the input, or a list of expressions that
+/// either pass along the existing column or a UDF call that applies the wrap.
 pub(crate) fn wrap_expressions(schema: &DFSchema) -> Result<Option<Vec<Expr>>> {
     let wrap_udf = WrapExtensionUdf::udf();
     let mut wrap_count = 0;
@@ -128,6 +147,12 @@ pub(crate) fn wrap_expressions(schema: &DFSchema) -> Result<Option<Vec<Expr>>> {
     }
 }
 
+/// Implementation underlying unwrap_df
+///
+/// Returns None if there is no need to unwrap the input, or a list of expressions that
+/// either pass along the existing column or a UDF call that applies the unwrap.
+/// Returns a DFSchema because the resulting schema based purely on the expressions would
+/// otherwise not include field metadata.
 pub(crate) fn unwrap_expressions(schema: &DFSchema) -> Result<Option<(DFSchema, Vec<Expr>)>> {
     let unwrap_udf = UnwrapExtensionUdf::udf();
     let mut exprs = Vec::with_capacity(schema.fields().len());
