@@ -18,7 +18,7 @@ use crate::extension_type::ExtensionType;
 /// are propagated through operations that only supply a data type (e.g., UDF
 /// execution). This is the projection that should be applied to input that
 /// might contain extension types.
-pub fn wrap_arrow_schema(schema: &Schema) -> Schema {
+pub fn wrap_schema(schema: &Schema) -> Schema {
     let fields: Vec<_> = schema
         .fields()
         .iter()
@@ -36,7 +36,7 @@ pub fn wrap_arrow_schema(schema: &Schema) -> Schema {
 /// The resulting schema will have extension types represented with field metadata
 /// instead of as wrapped structs. This is the projection that should be applied
 /// when writing to output.
-pub fn unwrap_arrow_schema(schema: &Schema) -> Schema {
+pub fn unwrap_schema(schema: &Schema) -> Schema {
     let fields: Vec<_> = schema
         .fields()
         .iter()
@@ -56,7 +56,7 @@ pub fn unwrap_arrow_schema(schema: &Schema) -> Schema {
 /// The resulting batch will wrap columns with extension types as struct arrays
 /// that can be passed to APIs that operate purely on ArrayRefs (e.g., UDFs).
 /// This is the projection that should be applied when wrapping an input stream.
-pub fn wrap_arrow_batch(batch: RecordBatch) -> RecordBatch {
+pub fn wrap_batch(batch: RecordBatch) -> RecordBatch {
     let columns = batch
         .columns()
         .iter()
@@ -70,7 +70,7 @@ pub fn wrap_arrow_batch(batch: RecordBatch) -> RecordBatch {
         })
         .collect();
 
-    let schema = wrap_arrow_schema(&batch.schema());
+    let schema = wrap_schema(&batch.schema());
     RecordBatch::try_new(Arc::new(schema), columns).unwrap()
 }
 
@@ -79,7 +79,7 @@ pub fn wrap_arrow_batch(batch: RecordBatch) -> RecordBatch {
 /// The resulting output will have extension types represented with field metadata
 /// instead of as wrapped structs. This is the projection that should be applied
 /// when writing to output.
-pub fn unwrap_arrow_batch(batch: RecordBatch) -> RecordBatch {
+pub fn unwrap_batch(batch: RecordBatch) -> RecordBatch {
     let columns: Vec<_> = batch
         .columns()
         .iter()
@@ -93,7 +93,7 @@ pub fn unwrap_arrow_batch(batch: RecordBatch) -> RecordBatch {
         })
         .collect();
 
-    let schema = unwrap_arrow_schema(&batch.schema());
+    let schema = unwrap_schema(&batch.schema());
     RecordBatch::try_new(Arc::new(schema), columns).unwrap()
 }
 
@@ -185,7 +185,7 @@ pub(crate) fn unwrap_expressions(schema: &DFSchema) -> Result<Option<(DFSchema, 
     }
 
     if unwrap_count > 0 {
-        let schema_unwrapped = unwrap_arrow_schema(schema.as_arrow());
+        let schema_unwrapped = unwrap_schema(schema.as_arrow());
         let dfschema_unwrapped = DFSchema::from_field_specific_qualified_schema(
             qualifiers,
             &Arc::new(schema_unwrapped),
@@ -322,13 +322,13 @@ mod tests {
             geoarrow_wkt().to_field("field2"),
         ]);
 
-        let schema_wrapped = wrap_arrow_schema(&schema_normal);
+        let schema_wrapped = wrap_schema(&schema_normal);
         assert_eq!(schema_wrapped.field(0).name(), "field1");
         assert_eq!(*schema_wrapped.field(0).data_type(), DataType::Boolean);
         assert_eq!(schema_wrapped.field(1).name(), "field2");
         assert!(schema_wrapped.field(1).data_type().is_nested());
 
-        let schema_unwrapped = unwrap_arrow_schema(&schema_wrapped);
+        let schema_unwrapped = unwrap_schema(&schema_wrapped);
         assert_eq!(schema_unwrapped, schema_normal);
     }
 
@@ -343,11 +343,11 @@ mod tests {
         let col2 = col1.clone();
 
         let batch = RecordBatch::try_new(schema.into(), vec![col1, col2]).unwrap();
-        let batch_wrapped = wrap_arrow_batch(batch.clone());
+        let batch_wrapped = wrap_batch(batch.clone());
         assert_eq!(batch_wrapped.column(0).data_type(), &DataType::Utf8);
         assert!(batch_wrapped.column(1).data_type().is_nested());
 
-        let batch_unwrapped = unwrap_arrow_batch(batch_wrapped);
+        let batch_unwrapped = unwrap_batch(batch_wrapped);
         assert_eq!(batch_unwrapped, batch);
     }
 
@@ -384,7 +384,7 @@ mod tests {
         let df = wrap_df(ctx.read_batch(batch.clone())?)?;
         let results = df.clone().collect().await?;
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0], wrap_arrow_batch(batch.clone()));
+        assert_eq!(results[0], wrap_batch(batch.clone()));
 
         // unwrap_df() will result in a batch with no extensions in the results
         // (but with the extension information communicated in the returned schema)
