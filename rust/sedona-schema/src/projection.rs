@@ -2,8 +2,8 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use arrow_array::{new_null_array, RecordBatch};
-use arrow_schema::{DataType, Field, Schema, SchemaBuilder};
+use arrow_array::{new_null_array, RecordBatch, StructArray};
+use arrow_schema::{DataType, Field, Schema};
 use datafusion::common::DFSchema;
 use datafusion::error::Result;
 use datafusion::prelude::DataFrame;
@@ -19,17 +19,16 @@ use crate::logical_type::{ExtensionType, LogicalArray};
 /// execution). This is the projection that should be applied to input that
 /// might contain extension types.
 pub fn wrap_arrow_schema(schema: &Schema) -> Schema {
-    let mut builder = SchemaBuilder::with_capacity(schema.fields().len());
-    for field in schema.fields() {
-        let field_out = match ExtensionType::from_field(field) {
+    let fields: Vec<_> = schema
+        .fields()
+        .iter()
+        .map(|field| match ExtensionType::from_field(field) {
             Some(ext) => Field::new(field.name(), ext.to_data_type(), true).into(),
             None => field.clone(),
-        };
+        })
+        .collect();
 
-        builder.push(field_out);
-    }
-
-    builder.finish()
+    Schema::new(fields)
 }
 
 /// Unwrap a Schema that contains wrapped extension types
@@ -38,17 +37,18 @@ pub fn wrap_arrow_schema(schema: &Schema) -> Schema {
 /// instead of as wrapped structs. This is the projection that should be applied
 /// when writing to output.
 pub fn unwrap_arrow_schema(schema: &Schema) -> Schema {
-    let mut builder = SchemaBuilder::with_capacity(schema.fields().len());
-    for field in schema.fields() {
-        let field_out = match ExtensionType::from_data_type(field.data_type()) {
-            Some(ext) => ext.to_field(field.name()).into(),
-            None => field.clone(),
-        };
+    let fields: Vec<_> = schema
+        .fields()
+        .iter()
+        .map(
+            |field| match ExtensionType::from_data_type(field.data_type()) {
+                Some(ext) => ext.to_field(field.name()).into(),
+                None => field.clone(),
+            },
+        )
+        .collect();
 
-        builder.push(field_out);
-    }
-
-    builder.finish()
+    Schema::new(fields)
 }
 
 /// Wrap a record batch possibly containing extension types encoded as field metadata
@@ -57,14 +57,18 @@ pub fn unwrap_arrow_schema(schema: &Schema) -> Schema {
 /// that can be passed to APIs that operate purely on ArrayRefs (e.g., UDFs).
 /// This is the projection that should be applied when wrapping an input stream.
 pub fn wrap_arrow_batch(batch: RecordBatch) -> RecordBatch {
-    let mut columns = Vec::with_capacity(batch.num_columns());
-    for i in 0..batch.num_columns() {
-        let column_out = match ExtensionType::from_field(batch.schema().field(i)) {
-            Some(ext) => ext.wrap_storage(batch.column(i).clone()).unwrap(),
-            None => batch.column(i).clone(),
-        };
-        columns.push(column_out);
-    }
+    let columns = batch
+        .columns()
+        .iter()
+        .enumerate()
+        .map(|(i, column)| {
+            if let Some(ext) = ExtensionType::from_field(batch.schema().field(i)) {
+                ext.wrap_storage(column.clone()).unwrap()
+            } else {
+                column.clone()
+            }
+        })
+        .collect();
 
     let schema = wrap_arrow_schema(&batch.schema());
     RecordBatch::try_new(Arc::new(schema), columns).unwrap()
@@ -76,14 +80,18 @@ pub fn wrap_arrow_batch(batch: RecordBatch) -> RecordBatch {
 /// instead of as wrapped structs. This is the projection that should be applied
 /// when writing to output.
 pub fn unwrap_arrow_batch(batch: RecordBatch) -> RecordBatch {
-    let mut columns = Vec::with_capacity(batch.num_columns());
-    for i in 0..batch.num_columns() {
-        let logical_array: LogicalArray = batch.column(i).clone().into();
-        match logical_array {
-            LogicalArray::Normal(array) => columns.push(array),
-            LogicalArray::Extension(_, array) => columns.push(array),
-        }
-    }
+    let columns: Vec<_> = batch
+        .columns()
+        .iter()
+        .map(|column| {
+            if ExtensionType::from_data_type(column.data_type()).is_some() {
+                let struct_array = StructArray::from(column.to_data());
+                struct_array.column(0).clone()
+            } else {
+                column.clone()
+            }
+        })
+        .collect();
 
     let schema = unwrap_arrow_schema(&batch.schema());
     RecordBatch::try_new(Arc::new(schema), columns).unwrap()
@@ -312,10 +320,10 @@ mod tests {
 
     #[test]
     fn schema_wrap_unwrap() {
-        let mut builder = SchemaBuilder::new();
-        builder.push(Field::new("field1", DataType::Boolean, true));
-        builder.push(geoarrow_wkt().to_field("field2"));
-        let schema_normal = builder.finish();
+        let schema_normal = Schema::new(vec![
+            Field::new("field1", DataType::Boolean, true),
+            geoarrow_wkt().to_field("field2"),
+        ]);
 
         let schema_wrapped = wrap_arrow_schema(&schema_normal);
         assert_eq!(schema_wrapped.field(0).name(), "field1");

@@ -38,7 +38,7 @@ pub struct ExtensionType {
 /// or an ExtensionType.
 #[derive(Debug, PartialEq)]
 pub enum LogicalType {
-    Normal(DataType),
+    Standard(DataType),
     Extension(ExtensionType),
 }
 
@@ -46,7 +46,7 @@ impl From<DataType> for LogicalType {
     fn from(value: DataType) -> Self {
         match ExtensionType::from_data_type(&value) {
             Some(extension_type) => LogicalType::Extension(extension_type),
-            None => LogicalType::Normal(value),
+            None => LogicalType::Standard(value),
         }
     }
 }
@@ -55,7 +55,7 @@ impl From<Field> for LogicalType {
     fn from(value: Field) -> Self {
         match ExtensionType::from_field(&value) {
             Some(extension_type) => LogicalType::Extension(extension_type),
-            None => LogicalType::Normal(value.data_type().clone()),
+            None => LogicalType::Standard(value.data_type().clone()),
         }
     }
 }
@@ -183,27 +183,20 @@ impl ExtensionType {
     /// any number of fields != 1, if its only field is does not contain extension
     /// metadata, or if its extension name does not match the name of the struct.
     pub fn from_data_type(storage_type: &DataType) -> Option<ExtensionType> {
-        match storage_type {
-            DataType::Struct(fields) => {
-                if fields.len() != 1 {
-                    return None;
-                }
+        if let DataType::Struct(fields) = storage_type {
+            if fields.len() != 1 {
+                return None;
+            }
 
-                let field = &fields[0];
-                let maybe_extension_type = ExtensionType::from_field(field);
-                match maybe_extension_type {
-                    Some(extension_type) => {
-                        if &extension_type.extension_name == field.name() {
-                            Some(extension_type)
-                        } else {
-                            None
-                        }
-                    }
-                    None => None,
+            let field = &fields[0];
+            if let Some(extension_type) = ExtensionType::from_field(field) {
+                if &extension_type.extension_name == field.name() {
+                    return Some(extension_type);
                 }
             }
-            _ => None,
         }
+
+        None
     }
 }
 
@@ -280,7 +273,10 @@ mod tests {
     #[test]
     fn logical_type() {
         let logical_type_normal: LogicalType = DataType::Boolean.into();
-        assert_eq!(logical_type_normal, LogicalType::Normal(DataType::Boolean));
+        assert_eq!(
+            logical_type_normal,
+            LogicalType::Standard(DataType::Boolean)
+        );
 
         let logical_type_ext: LogicalType = geoarrow_wkt().into();
         assert_eq!(logical_type_ext, LogicalType::Extension(geoarrow_wkt()));

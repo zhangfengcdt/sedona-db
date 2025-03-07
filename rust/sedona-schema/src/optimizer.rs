@@ -22,13 +22,13 @@ use datafusion_expr::{
     Expr, Extension, LogicalPlan, Projection, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
 };
 
-/// Add the extension sandwich optmizer rule to a SessionStateBuilder
+/// Add the extension sandwich optimizer rule to a SessionStateBuilder
 ///
 /// This logical optimizer rule is applied to table scans that contain a source (to
 /// wrap them in a struct such that the extension type name and metadata are propagated
 /// through computations where field metadata is not available). The corresponding
 /// operation on the end of the plan is also applied (unwrapping the modified types) to
-/// satisfy the invariant that an optmizer rule should not change the output schema of
+/// satisfy the invariant that an optimizer rule should not change the output schema of
 /// a logical plan. Unfortunately, DataFusion does not provide a way to easily get the
 /// extension field information back into the output, so realistically tests will need
 /// to use something like `ST_AsText()` and not depend on geometry output for now.
@@ -107,6 +107,10 @@ impl ExtensionSandwichOptimizerRule {
                         }
                         Ok(TreeNodeRecursion::Continue)
                     })?;
+
+                    if already_optimized {
+                        return Ok(TreeNodeRecursion::Stop);
+                    }
                 }
             }
 
