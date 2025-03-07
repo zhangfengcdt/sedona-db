@@ -370,7 +370,7 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema};
     use datafusion::{execution::SessionStateBuilder, prelude::SessionContext};
 
-    use crate::logical_type::ExtensionType;
+    use crate::extension_type::ExtensionType;
 
     use super::*;
 

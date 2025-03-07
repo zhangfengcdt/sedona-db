@@ -10,7 +10,7 @@ use datafusion::prelude::DataFrame;
 use datafusion::scalar::ScalarValue;
 use datafusion_expr::{ColumnarValue, Expr, ScalarUDF, ScalarUDFImpl, Signature};
 
-use crate::logical_type::ExtensionType;
+use crate::extension_type::ExtensionType;
 
 /// Wrap a Schema possibly containing Extension Types
 ///
