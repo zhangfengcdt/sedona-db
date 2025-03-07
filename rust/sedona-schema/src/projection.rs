@@ -10,7 +10,7 @@ use datafusion::prelude::DataFrame;
 use datafusion::scalar::ScalarValue;
 use datafusion_expr::{ColumnarValue, Expr, ScalarUDF, ScalarUDFImpl, Signature};
 
-use crate::logical_type::{ExtensionType, LogicalArray};
+use crate::logical_type::ExtensionType;
 
 /// Wrap a Schema possibly containing Extension Types
 ///
@@ -282,22 +282,19 @@ impl ScalarUDFImpl for UnwrapExtensionUdf {
     }
 
     fn invoke_batch(&self, args: &[ColumnarValue], _num_rows: usize) -> Result<ColumnarValue> {
+        if ExtensionType::from_data_type(&args[0].data_type()).is_none() {
+            return Ok(args[0].clone());
+        }
+
         match &args[0] {
             ColumnarValue::Array(array) => {
-                let logical_array: LogicalArray = array.clone().into();
-                match logical_array {
-                    LogicalArray::Normal(array) => Ok(ColumnarValue::Array(array)),
-                    LogicalArray::Extension(_, array) => Ok(ColumnarValue::Array(array)),
-                }
+                let struct_array = StructArray::from(array.to_data());
+                Ok(ColumnarValue::Array(struct_array.column(0).clone()))
             }
             ColumnarValue::Scalar(scalar_value) => {
-                let array_in = scalar_value.to_array()?;
-                let logical_array: LogicalArray = array_in.into();
-                let array_out = match logical_array {
-                    LogicalArray::Normal(array) => array,
-                    LogicalArray::Extension(_, array) => array,
-                };
-
+                let array = scalar_value.to_array()?;
+                let struct_array = StructArray::from(array.to_data());
+                let array_out = struct_array.column(0).clone();
                 let scalar_out = ScalarValue::try_from_array(&array_out, 0)?;
                 Ok(ColumnarValue::Scalar(scalar_out))
             }

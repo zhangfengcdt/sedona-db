@@ -34,71 +34,6 @@ pub struct ExtensionType {
     extension_metadata: Option<String>,
 }
 
-/// Simple logical type representation that is either a built-in Arrow data type
-/// or an ExtensionType.
-#[derive(Debug, PartialEq)]
-pub enum LogicalType {
-    Standard(DataType),
-    Extension(ExtensionType),
-}
-
-impl From<DataType> for LogicalType {
-    fn from(value: DataType) -> Self {
-        match ExtensionType::from_data_type(&value) {
-            Some(extension_type) => LogicalType::Extension(extension_type),
-            None => LogicalType::Standard(value),
-        }
-    }
-}
-
-impl From<Field> for LogicalType {
-    fn from(value: Field) -> Self {
-        match ExtensionType::from_field(&value) {
-            Some(extension_type) => LogicalType::Extension(extension_type),
-            None => LogicalType::Standard(value.data_type().clone()),
-        }
-    }
-}
-
-impl From<ExtensionType> for LogicalType {
-    fn from(value: ExtensionType) -> Self {
-        LogicalType::Extension(value)
-    }
-}
-
-/// Simple logical array representation to handle the wrapping and unwrapping of
-/// ArrayRef values
-pub enum LogicalArray {
-    Normal(ArrayRef),
-    Extension(ExtensionType, ArrayRef),
-}
-
-impl From<ArrayRef> for LogicalArray {
-    fn from(value: ArrayRef) -> LogicalArray {
-        match ExtensionType::from_data_type(value.data_type()) {
-            Some(extension_type) => {
-                let struct_array = StructArray::from(value.to_data());
-                LogicalArray::Extension(extension_type, struct_array.column(0).clone())
-            }
-            None => LogicalArray::Normal(value),
-        }
-    }
-}
-
-impl From<LogicalArray> for ArrayRef {
-    fn from(value: LogicalArray) -> Self {
-        match value {
-            LogicalArray::Normal(array) => array,
-            LogicalArray::Extension(extension_type, array) => {
-                match extension_type.wrap_storage(array) {
-                    Ok(wrapped) => wrapped,
-                    Err(err) => panic!("{}", err),
-                }
-            }
-        }
-    }
-}
-
 impl ExtensionType {
     pub fn new(ext_name: &str, storage_type: DataType, extension_metadata: Option<String>) -> Self {
         let extension_name = ext_name.to_string();
@@ -202,14 +137,7 @@ impl ExtensionType {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::array::create_array;
-
     use super::*;
-
-    /// An ExtensionType for tests
-    pub fn geoarrow_wkt() -> ExtensionType {
-        ExtensionType::new("geoarrow.wkt", DataType::Utf8, None)
-    }
 
     #[test]
     fn extension_type_field() {
@@ -267,46 +195,6 @@ mod tests {
                 assert_eq!(ext_type.storage_type, DataType::Binary);
             }
             None => panic!("unwrap did not detect valid extension type"),
-        }
-    }
-
-    #[test]
-    fn logical_type() {
-        let logical_type_normal: LogicalType = DataType::Boolean.into();
-        assert_eq!(
-            logical_type_normal,
-            LogicalType::Standard(DataType::Boolean)
-        );
-
-        let logical_type_ext: LogicalType = geoarrow_wkt().into();
-        assert_eq!(logical_type_ext, LogicalType::Extension(geoarrow_wkt()));
-
-        let logical_type_ext2: LogicalType = geoarrow_wkt().to_data_type().into();
-        assert_eq!(logical_type_ext2, logical_type_ext);
-
-        let logical_type_ext3: LogicalType = geoarrow_wkt().to_field("foofy").into();
-        assert_eq!(logical_type_ext3, logical_type_ext);
-    }
-
-    #[test]
-    fn array_wrap_unwrap() {
-        let array: ArrayRef = create_array!(Utf8, ["POINT (0 1)", "POINT (2, 3)"]);
-        let logical_array: LogicalArray = array.clone().into();
-        match &logical_array {
-            LogicalArray::Normal(array) => assert_eq!(array.data_type(), &DataType::Utf8),
-            LogicalArray::Extension(_, _) => panic!("Expected normal array!"),
-        }
-
-        let logical_array_ext = LogicalArray::Extension(geoarrow_wkt(), array);
-        let wrapped_array: ArrayRef = logical_array_ext.into();
-        assert!(wrapped_array.data_type().is_nested());
-        let logical_array_ext_roundtrip: LogicalArray = wrapped_array.into();
-        match &logical_array_ext_roundtrip {
-            LogicalArray::Normal(_) => panic!("Expected extension array"),
-            LogicalArray::Extension(extension_type, array) => {
-                assert_eq!(extension_type, &geoarrow_wkt());
-                assert_eq!(array.data_type(), &DataType::Utf8)
-            }
         }
     }
 }
