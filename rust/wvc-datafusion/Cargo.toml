@@ -1,8 +1,0 @@
-[package]
-name = "wvc-datafusion"
-version = { workspace = true }
-edition = "2021"
-
-[dependencies]
-arrow = { workspace = true }
-datafusion-common = { workspace = true }

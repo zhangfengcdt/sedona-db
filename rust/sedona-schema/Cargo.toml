@@ -1,0 +1,13 @@
+[package]
+name = "sedona-schema"
+version = { workspace = true }
+edition = "2021"
+
+[dependencies]
+arrow-schema = { workspace = true }
+arrow-ipc = { workspace = true }
+arrow-array = { workspace = true }
+async-trait = { workspace = true }
+datafusion = { workspace = true }
+datafusion-expr = { workspace = true }
+tokio = { workspace = true }

@@ -1,0 +1,423 @@
+use std::any::Any;
+use std::fmt::Debug;
+use std::hash::Hash;
+use std::ops::Deref;
+use std::sync::Arc;
+
+use crate::projection::{unwrap_expressions, wrap_expressions};
+use async_trait::async_trait;
+use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion::common::Statistics;
+use datafusion::error::Result;
+use datafusion::execution::context::QueryPlanner;
+use datafusion::execution::{
+    SendableRecordBatchStream, SessionState, SessionStateBuilder, TaskContext,
+};
+use datafusion::optimizer::{OptimizerConfig, OptimizerRule};
+use datafusion::physical_plan::{
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, PlanProperties,
+};
+use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
+use datafusion_expr::{
+    Expr, Extension, LogicalPlan, Projection, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
+};
+
+/// Add the extension sandwich optimizer rule to a SessionStateBuilder
+///
+/// This logical optimizer rule is applied to table scans that contain a source (to
+/// wrap them in a struct such that the extension type name and metadata are propagated
+/// through computations where field metadata is not available). The corresponding
+/// operation on the end of the plan is also applied (unwrapping the modified types) to
+/// satisfy the invariant that an optimizer rule should not change the output schema of
+/// a logical plan. Unfortunately, DataFusion does not provide a way to easily get the
+/// extension field information back into the output, so realistically tests will need
+/// to use something like `ST_AsText()` and not depend on geometry output for now.
+///
+/// Because a custom physical node is required to prevent other optimizer rules from
+/// combining the wrapping and unwrapping projections, we also need a list of other
+/// extension planners (in case we need to add other custom physical nodes at any point,
+/// which seems like we may).
+///
+/// The use of this workaround should be regarded as a temporary measure until it is
+/// possible to propagate extension information and/or a user defined type through
+/// DataFusion's expression API.
+pub fn add_extension_sandwich_optimizer_rule(
+    builder: SessionStateBuilder,
+    other_extension_planners: Vec<Arc<dyn ExtensionPlanner + Send + Sync>>,
+) -> SessionStateBuilder {
+    builder
+        .with_optimizer_rule(Arc::new(ExtensionSandwichOptimizerRule {}))
+        .with_query_planner(Arc::new(IdentityExtensionQueryPlanner {
+            other_extension_planners,
+        }))
+}
+
+/// LogicalPlan optimizer applying the logical plan transformation
+///
+/// See [`add_extension_sandwich_optimizer_rule`] for the details of the approach.
+#[derive(Default, Debug)]
+struct ExtensionSandwichOptimizerRule {}
+
+impl ExtensionSandwichOptimizerRule {
+    /// Implementation of the logical plan wrap transformation
+    ///
+    /// A thin wrapper around [`wrap_logical_plan`].
+    fn apply_wrap(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+        plan.transform_up_with_subqueries(|node| match &node {
+            LogicalPlan::TableScan(_) => wrap_logical_plan(&node),
+            _ => Ok(Transformed::no(node.clone())),
+        })
+    }
+
+    /// Implementation of the logical plan unwrap transformation
+    ///
+    /// In addition to unwrapping via a projection, we need to put some kind of node
+    /// that DataFusion won't optimize projections across (i.e., we always want this projection
+    /// at the end of the plan and don't want it optimized out).
+    fn apply_unwrap(plan: Transformed<LogicalPlan>) -> Result<Transformed<LogicalPlan>> {
+        let plan_identity = LogicalPlan::Extension(Extension {
+            node: Arc::new(IdentityExtensionNode {
+                input: plan.data.clone(),
+            }),
+        });
+
+        let unwrapped_after_identity = unwrap_logical_plan(&plan_identity)?;
+        if unwrapped_after_identity.transformed {
+            Ok(Transformed::yes(unwrapped_after_identity.data))
+        } else {
+            Ok(plan)
+        }
+    }
+
+    /// Check if the optimizer rule was already applied
+    ///
+    /// We don't need to apply the rule more than once (and there are usually several
+    /// optimizer passes).
+    fn rule_already_applied(plan: &LogicalPlan) -> Result<bool> {
+        let mut already_optimized = false;
+        plan.apply(|plan| {
+            if let LogicalPlan::Projection(projection) = plan {
+                for expr in &projection.expr {
+                    expr.apply(|expr| {
+                        if let Expr::ScalarFunction(fun) = expr {
+                            if fun.name() == "wrap_extension_internal" {
+                                already_optimized = true;
+                                return Ok(TreeNodeRecursion::Stop);
+                            }
+                        }
+                        Ok(TreeNodeRecursion::Continue)
+                    })?;
+
+                    if already_optimized {
+                        return Ok(TreeNodeRecursion::Stop);
+                    }
+                }
+            }
+
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+
+        Ok(already_optimized)
+    }
+}
+
+impl OptimizerRule for ExtensionSandwichOptimizerRule {
+    fn name(&self) -> &str {
+        "extension_sandwich"
+    }
+
+    fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>> {
+        if Self::rule_already_applied(&plan)? {
+            return Ok(Transformed::no(plan));
+        }
+
+        // Wrap the input if needed
+        let maybe_wrapped_input = Self::apply_wrap(plan)?;
+
+        // Wrap the output if needed
+        let plan_out = match &maybe_wrapped_input.data {
+            // For a copy, we need the unwrap to occur before the COPY
+            LogicalPlan::Copy(copy_to) => {
+                let unwrapped_input =
+                    Self::apply_unwrap(Transformed::yes(copy_to.input.deref().clone()))?;
+                Transformed::yes(maybe_wrapped_input.data.with_new_exprs(
+                    maybe_wrapped_input.data.expressions(),
+                    vec![unwrapped_input.data],
+                )?)
+            }
+            // For everything else, we just add the unwrap projection at the end of the plan
+            _ => Self::apply_unwrap(maybe_wrapped_input)?,
+        };
+
+        Ok(plan_out)
+    }
+}
+
+/// Possibly project LogicalPlan such that the outout expresses extension types as data types
+///
+/// This is a "lazy" version of wrap_arrow_batch() that appends a projection node
+/// after scanning a data source (if any extension fields exist in the projected schema).
+pub fn wrap_logical_plan(plan: &LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+    if let Some(exprs) = wrap_expressions(plan.schema())? {
+        let projection = Projection::try_new(exprs, plan.clone().into())?;
+        Ok(Transformed::yes(LogicalPlan::Projection(projection)))
+    } else {
+        Ok(Transformed::no(plan.clone()))
+    }
+}
+
+/// Possibly project a logical plan such that the result unwraps any struct-wrapped data types
+///
+/// The reverse of `wrap_table_scan()` intended for use on the output of a plan.
+/// While this function correctly sets the DFSchema output to have the correct fields metadata,
+/// this field metadata is obliterated by DataFusion internals and is not actually propagated
+/// when used as part of an optimizer rule.
+pub fn unwrap_logical_plan(plan: &LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+    if let Some((df_schema, exprs)) = unwrap_expressions(plan.schema())? {
+        let projection =
+            Projection::try_new_with_schema(exprs, plan.clone().into(), Arc::new(df_schema))?;
+        Ok(Transformed::yes(LogicalPlan::Projection(projection)))
+    } else {
+        Ok(Transformed::no(plan.clone()))
+    }
+}
+
+/// Implementation of a LogicalPlan node that preserves its input
+///
+/// This is needed to prevent the wrap and unwrap projections from optimizing into eachother
+/// by logical plan optimization.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Hash)]
+struct IdentityExtensionNode {
+    input: LogicalPlan,
+}
+
+impl UserDefinedLogicalNodeCore for IdentityExtensionNode {
+    fn name(&self) -> &str {
+        "IdentityExtensionNode"
+    }
+
+    fn inputs(&self) -> Vec<&LogicalPlan> {
+        vec![&self.input]
+    }
+
+    fn schema(&self) -> &datafusion::common::DFSchemaRef {
+        self.input.schema()
+    }
+
+    fn expressions(&self) -> Vec<Expr> {
+        vec![]
+    }
+
+    fn fmt_for_explain(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("IdentityExtensionNode::")?;
+        Ok(())
+    }
+
+    fn with_exprs_and_inputs(
+        &self,
+        exprs: Vec<Expr>,
+        inputs: Vec<LogicalPlan>,
+    ) -> Result<IdentityExtensionNode> {
+        assert_eq!(exprs.len(), 0);
+        assert_eq!(inputs.len(), 1);
+        Ok(Self {
+            input: inputs[0].clone(),
+        })
+    }
+}
+
+/// Physical planner for IdentityExtensionNode
+///
+/// Needed for the query planner to translate a LogicalPlan containing the
+/// IdentityExtensionNode into a physical plan.
+struct IdentityExtensionPlanner {}
+
+#[async_trait]
+impl ExtensionPlanner for IdentityExtensionPlanner {
+    async fn plan_extension(
+        &self,
+        _planner: &dyn PhysicalPlanner,
+        node: &dyn UserDefinedLogicalNode,
+        logical_inputs: &[&LogicalPlan],
+        physical_inputs: &[Arc<dyn ExecutionPlan>],
+        _session_state: &SessionState,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if node
+            .as_any()
+            .downcast_ref::<IdentityExtensionNode>()
+            .is_some()
+        {
+            assert_eq!(logical_inputs.len(), 1);
+            assert_eq!(physical_inputs.len(), 1);
+            Ok(Some(Arc::new(IdentityExec {
+                input: physical_inputs[0].clone(),
+            })))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+/// QueryPlanner that can translate the IdentityExtensionNode into a physical plan
+///
+/// The SessionState only allows one planner, so this also keeps track of other
+/// extension planners if needed to dispatch them to the appropriate ExtensionPlanner.
+struct IdentityExtensionQueryPlanner {
+    other_extension_planners: Vec<Arc<dyn ExtensionPlanner + Send + Sync>>,
+}
+
+impl Debug for IdentityExtensionQueryPlanner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IdentityExtensionQueryPlanner")
+            .field(
+                "other_extension_planners",
+                &self.other_extension_planners.len(),
+            )
+            .finish()
+    }
+}
+
+#[async_trait]
+impl QueryPlanner for IdentityExtensionQueryPlanner {
+    async fn create_physical_plan(
+        &self,
+        logical_plan: &LogicalPlan,
+        session_state: &SessionState,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let mut extension_planners = Vec::with_capacity(self.other_extension_planners.len() + 1);
+        for planner in &self.other_extension_planners {
+            extension_planners.push(planner.clone());
+        }
+        extension_planners.push(Arc::new(IdentityExtensionPlanner {}));
+
+        let physical_planner = DefaultPhysicalPlanner::with_extension_planners(extension_planners);
+        physical_planner
+            .create_physical_plan(logical_plan, session_state)
+            .await
+    }
+}
+
+/// Implementation of an ExecutionPlan for an identity node
+///
+/// This ExecutionPlan passes along its input and its input properties.
+struct IdentityExec {
+    input: Arc<dyn ExecutionPlan>,
+}
+
+impl Debug for IdentityExec {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "IdentityExec")
+    }
+}
+
+impl DisplayAs for IdentityExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "IdentityExec")
+    }
+}
+
+#[async_trait]
+impl ExecutionPlan for IdentityExec {
+    fn name(&self) -> &'static str {
+        Self::static_name()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        self.input.properties()
+    }
+
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        self.input.required_input_distribution()
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(IdentityExec {
+            input: children[0].clone(),
+        }))
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        self.input.execute(partition, context)
+    }
+
+    fn statistics(&self) -> Result<Statistics> {
+        self.input.statistics()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow_array::{create_array, record_batch, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema};
+    use datafusion::{execution::SessionStateBuilder, prelude::SessionContext};
+
+    use crate::extension_type::ExtensionType;
+
+    use super::*;
+
+    /// An ExtensionType for tests
+    pub fn geoarrow_wkt() -> ExtensionType {
+        ExtensionType::new("geoarrow.wkt", DataType::Utf8, None)
+    }
+
+    #[tokio::test]
+    async fn optimizer_rule_wrap_unwrap() -> Result<()> {
+        let col1 = create_array!(Utf8, ["POINT (0 1)", "POINT (2 3)"]);
+        let col2 = col1.clone();
+        let batch_no_extensions = record_batch!(("col1", Utf8, ["abc", "def"]))?;
+
+        let builder = SessionStateBuilder::new();
+        let state = add_extension_sandwich_optimizer_rule(builder, vec![]).build();
+        let ctx = SessionContext::from(state);
+
+        let results_no_extensions = ctx
+            .read_batch(batch_no_extensions.clone())?
+            .collect()
+            .await?;
+        assert_eq!(results_no_extensions.len(), 1);
+        assert_eq!(results_no_extensions[0], batch_no_extensions);
+
+        let schema = Schema::new(vec![
+            Field::new("col1", DataType::Utf8, true),
+            geoarrow_wkt().to_field("col2"),
+        ]);
+        let batch = RecordBatch::try_new(schema.into(), vec![col1, col2])?;
+        let df = ctx.read_batch(batch.clone())?;
+
+        // No optimizer rules applied yet, so we get the original schema
+        assert_eq!(*df.schema().as_arrow(), *batch.schema());
+
+        // Optimizer stuff gets applied on collect
+        let results = df.collect().await?;
+        assert_eq!(results.len(), 1);
+
+        // ..but strips extensions from the final node (OK for now)
+        let batch_without_extensions = record_batch!(
+            ("col1", Utf8, ["POINT (0 1)", "POINT (2 3)"]),
+            ("col2", Utf8, ["POINT (0 1)", "POINT (2 3)"])
+        )?;
+        assert_eq!(results[0].schema(), batch_without_extensions.schema());
+        assert_eq!(results[0], batch_without_extensions);
+
+        Ok(())
+    }
+}

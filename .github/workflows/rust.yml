@@ -1,0 +1,58 @@
+name: Rust
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.ref }}-${{ github.workflow }}-rust
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash -l -eo pipefail {0}
+
+jobs:
+  rust:
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+    name: "Rust ${{ matrix.os }}"
+    runs-on: ${{ matrix.os }}
+    env:
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use stable Rust
+        id: rust
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy
+        run: |
+          pushd rust
+          cargo clippy --workspace --all-targets --all-features -- -Dwarnings
+          popd
+      - name: Test
+        run: |
+          pushd rust
+          cargo test --workspace --all-targets --all-features
+          popd
+      - name: Doctests
+        run: |
+          pushd rust
+          cargo test --workspace --doc --all-features
+          popd
+      - name: Check docs
+        run: |
+          pushd rust
+          cargo doc --workspace --all-features
+          popd
