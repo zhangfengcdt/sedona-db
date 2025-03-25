@@ -4,6 +4,8 @@ use arrow_array::{ArrayRef, StructArray};
 use arrow_schema::{DataType, Field, Fields};
 use datafusion::common::internal_err;
 use datafusion::error::Result;
+use datafusion::scalar::ScalarValue;
+use datafusion_expr::ColumnarValue;
 
 /// Parsed representation of an Arrow extension type
 ///
@@ -29,9 +31,9 @@ use datafusion::error::Result;
 /// infrastructure.
 #[derive(Debug, PartialEq)]
 pub struct ExtensionType {
-    extension_name: String,
-    storage_type: DataType,
-    extension_metadata: Option<String>,
+    pub extension_name: String,
+    pub storage_type: DataType,
+    pub extension_metadata: Option<String>,
 }
 
 impl ExtensionType {
@@ -87,13 +89,46 @@ impl ExtensionType {
             );
         }
 
+        let array_data = array.to_data();
+        let array_nulls = array_data.nulls();
         let wrapped = StructArray::new(
             vec![self.to_field(&self.extension_name)].into(),
             vec![array],
-            None,
+            array_nulls.cloned(),
         );
 
         Ok(Arc::new(wrapped))
+    }
+
+    pub fn wrap_arg(&self, arg: &ColumnarValue) -> Result<ColumnarValue> {
+        match arg {
+            ColumnarValue::Array(array) => {
+                let array_out = self.wrap_storage(array.clone())?;
+                Ok(ColumnarValue::Array(array_out))
+            }
+            ColumnarValue::Scalar(scalar_value) => {
+                let array_in = scalar_value.to_array()?;
+                let array_out = self.wrap_storage(array_in)?;
+                let scalar_out = ScalarValue::try_from_array(&array_out, 0)?;
+                Ok(ColumnarValue::Scalar(scalar_out))
+            }
+        }
+    }
+
+    pub fn unwrap_arg(arg: &ColumnarValue) -> Result<ColumnarValue> {
+        match arg {
+            ColumnarValue::Array(array) => {
+                let struct_array = StructArray::from(array.to_data());
+                Ok(ColumnarValue::Array(struct_array.column(0).clone()))
+            }
+            ColumnarValue::Scalar(scalar_value) => {
+                let array = scalar_value.to_array()?;
+                let struct_array = StructArray::from(array.to_data());
+                let array_out = struct_array.column(0).clone();
+                let scalar_out = ScalarValue::try_from_array(&array_out, 0)?;
+                Ok(ColumnarValue::Scalar(scalar_out))
+            }
+        }
     }
 
     /// Unwrap a Field into an ExtensionType if the field represents one

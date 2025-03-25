@@ -229,18 +229,7 @@ impl ScalarUDFImpl for WrapExtensionUdf {
 
     fn invoke_batch(&self, args: &[ColumnarValue], _num_rows: usize) -> Result<ColumnarValue> {
         if let Some(extension_type) = ExtensionType::from_data_type(&args[1].data_type()) {
-            match &args[0] {
-                ColumnarValue::Array(array) => {
-                    let array_out = extension_type.wrap_storage(array.clone())?;
-                    Ok(ColumnarValue::Array(array_out))
-                }
-                ColumnarValue::Scalar(scalar_value) => {
-                    let array_in = scalar_value.to_array()?;
-                    let array_out = extension_type.wrap_storage(array_in)?;
-                    let scalar_out = ScalarValue::try_from_array(&array_out, 0)?;
-                    Ok(ColumnarValue::Scalar(scalar_out))
-                }
-            }
+            extension_type.wrap_arg(&args[0])
         } else {
             Ok(args[0].clone())
         }
@@ -282,22 +271,10 @@ impl ScalarUDFImpl for UnwrapExtensionUdf {
     }
 
     fn invoke_batch(&self, args: &[ColumnarValue], _num_rows: usize) -> Result<ColumnarValue> {
-        if ExtensionType::from_data_type(&args[0].data_type()).is_none() {
-            return Ok(args[0].clone());
-        }
-
-        match &args[0] {
-            ColumnarValue::Array(array) => {
-                let struct_array = StructArray::from(array.to_data());
-                Ok(ColumnarValue::Array(struct_array.column(0).clone()))
-            }
-            ColumnarValue::Scalar(scalar_value) => {
-                let array = scalar_value.to_array()?;
-                let struct_array = StructArray::from(array.to_data());
-                let array_out = struct_array.column(0).clone();
-                let scalar_out = ScalarValue::try_from_array(&array_out, 0)?;
-                Ok(ColumnarValue::Scalar(scalar_out))
-            }
+        if ExtensionType::from_data_type(&args[0].data_type()).is_some() {
+            ExtensionType::unwrap_arg(&args[0])
+        } else {
+            Ok(args[0].clone())
         }
     }
 }

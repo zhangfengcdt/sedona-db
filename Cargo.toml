@@ -1,5 +1,5 @@
 [workspace]
-members = [ "rust/sedona-schema" ]
+members = [ "rust/sedona-functions", "rust/sedona-schema" ]
 resolver = "2"
 
 [workspace.package]
@@ -22,7 +22,6 @@ arrow-data = { version = "53.3.0" }
 arrow-ipc = { version = "53.3.0" }
 arrow-schema = { version = "53.3.0" }
 async-trait = { version = "0.1.87" }
-parquet = { version = "53.3.0", default-features = false }
 datafusion = { version = "44.0.0", default-features = false }
 datafusion-common = { version = "44.0.0", default-features = false }
 datafusion-functions = { version = "44.0.0", default-features = false }
@@ -32,4 +31,10 @@ datafusion-expr-common = { version = "44.0.0", default-features = false }
 datafusion-execution = { version = "44.0.0", default-features = false }
 datafusion-physical-plan = { version = "44.0.0", default-features = false }
 datafusion-physical-expr = { version = "44.0.0", default-features = false }
+geo-traits = { version = "0.2.0" }
+geo-types = { version = "0.7.15" }
+geoarrow = { version = "0.3.0" }
+serde_json = { version = "1" }
 tokio = { version = "1.43" }
+wkb = { version = "0.8.0" }
+wkt = { version = "0.12.0" }

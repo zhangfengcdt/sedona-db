@@ -1,5 +1,5 @@
 [package]
-name = "sedona-schema"
+name = "sedona-functions"
 version.workspace = true
 homepage.workspace = true
 repository.workspace = true
@@ -15,5 +15,10 @@ arrow-array = { workspace = true }
 async-trait = { workspace = true }
 datafusion = { workspace = true }
 datafusion-expr = { workspace = true }
+geo-traits = { workspace = true }
+geo-types = { workspace = true }
+geoarrow = { workspace = true }
+sedona-schema = { path = "../sedona-schema" }
 tokio = { workspace = true }
-serde_json = { workspace = true }
+wkb = { workspace = true }
+wkt = { workspace = true }
