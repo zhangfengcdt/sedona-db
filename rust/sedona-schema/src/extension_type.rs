@@ -2,9 +2,9 @@ use std::{collections::HashMap, sync::Arc};
 
 use arrow_array::{ArrayRef, StructArray};
 use arrow_schema::{DataType, Field, Fields};
-use datafusion::common::internal_err;
-use datafusion::error::Result;
-use datafusion::scalar::ScalarValue;
+use datafusion_common::error::Result;
+use datafusion_common::internal_err;
+use datafusion_common::scalar::ScalarValue;
 use datafusion_expr::ColumnarValue;
 
 /// Parsed representation of an Arrow extension type
@@ -50,8 +50,8 @@ impl ExtensionType {
     ///
     /// This is how an Arrow extension type would be normally wrapped if it were a column
     /// in a RecordBatch.
-    pub fn to_field(&self, name: &str) -> Field {
-        let mut field = Field::new(name, self.storage_type.clone(), true);
+    pub fn to_field(&self, name: &str, nullable: bool) -> Field {
+        let mut field = Field::new(name, self.storage_type.clone(), nullable);
         let mut metadata = HashMap::from([(
             "ARROW:extension:name".to_string(),
             self.extension_name.clone(),
@@ -75,7 +75,7 @@ impl ExtensionType {
     /// one field whose name is the extension name and whose field metadata contains the
     /// extension name and metadata.
     pub fn to_data_type(&self) -> DataType {
-        let field = self.to_field(&self.extension_name);
+        let field = self.to_field(&self.extension_name, true);
         DataType::Struct(Fields::from(vec![field]))
     }
 
@@ -92,7 +92,7 @@ impl ExtensionType {
         let array_data = array.to_data();
         let array_nulls = array_data.nulls();
         let wrapped = StructArray::new(
-            vec![self.to_field(&self.extension_name)].into(),
+            vec![self.to_field(&self.extension_name, true)].into(),
             vec![array],
             array_nulls.cloned(),
         );
@@ -115,7 +115,7 @@ impl ExtensionType {
         }
     }
 
-    pub fn unwrap_arg(arg: &ColumnarValue) -> Result<ColumnarValue> {
+    pub fn unwrap_arg(&self, arg: &ColumnarValue) -> Result<ColumnarValue> {
         match arg {
             ColumnarValue::Array(array) => {
                 let struct_array = StructArray::from(array.to_data());
@@ -178,7 +178,7 @@ mod tests {
     fn extension_type_field() {
         let ext_type = ExtensionType::new("foofy", DataType::Binary, None);
 
-        let field = ext_type.to_field("some name");
+        let field = ext_type.to_field("some name", true);
         assert_eq!(field.name(), "some name");
         assert_eq!(*field.data_type(), DataType::Binary);
 
@@ -195,7 +195,7 @@ mod tests {
             DataType::Binary,
             Some("foofy metadata".to_string()),
         );
-        let field = ext_type.to_field("some name");
+        let field = ext_type.to_field("some name", true);
         let metadata = field.metadata();
         assert_eq!(metadata.len(), 2);
         assert!(metadata.contains_key("ARROW:extension:name"));

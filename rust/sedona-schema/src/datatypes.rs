@@ -1,11 +1,11 @@
-use datafusion::common::{internal_err, not_impl_err};
-use datafusion::error::{DataFusionError, Result};
+use datafusion_common::error::{DataFusionError, Result};
+use datafusion_common::{internal_err, not_impl_err};
 use datafusion_expr::ColumnarValue;
 use serde_json::Value;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use arrow_schema::DataType;
+use arrow_schema::{DataType, Field};
 
 use crate::extension_type::ExtensionType;
 
@@ -111,19 +111,30 @@ impl SedonaPhysicalType {
     /// This is expected to be the "wrapped" version of an extension type.
     pub fn from_data_type(data_type: &DataType) -> Result<SedonaPhysicalType> {
         match ExtensionType::from_data_type(data_type) {
-            Some(ext) => {
-                let (edges, crs) = deserialize_edges_and_crs(&ext.extension_metadata)?;
-                if ext.extension_name == "geoarrow.wkb" {
-                    physical_type_wkb(edges, crs, ext.storage_type)
-                } else {
-                    internal_err!(
-                        "Extension type not implemented: <{}>:{}",
-                        ext.extension_name,
-                        ext.storage_type
-                    )
-                }
-            }
+            Some(ext) => Self::from_extension_type(ext),
             None => Ok(Self::Arrow(data_type.clone())),
+        }
+    }
+
+    /// Given a field as it would appear in an external Schema return the appropriate SedonaPhysicalType
+    pub fn from_storage_field(field: &Field) -> Result<SedonaPhysicalType> {
+        match ExtensionType::from_field(field) {
+            Some(ext) => Self::from_extension_type(ext),
+            None => Ok(Self::Arrow(field.data_type().clone())),
+        }
+    }
+
+    /// Given an [`ExtensionType`], construct a SedonaPhysicalType
+    pub fn from_extension_type(extension: ExtensionType) -> Result<SedonaPhysicalType> {
+        let (edges, crs) = deserialize_edges_and_crs(&extension.extension_metadata)?;
+        if extension.extension_name == "geoarrow.wkb" {
+            physical_type_wkb(edges, crs, extension.storage_type)
+        } else {
+            internal_err!(
+                "Extension type not implemented: <{}>:{}",
+                extension.extension_name,
+                extension.storage_type
+            )
         }
     }
 
@@ -156,22 +167,42 @@ impl SedonaPhysicalType {
         }
     }
 
+    /// Wrap a [`ColumnarValue`] representing the storage of an [`ExtensionType`]
+    ///
+    /// This operation occurs when reading Arrow data from a datasource where
+    /// field metadata was used to construct the SedonaPhysicalType or after
+    /// a compute kernel has returned a value.
     pub fn wrap_arg(&self, arg: &ColumnarValue) -> Result<ColumnarValue> {
+        self.extension_type()
+            .map_or(Ok(arg.clone()), |extension| extension.wrap_arg(arg))
+    }
+
+    /// Unwrap a [`ColumnarValue`] into storage
+    ///
+    /// This operation occurs when exporting Arrow data into an external datasource
+    /// or before passing to a compute kernel.
+    pub fn unwrap_arg(&self, arg: &ColumnarValue) -> Result<ColumnarValue> {
+        self.extension_type()
+            .map_or(Ok(arg.clone()), |extension| extension.unwrap_arg(arg))
+    }
+
+    /// Construct a [`Field`] as it would appear in an external [`RecordBatch`]
+    pub fn to_storage_field(&self, name: &str, nullable: bool) -> Result<Field> {
+        self.extension_type().map_or(
+            Ok(Field::new(name, self.data_type(), nullable)),
+            |extension| Ok(extension.to_field(name, nullable)),
+        )
+    }
+
+    /// Construct the [`ExtensionType`] that represents this type, if any
+    pub fn extension_type(&self) -> Option<ExtensionType> {
         match self {
-            SedonaPhysicalType::Arrow(_) => Ok(arg.clone()),
-            SedonaPhysicalType::Wkb(edges, crs) => ExtensionType::new(
+            SedonaPhysicalType::Wkb(edges, crs) => Some(ExtensionType::new(
                 "geoarrow.wkb",
                 DataType::Binary,
                 Some(serialize_edges_and_crs(edges, crs)),
-            )
-            .wrap_arg(arg),
-        }
-    }
-
-    pub fn unwrap_arg(&self, arg: &ColumnarValue) -> Result<ColumnarValue> {
-        match self {
-            SedonaPhysicalType::Arrow(_) => Ok(arg.clone()),
-            SedonaPhysicalType::Wkb(_, _) => ExtensionType::unwrap_arg(arg),
+            )),
+            _ => None,
         }
     }
 }

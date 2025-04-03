@@ -3,11 +3,9 @@ use std::sync::Arc;
 use std::{any::Any, fmt::Debug};
 
 use arrow_schema::DataType;
-use datafusion::common::not_impl_err;
-use datafusion::error::Result;
-use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
-};
+use datafusion_common::error::Result;
+use datafusion_common::not_impl_err;
+use datafusion_expr::{ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility};
 
 use crate::datatypes::SedonaPhysicalType;
 
@@ -210,10 +208,6 @@ impl SedonaScalarUDF {
         }
     }
 
-    pub fn to_udf(self) -> ScalarUDF {
-        ScalarUDF::new_from_impl(self)
-    }
-
     fn physical_types(args: &[DataType]) -> Result<Vec<SedonaPhysicalType>> {
         args.iter()
             .map(SedonaPhysicalType::from_data_type)
@@ -280,7 +274,7 @@ impl ScalarUDFImpl for SedonaScalarUDF {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::scalar::ScalarValue;
+    use datafusion_common::scalar::ScalarValue;
 
     use crate::datatypes::WKB_GEOMETRY;
 

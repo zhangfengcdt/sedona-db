@@ -1213,9 +1213,9 @@ checksum = "8bf7cc16383c4b8d58b9905a8509f02926ce3058053c056376248d958c9df1e8"
 
 [[package]]
 name = "foldhash"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0d2fde1f7b3d48b8395d5f2de76c18a528bd6a9cdde438df747bfcba3e05d6f"
+checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
 name = "form_urlencoded"
@@ -1356,9 +1356,9 @@ dependencies = [
 
 [[package]]
 name = "geo-types"
-version = "0.7.15"
+version = "0.7.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3bd1157f0f936bf0cd68dec91e8f7c311afe60295574d62b70d4861a1bfdf2d9"
+checksum = "62ddb1950450d67efee2bbc5e429c68d052a822de3aad010d28b351fbb705224"
 dependencies = [
  "approx",
  "num-traits",
@@ -2320,20 +2320,34 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
-name = "sedona-functions"
+name = "sedona"
 version = "0.0.1"
 dependencies = [
  "arrow-array 53.3.0",
- "arrow-ipc 53.3.0",
  "arrow-schema 53.3.0",
  "async-trait",
  "datafusion",
  "datafusion-expr",
+ "futures",
  "geo-traits",
  "geo-types",
  "geoarrow",
+ "sedona-functions",
  "sedona-schema",
  "tokio",
+]
+
+[[package]]
+name = "sedona-functions"
+version = "0.0.1"
+dependencies = [
+ "arrow-array 53.3.0",
+ "arrow-schema 53.3.0",
+ "datafusion-common",
+ "datafusion-expr",
+ "geo-traits",
+ "geo-types",
+ "sedona-schema",
  "wkb",
  "wkt",
 ]
@@ -2343,13 +2357,10 @@ name = "sedona-schema"
 version = "0.0.1"
 dependencies = [
  "arrow-array 53.3.0",
- "arrow-ipc 53.3.0",
  "arrow-schema 53.3.0",
- "async-trait",
- "datafusion",
+ "datafusion-common",
  "datafusion-expr",
  "serde_json",
- "tokio",
 ]
 
 [[package]]

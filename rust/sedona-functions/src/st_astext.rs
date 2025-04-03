@@ -2,10 +2,8 @@ use std::{sync::Arc, vec};
 
 use arrow_array::builder::StringBuilder;
 use arrow_schema::DataType;
-use datafusion::{
-    common::cast::as_binary_array,
-    error::{DataFusionError, Result},
-};
+use datafusion_common::cast::as_binary_array;
+use datafusion_common::error::{DataFusionError, Result};
 use datafusion_expr::{
     scalar_doc_sections::DOC_SECTION_OTHER, ColumnarValue, Documentation, Volatility,
 };
@@ -21,7 +19,7 @@ use wkt::to_wkt::write_geometry;
 /// An implementation of WKT writing using GeoRust's wkt crate.
 pub fn st_astext_udf() -> SedonaScalarUDF {
     SedonaScalarUDF::new(
-        "ST_AsText",
+        "st_astext",
         vec![Arc::new(STAsText {})],
         Volatility::Immutable,
         Some(st_astext_doc()),
@@ -98,7 +96,8 @@ impl SedonaScalarKernel for STAsText {
 #[cfg(test)]
 mod tests {
     use arrow_array::create_array;
-    use datafusion::scalar::ScalarValue;
+    use datafusion_common::scalar::ScalarValue;
+    use datafusion_expr::ScalarUDF;
     use sedona_schema::datatypes::WKB_GEOMETRY;
 
     use crate::st_point::st_point_udf;
@@ -107,7 +106,7 @@ mod tests {
 
     #[test]
     fn udf() -> Result<()> {
-        let st_point = st_point_udf().to_udf();
+        let st_point: ScalarUDF = st_point_udf().into();
         let wkb_point = st_point.invoke_batch(
             &[
                 ScalarValue::Float64(Some(1.0)).into(),
@@ -116,8 +115,8 @@ mod tests {
             1,
         )?;
 
-        let udf = st_astext_udf().to_udf();
-        assert_eq!(udf.name(), "ST_AsText");
+        let udf: ScalarUDF = st_astext_udf().into();
+        assert_eq!(udf.name(), "st_astext");
         let out = udf.invoke_batch(&[wkb_point], 1)?;
 
         assert_eq!(*out.to_array(1)?, *create_array!(Utf8, ["POINT(1 2)"]));
@@ -127,7 +126,7 @@ mod tests {
 
     #[test]
     fn udf_nulls() -> Result<()> {
-        let udf = st_astext_udf().to_udf();
+        let udf: ScalarUDF = st_astext_udf().into();
         let null_wkb = WKB_GEOMETRY.wrap_arg(&ScalarValue::Binary(None).into())?;
 
         let out = udf.invoke_batch(&[null_wkb], 1)?;
@@ -141,7 +140,7 @@ mod tests {
 
     #[test]
     fn udf_invalid_wkb() -> Result<()> {
-        let udf = st_astext_udf().to_udf();
+        let udf: ScalarUDF = st_astext_udf().into();
         let invalid_wkb = WKB_GEOMETRY.wrap_arg(&ScalarValue::Binary(Some(vec![])).into())?;
 
         let err = udf.invoke_batch(&[invalid_wkb], 1).unwrap_err();

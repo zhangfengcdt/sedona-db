@@ -2,11 +2,9 @@ use std::{str::FromStr, sync::Arc, vec};
 
 use arrow_array::builder::BinaryBuilder;
 use arrow_schema::DataType;
-use datafusion::{
-    common::cast::as_string_array,
-    error::{DataFusionError, Result},
-    scalar::ScalarValue,
-};
+use datafusion_common::cast::as_string_array;
+use datafusion_common::error::{DataFusionError, Result};
+use datafusion_common::scalar::ScalarValue;
 use datafusion_expr::{
     scalar_doc_sections::DOC_SECTION_OTHER, ColumnarValue, Documentation, Volatility,
 };
@@ -23,7 +21,7 @@ use wkt::Wkt;
 /// See [`st_geogfromwkt_udf`] for the corresponding geography function.
 pub fn st_geomfromwkt_udf() -> SedonaScalarUDF {
     SedonaScalarUDF::new(
-        "ST_GeomFromWKT",
+        "st_geomfromwkt",
         vec![Arc::new(STGeoFromWKT {
             out_type: WKB_GEOMETRY,
         })],
@@ -38,7 +36,7 @@ pub fn st_geomfromwkt_udf() -> SedonaScalarUDF {
 /// See [`st_geomfromwkt_udf`] for the corresponding geometry function.
 pub fn st_geogfromwkt_udf() -> SedonaScalarUDF {
     SedonaScalarUDF::new(
-        "ST_GeogFromWKT",
+        "st_geogfromwkt",
         vec![Arc::new(STGeoFromWKT {
             out_type: WKB_GEOGRAPHY,
         })],
@@ -134,7 +132,8 @@ fn invoke_scalar(wkt_bytes: &str, mut item_out: &mut Vec<u8>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use arrow_array::create_array;
-    use datafusion::scalar::ScalarValue;
+    use datafusion_common::scalar::ScalarValue;
+    use datafusion_expr::ScalarUDF;
     use SedonaPhysicalType;
 
     use crate::st_point::st_point_udf;
@@ -143,13 +142,13 @@ mod tests {
 
     #[test]
     fn udf_array() -> Result<()> {
-        let udf = st_geomfromwkt_udf().to_udf();
-        assert_eq!(udf.name(), "ST_GeomFromWKT");
+        let udf: ScalarUDF = st_geomfromwkt_udf().into();
+        assert_eq!(udf.name(), "st_geomfromwkt");
 
         let n = 3;
         let xs = create_array!(Float64, [Some(1.0), Some(2.0), None]);
         let ys = create_array!(Float64, [5.0, 6.0, 7.0]);
-        let st_point = st_point_udf().to_udf();
+        let st_point: ScalarUDF = st_point_udf().into();
         let array_from_point =
             st_point.invoke_batch(&[ColumnarValue::Array(xs), ColumnarValue::Array(ys)], n)?;
 
@@ -162,9 +161,9 @@ mod tests {
 
     #[test]
     fn udf_scalar() -> Result<()> {
-        let udf = st_geomfromwkt_udf().to_udf();
+        let udf: ScalarUDF = st_geomfromwkt_udf().into();
 
-        let st_point = st_point_udf().to_udf();
+        let st_point: ScalarUDF = st_point_udf().into();
         let wkb_point = st_point.invoke_batch(
             &[
                 ScalarValue::Float64(Some(1.0)).into(),
@@ -195,7 +194,7 @@ mod tests {
 
     #[test]
     fn udf_scalar_nulls() -> Result<()> {
-        let udf = st_geomfromwkt_udf().to_udf();
+        let udf: ScalarUDF = st_geomfromwkt_udf().into();
 
         let out = udf.invoke_batch(&[ScalarValue::Utf8(None).into()], 1)?;
         if let ColumnarValue::Scalar(ScalarValue::Binary(out_binary)) =
@@ -211,7 +210,7 @@ mod tests {
 
     #[test]
     fn udf_invalid_wkt() -> Result<()> {
-        let udf = st_geomfromwkt_udf().to_udf();
+        let udf: ScalarUDF = st_geomfromwkt_udf().into();
 
         let err = udf
             .invoke_batch(
@@ -227,8 +226,8 @@ mod tests {
 
     #[test]
     fn udf_geog() -> Result<()> {
-        let udf = st_geogfromwkt_udf().to_udf();
-        assert_eq!(udf.name(), "ST_GeogFromWKT");
+        let udf: ScalarUDF = st_geogfromwkt_udf().into();
+        assert_eq!(udf.name(), "st_geogfromwkt");
 
         let out = udf.invoke_batch(
             &[ScalarValue::Utf8(Some("POINT (1 2)".to_string())).into()],

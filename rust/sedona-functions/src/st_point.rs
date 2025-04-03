@@ -2,7 +2,9 @@ use std::{iter::zip, sync::Arc, vec};
 
 use arrow_array::builder::BinaryBuilder;
 use arrow_schema::DataType;
-use datafusion::{common::cast::as_float64_array, error::Result, scalar::ScalarValue};
+use datafusion_common::cast::as_float64_array;
+use datafusion_common::error::Result;
+use datafusion_common::scalar::ScalarValue;
 use datafusion_expr::{
     scalar_doc_sections::DOC_SECTION_OTHER, ColumnarValue, Documentation, Volatility,
 };
@@ -17,7 +19,7 @@ use sedona_schema::{
 /// See [`st_geogpoint_udf`] for the corresponding geography constructor.
 pub fn st_point_udf() -> SedonaScalarUDF {
     SedonaScalarUDF::new(
-        "ST_Point",
+        "st_point",
         vec![Arc::new(STGeoFromPoint {
             out_type: WKB_GEOMETRY,
         })],
@@ -134,7 +136,8 @@ fn populate_wkb_item(item: &mut [u8], x: f64, y: f64) {
 mod tests {
     use arrow_array::create_array;
     use arrow_schema::DataType;
-    use datafusion::{common::cast::as_binary_array, scalar::ScalarValue};
+    use datafusion_common::cast::as_binary_array;
+    use datafusion_expr::ScalarUDF;
     use geo_traits::{to_geo::ToGeoGeometry, Dimensions, GeometryTrait};
     use geo_types::Point;
     use sedona_schema::datatypes::SedonaPhysicalType;
@@ -143,7 +146,7 @@ mod tests {
 
     #[test]
     fn udf_signature() -> Result<()> {
-        let udf = st_point_udf().to_udf();
+        let udf: ScalarUDF = st_point_udf().into();
 
         // All numeric combinations should work
         assert_eq!(
@@ -161,13 +164,13 @@ mod tests {
             udf.return_type(&[DataType::Utf8, DataType::Float64])
                 .unwrap_err()
                 .message(),
-            "ST_Point([Arrow(Utf8), Arrow(Float64)]): No kernel matching arguments"
+            "st_point([Arrow(Utf8), Arrow(Float64)]): No kernel matching arguments"
         );
 
         // Wrong number of args
         assert_eq!(
             udf.return_type(&[]).unwrap_err().message(),
-            "ST_Point([]): No kernel matching arguments"
+            "st_point([]): No kernel matching arguments"
         );
 
         Ok(())
@@ -175,8 +178,8 @@ mod tests {
 
     #[test]
     fn udf_array() -> Result<()> {
-        let udf = st_point_udf().to_udf();
-        assert_eq!(udf.name(), "ST_Point");
+        let udf: ScalarUDF = st_point_udf().into();
+        assert_eq!(udf.name(), "st_point");
 
         let n = 3;
         let xs = create_array!(Float64, [Some(1.0), Some(2.0), None]);
@@ -216,7 +219,7 @@ mod tests {
 
     #[test]
     fn udf_scalar() -> Result<()> {
-        let udf = st_point_udf().to_udf();
+        let udf: ScalarUDF = st_point_udf().into();
 
         let out = udf.invoke_batch(
             &[
@@ -246,7 +249,7 @@ mod tests {
 
     #[test]
     fn udf_scalar_null() -> Result<()> {
-        let udf = st_point_udf().to_udf();
+        let udf: ScalarUDF = st_point_udf().into();
 
         let out = udf.invoke_batch(
             &[
@@ -271,7 +274,7 @@ mod tests {
 
     #[test]
     fn udf_geog() -> Result<()> {
-        let udf = st_geogpoint_udf().to_udf();
+        let udf: ScalarUDF = st_geogpoint_udf().into();
         assert_eq!(udf.name(), "ST_GeogPoint");
 
         let out = udf.invoke_batch(

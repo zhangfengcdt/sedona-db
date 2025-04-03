@@ -1,5 +1,5 @@
 [package]
-name = "sedona-functions"
+name = "sedona"
 version.workspace = true
 homepage.workspace = true
 repository.workspace = true
@@ -11,10 +11,13 @@ rust-version.workspace = true
 [dependencies]
 arrow-schema = { workspace = true }
 arrow-array = { workspace = true }
-datafusion-common = { workspace = true }
+async-trait = { workspace = true }
+datafusion = { workspace = true }
 datafusion-expr = { workspace = true }
+futures = { workspace = true }
 geo-traits = { workspace = true }
 geo-types = { workspace = true }
+geoarrow = { workspace = true }
+sedona-functions = { path = "../sedona-functions" }
 sedona-schema = { path = "../sedona-schema" }
-wkb = { workspace = true }
-wkt = { workspace = true }
+tokio = { workspace = true }
