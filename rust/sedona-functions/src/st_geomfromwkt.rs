@@ -1,7 +1,6 @@
 use std::{str::FromStr, sync::Arc, vec};
 
 use arrow_array::builder::BinaryBuilder;
-use arrow_schema::DataType;
 use datafusion_common::cast::as_string_array;
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common::scalar::ScalarValue;
@@ -69,10 +68,7 @@ struct STGeoFromWKT {
 
 impl SedonaScalarKernel for STGeoFromWKT {
     fn return_type(&self, args: &[SedonaPhysicalType]) -> Result<Option<SedonaPhysicalType>> {
-        let matcher = ArgMatcher::new(
-            vec![ArgMatcher::is_arrow(DataType::Utf8)],
-            self.out_type.clone(),
-        );
+        let matcher = ArgMatcher::new(vec![ArgMatcher::is_string()], self.out_type.clone());
         matcher.match_args(args)
     }
 

@@ -105,6 +105,16 @@ impl ArgMatcher {
     pub fn is_numeric() -> Arc<dyn TypeMatcher + Send + Sync> {
         Arc::new(IsNumeric {})
     }
+
+    /// Matches any string argument
+    pub fn is_string() -> Arc<dyn TypeMatcher + Send + Sync> {
+        Arc::new(IsString {})
+    }
+
+    /// Matches any binary argument
+    pub fn is_binary() -> Arc<dyn TypeMatcher + Send + Sync> {
+        Arc::new(IsBinary {})
+    }
 }
 
 pub trait TypeMatcher: Debug {
@@ -138,6 +148,43 @@ impl TypeMatcher for IsNumeric {
     fn match_type(&self, arg: &SedonaPhysicalType) -> bool {
         match arg {
             SedonaPhysicalType::Arrow(data_type) => data_type.is_numeric(),
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct IsString {}
+
+impl TypeMatcher for IsString {
+    fn match_type(&self, arg: &SedonaPhysicalType) -> bool {
+        match arg {
+            SedonaPhysicalType::Arrow(data_type) => {
+                matches!(
+                    data_type,
+                    DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
+                )
+            }
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct IsBinary {}
+
+impl TypeMatcher for IsBinary {
+    fn match_type(&self, arg: &SedonaPhysicalType) -> bool {
+        match arg {
+            SedonaPhysicalType::Arrow(data_type) => {
+                matches!(
+                    data_type,
+                    DataType::Binary
+                        | DataType::BinaryView
+                        | DataType::LargeBinary
+                        | DataType::FixedSizeBinary(_)
+                )
+            }
             _ => false,
         }
     }
@@ -276,9 +323,32 @@ impl ScalarUDFImpl for SedonaScalarUDF {
 mod tests {
     use datafusion_common::scalar::ScalarValue;
 
-    use crate::datatypes::WKB_GEOMETRY;
+    use crate::datatypes::{WKB_GEOGRAPHY, WKB_GEOMETRY};
 
     use super::*;
+
+    #[test]
+    fn matchers() {
+        assert!(ArgMatcher::is_arrow(DataType::Null)
+            .match_type(&SedonaPhysicalType::Arrow(DataType::Null)));
+
+        assert!(ArgMatcher::is_geometry_or_geography().match_type(&WKB_GEOMETRY));
+        assert!(ArgMatcher::is_geometry_or_geography().match_type(&WKB_GEOGRAPHY));
+        assert!(ArgMatcher::is_numeric().match_type(&SedonaPhysicalType::Arrow(DataType::Int32)));
+        assert!(ArgMatcher::is_numeric().match_type(&SedonaPhysicalType::Arrow(DataType::Float64)));
+        assert!(ArgMatcher::is_string().match_type(&SedonaPhysicalType::Arrow(DataType::Utf8)));
+        assert!(ArgMatcher::is_string().match_type(&SedonaPhysicalType::Arrow(DataType::Utf8View)));
+        assert!(ArgMatcher::is_string().match_type(&SedonaPhysicalType::Arrow(DataType::LargeUtf8)));
+        assert!(ArgMatcher::is_binary().match_type(&SedonaPhysicalType::Arrow(DataType::Binary)));
+        assert!(
+            ArgMatcher::is_binary().match_type(&SedonaPhysicalType::Arrow(DataType::BinaryView))
+        );
+        assert!(
+            ArgMatcher::is_binary().match_type(&SedonaPhysicalType::Arrow(DataType::LargeBinary))
+        );
+        assert!(ArgMatcher::is_binary()
+            .match_type(&SedonaPhysicalType::Arrow(DataType::FixedSizeBinary(1))));
+    }
 
     #[test]
     fn udf_empty() -> Result<()> {
