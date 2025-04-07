@@ -1,5 +1,10 @@
 [workspace]
-members = [ "rust/sedona-functions", "rust/sedona-schema", "rust/sedona" ]
+members = [
+    "rust/sedona-functions",
+    "rust/sedona-schema",
+    "rust/sedona",
+    "sedona-cli"
+]
 resolver = "2"
 
 [workspace.package]
