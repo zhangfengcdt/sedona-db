@@ -4,8 +4,8 @@
 # we are using.
 mkdir tmp
 
-curl -L https://github.com/apache/datafusion/archive/refs/tags/44.0.0.zip -o tmp/datafusion.zip
+curl -L https://github.com/apache/datafusion/archive/refs/tags/46.0.1.zip -o tmp/datafusion.zip
 unzip -d tmp tmp/datafusion.zip
 
-cp tmp/datafusion-44.0.0/datafusion-cli/src/*.rs src/
-cp tmp/datafusion-44.0.0/datafusion-cli/Cargo.toml .
+cp tmp/datafusion-46.0.1/datafusion-cli/src/*.rs src/
+cp tmp/datafusion-46.0.1/datafusion-cli/Cargo.toml .

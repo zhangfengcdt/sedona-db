@@ -9,30 +9,43 @@ resolver = "2"
 
 [workspace.package]
 version = "0.0.1"
+authors = ["Apache Sedona <dev@sedona.apache.org>"]
+license = "Apache-2.0"
 homepage = "https://github.com/wherobots/wherobots-vectorized-compute"
 repository = "https://github.com/wherobots/wherobots-vectorized-compute"
-description = "Apache DataFusion Comet: High performance accelerator for Apache Spark"
+description = "Apache Sedona for Rust"
 readme = "README.md"
 edition = "2021"
 
 # Same rust-version, arrow, and datafusion dependencies as datafusion-comet
 # https://github.com/apache/datafusion-comet/blob/main/native/Cargo.toml
-rust-version = "1.79"
+rust-version = "1.82"
 
 [workspace.dependencies]
-arrow = { version = "53.3.0", features = ["prettyprint", "ffi", "chrono-tz"] }
-arrow-array = { version = "53.3.0" }
-arrow-data = { version = "53.3.0" }
-arrow-schema = { version = "53.3.0" }
+arrow = { version = "54.3.0", features = ["prettyprint", "ffi", "chrono-tz"] }
+arrow-array = { version = "54.3.0" }
+arrow-data = { version = "54.3.0" }
+arrow-schema = { version = "54.3.0" }
 async-trait = { version = "0.1.87" }
-datafusion = { version = "44.0.0", default-features = false }
-datafusion-common = { version = "44.0.0", default-features = false }
-datafusion-expr = { version = "44.0.0", default-features = false }
+ctor = "0.2.9"
+datafusion = { version = "46.0.1", default-features = false }
+datafusion-common = { version = "46.0.1", default-features = false }
+datafusion-expr = { version = "46.0.1", default-features = false }
+env_logger = "0.11"
 futures = { version = "0.3" }
 geo-traits = { version = "0.2.0" }
 geo-types = { version = "0.7.15" }
-geoarrow = { version = "0.3.0" }
+object_store = { version = "0.11.0", default-features = false }
+parking_lot = "0.12"
+parquet = { version = "54.2.1", default-features = false, features = [
+    "arrow",
+    "async",
+    "object_store",
+] }
+regex = "1.8"
+rstest = "0.24.0"
 serde_json = { version = "1" }
 tokio = { version = "1.43" }
+url = "2.5.4"
 wkb = { version = "0.8.0" }
 wkt = { version = "0.12.0" }
