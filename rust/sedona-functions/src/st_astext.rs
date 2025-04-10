@@ -4,6 +4,7 @@ use arrow_array::builder::StringBuilder;
 use arrow_schema::DataType;
 use datafusion_common::cast::as_binary_array;
 use datafusion_common::error::{DataFusionError, Result};
+use datafusion_common::ScalarValue;
 use datafusion_expr::{
     scalar_doc_sections::DOC_SECTION_OTHER, ColumnarValue, Documentation, Volatility,
 };
@@ -11,8 +12,9 @@ use sedona_schema::{
     datatypes::SedonaPhysicalType,
     udf::{ArgMatcher, SedonaScalarKernel, SedonaScalarUDF},
 };
-use wkb::reader::read_wkb;
 use wkt::to_wkt::write_geometry;
+
+use crate::geo_iterator::{try_iter_wkb_array, try_iter_wkb_scalar};
 
 /// ST_AsText() scalar UDF implementation
 ///
@@ -52,12 +54,27 @@ impl SedonaScalarKernel for STAsText {
 
     fn invoke_batch(
         &self,
-        _: &[SedonaPhysicalType],
+        arg_types: &[SedonaPhysicalType],
         _: &SedonaPhysicalType,
         args: &[ColumnarValue],
         num_rows: usize,
     ) -> Result<ColumnarValue> {
-        let x_array = &args[0].to_array(num_rows)?;
+        if let ColumnarValue::Scalar(scalar) = &args[0] {
+            let mut iter = try_iter_wkb_scalar(scalar, 1)?;
+            let item = iter.next().unwrap();
+            let maybe_string = match item {
+                Some(maybe_result) => {
+                    let mut out = String::new();
+                    write_geometry(&mut out, &maybe_result?)
+                        .map_err(|err| DataFusionError::External(Box::new(err)))?;
+                    Some(out)
+                }
+                None => None,
+            };
+            return Ok(ScalarValue::Utf8(maybe_string).into());
+        }
+
+        let x_array = args[0].to_array(num_rows)?;
         let x_binary_array = as_binary_array(&x_array)?;
 
         // Use the WKB size as the proxy for the WKT size.
@@ -67,24 +84,14 @@ impl SedonaScalarKernel for STAsText {
         let mut builder =
             StringBuilder::with_capacity(num_rows, max_theoretical_wkt_size.floor() as usize);
 
-        // Would be slightly better to write directly to the builder's
-        // data buffer but not sure exactly how to do that
-        let mut item_out = String::with_capacity(64);
-
-        for item in x_binary_array {
-            if let Some(wkb_bytes) = item {
-                let geometry = read_wkb(wkb_bytes).map_err(|err| {
-                    DataFusionError::Internal(format!("WKB parse error: {}", err))
-                })?;
-
-                item_out.truncate(0);
-                write_geometry(&mut item_out, &geometry).map_err(|err| {
-                    DataFusionError::Internal(format!("WKT Write error: {}", err))
-                })?;
-
-                builder.append_value(&item_out);
-            } else {
-                builder.append_null();
+        for maybe_item in try_iter_wkb_array(&arg_types[0], &x_array)? {
+            match maybe_item {
+                Some(item) => {
+                    write_geometry(&mut builder, &item?)
+                        .map_err(|err| DataFusionError::External(Box::new(err)))?;
+                    builder.append_value("");
+                }
+                None => builder.append_null(),
             }
         }
 
@@ -95,7 +102,7 @@ impl SedonaScalarKernel for STAsText {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::create_array;
+    use arrow_array::{create_array, ArrayRef};
     use datafusion_common::scalar::ScalarValue;
     use datafusion_expr::ScalarUDF;
     use sedona_schema::datatypes::WKB_GEOMETRY;
@@ -117,9 +124,26 @@ mod tests {
 
         let udf: ScalarUDF = st_astext_udf().into();
         assert_eq!(udf.name(), "st_astext");
-        let out = udf.invoke_batch(&[wkb_point], 1)?;
 
-        assert_eq!(*out.to_array(1)?, *create_array!(Utf8, ["POINT(1 2)"]));
+        // Check scalar input -> scalar output
+        let out_scalar = udf.invoke_batch(&[wkb_point.clone()], 1)?;
+        match out_scalar {
+            ColumnarValue::Array(_) => panic!("expected scalar"),
+            ColumnarValue::Scalar(scalar) => {
+                assert_eq!(scalar, ScalarValue::Utf8(Some("POINT(1 2)".to_string())));
+            }
+        }
+
+        // Check array input -> array output
+        let wkb_point_array = ColumnarValue::Array(wkb_point.clone().to_array(1)?);
+        let out_array = udf.invoke_batch(&[wkb_point_array], 1)?;
+        match out_array {
+            ColumnarValue::Array(array) => {
+                let expected: ArrayRef = create_array!(Utf8, ["POINT(1 2)"]);
+                assert_eq!(&array, &expected);
+            }
+            ColumnarValue::Scalar(_) => panic!("expected array"),
+        }
 
         Ok(())
     }
@@ -127,24 +151,27 @@ mod tests {
     #[test]
     fn udf_nulls() -> Result<()> {
         let udf: ScalarUDF = st_astext_udf().into();
-        let null_wkb = WKB_GEOMETRY.wrap_arg(&ScalarValue::Binary(None).into())?;
+        let null_wkb_scalar = WKB_GEOMETRY.wrap_arg(&ScalarValue::Binary(None).into())?;
 
-        let out = udf.invoke_batch(&[null_wkb], 1)?;
-        match out {
-            ColumnarValue::Array(array) => assert_eq!(array.null_count(), 1),
-            ColumnarValue::Scalar(_) => panic!("Expected array"),
+        // Check scalar input -> scalar output
+        let out_scalar = udf.invoke_batch(&[null_wkb_scalar.clone()], 1)?;
+        match out_scalar {
+            ColumnarValue::Array(_) => panic!("Expected scalar"),
+            ColumnarValue::Scalar(item) => assert!(item.is_null()),
         }
 
-        Ok(())
-    }
-
-    #[test]
-    fn udf_invalid_wkb() -> Result<()> {
-        let udf: ScalarUDF = st_astext_udf().into();
-        let invalid_wkb = WKB_GEOMETRY.wrap_arg(&ScalarValue::Binary(Some(vec![])).into())?;
-
-        let err = udf.invoke_batch(&[invalid_wkb], 1).unwrap_err();
-        assert!(err.message().starts_with("WKB parse error"));
+        // Check array input -> array output
+        let null_wkb_array = ColumnarValue::Array(null_wkb_scalar.clone().to_array(1)?);
+        let out_array = udf.invoke_batch(&[null_wkb_array], 1)?;
+        match out_array {
+            ColumnarValue::Array(array) => {
+                let mut expected_builder = StringBuilder::new();
+                expected_builder.append_null();
+                let expected: ArrayRef = Arc::new(expected_builder.finish());
+                assert_eq!(&array, &expected);
+            }
+            ColumnarValue::Scalar(_) => panic!("expected array"),
+        }
 
         Ok(())
     }

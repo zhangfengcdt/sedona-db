@@ -12,7 +12,7 @@ use sedona_schema::{
 
 /// ST_AsBinary() scalar UDF implementation
 ///
-/// An implementation of WKT writing using GeoRust's wkt crate.
+/// An implementation of WKB writing using GeoRust's wkt crate.
 pub fn st_asbinary_udf() -> SedonaScalarUDF {
     SedonaScalarUDF::new(
         "st_asbinary",
@@ -53,6 +53,7 @@ impl SedonaScalarKernel for STAsBinary {
         _: usize,
     ) -> Result<ColumnarValue> {
         // This currently works because all current geometry/geography arrays internally
+        // use WKB.
         Ok(args[0].clone())
     }
 }

@@ -2,8 +2,7 @@ use std::{sync::Arc, vec};
 
 use arrow_schema::DataType;
 use datafusion_common::cast::as_binary_array;
-use datafusion_common::error::{DataFusionError, Result};
-use datafusion_common::ScalarValue;
+use datafusion_common::error::Result;
 use datafusion_expr::{
     scalar_doc_sections::DOC_SECTION_OTHER, ColumnarValue, Documentation, Volatility,
 };
@@ -12,7 +11,8 @@ use sedona_schema::{
     datatypes::SedonaPhysicalType,
     udf::{ArgMatcher, SedonaScalarKernel, SedonaScalarUDF},
 };
-use wkb::reader::read_wkb;
+
+use crate::geo_iterator::{iter_wkb_array, try_iter_wkb_scalar};
 
 /// ST_GeomFromWKB() scalar UDF implementation
 ///
@@ -82,35 +82,25 @@ impl SedonaScalarKernel for STGeomFromWKB {
         num_rows: usize,
     ) -> Result<ColumnarValue> {
         if let ColumnarValue::Scalar(scalar) = &args[0] {
-            if let ScalarValue::Binary(maybe_wkb) = scalar.cast_to(&DataType::Binary)? {
-                if let Some(wkb_bytes) = maybe_wkb {
-                    if self.validate {
-                        validate_wkb(&wkb_bytes)?
-                    }
+            if self.validate {
+                for item in try_iter_wkb_scalar(scalar, 1)?.flatten() {
+                    item?;
                 }
-
-                return Ok(args[0].clone());
             }
+
+            return args[0].cast_to(&DataType::Binary, None);
         }
 
         let x_array = args[0].to_array(num_rows)?;
-        let x_binary_array = as_binary_array(&x_array)?;
-
         if self.validate {
-            for wkb_bytes in x_binary_array.into_iter().flatten() {
-                validate_wkb(wkb_bytes)?;
+            let x_binary_array = as_binary_array(&x_array)?;
+            for item in iter_wkb_array(x_binary_array).flatten() {
+                item?;
             }
         }
 
-        Ok(ColumnarValue::Array(Arc::new(x_binary_array.clone())))
+        Ok(ColumnarValue::Array(x_array))
     }
-}
-
-fn validate_wkb(wkb_bytes: &[u8]) -> Result<()> {
-    let _ = read_wkb(wkb_bytes)
-        .map_err(|err| DataFusionError::Internal(format!("WKB parse error: {}", err)))?;
-
-    Ok(())
 }
 
 #[cfg(test)]
@@ -187,7 +177,7 @@ mod tests {
             .invoke_batch(&[ScalarValue::Binary(Some(vec![])).into()], 1)
             .unwrap_err();
 
-        assert!(err.message().starts_with("WKB parse error"));
+        assert_eq!(err.message(), "failed to fill whole buffer");
 
         Ok(())
     }
