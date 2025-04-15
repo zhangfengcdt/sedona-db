@@ -1,8 +1,8 @@
 use std::{sync::Arc, vec};
 
+use crate::iter_geo_traits;
 use arrow_array::builder::StringBuilder;
 use arrow_schema::DataType;
-use datafusion_common::cast::as_binary_array;
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
@@ -12,9 +12,6 @@ use sedona_schema::{
     datatypes::SedonaPhysicalType,
     udf::{ArgMatcher, SedonaScalarKernel, SedonaScalarUDF},
 };
-use wkt::to_wkt::write_geometry;
-
-use crate::geo_iterator::{try_iter_wkb_array, try_iter_wkb_scalar};
 
 /// ST_AsText() scalar UDF implementation
 ///
@@ -59,44 +56,39 @@ impl SedonaScalarKernel for STAsText {
         args: &[ColumnarValue],
         num_rows: usize,
     ) -> Result<ColumnarValue> {
-        if let ColumnarValue::Scalar(scalar) = &args[0] {
-            let mut iter = try_iter_wkb_scalar(scalar, 1)?;
-            let item = iter.next().unwrap();
-            let maybe_string = match item {
-                Some(maybe_result) => {
-                    let mut out = String::new();
-                    write_geometry(&mut out, &maybe_result?)
-                        .map_err(|err| DataFusionError::External(Box::new(err)))?;
-                    Some(out)
-                }
-                None => None,
-            };
-            return Ok(ScalarValue::Utf8(maybe_string).into());
-        }
+        // Estimate the minimum probable memory requirement of the output.
+        // Here, the shortest full precision non-empty/non-null value would be
+        // POINT (<16 digits> <16 digits>), or ~25 bytes.
+        let min_probable_wkt_size = match &args[0] {
+            ColumnarValue::Array(array) => 25 * array.len(),
+            ColumnarValue::Scalar(_) => 25,
+        };
 
-        let x_array = args[0].to_array(num_rows)?;
-        let x_binary_array = as_binary_array(&x_array)?;
+        // Initialize an output builder of the appropriate type
+        let mut builder = StringBuilder::with_capacity(num_rows, min_probable_wkt_size);
 
-        // Use the WKB size as the proxy for the WKT size.
-        // WKT is ~2.5 the size of WKB at full double precision (16), although WKT is up to
-        // 50% smaller at very low precision (probably rare).
-        let max_theoretical_wkt_size: f64 = x_binary_array.value_data().len() as f64 * 2.5;
-        let mut builder =
-            StringBuilder::with_capacity(num_rows, max_theoretical_wkt_size.floor() as usize);
-
-        for maybe_item in try_iter_wkb_array(&arg_types[0], &x_array)? {
+        // Use iter_geo_traits to handle looping over the most appropriate GeometryTrait
+        iter_geo_traits!(arg_types[0], &args[0], |_i, maybe_item| -> Result<()> {
             match maybe_item {
                 Some(item) => {
-                    write_geometry(&mut builder, &item?)
+                    wkt::to_wkt::write_geometry(&mut builder, &item?)
                         .map_err(|err| DataFusionError::External(Box::new(err)))?;
                     builder.append_value("");
                 }
                 None => builder.append_null(),
             }
-        }
 
+            Ok(())
+        });
+
+        // Create the output array
         let new_array = builder.finish();
-        Ok(ColumnarValue::Array(Arc::new(new_array)))
+
+        // Ensure that scalar input maps to scalar output
+        match &args[0] {
+            ColumnarValue::Array(_) => Ok(ColumnarValue::Array(Arc::new(new_array))),
+            ColumnarValue::Scalar(_) => Ok(ScalarValue::try_from_array(&new_array, 0)?.into()),
+        }
     }
 }
 

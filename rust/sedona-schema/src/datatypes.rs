@@ -14,6 +14,7 @@ use crate::extension_type::ExtensionType;
 pub enum SedonaPhysicalType {
     Arrow(DataType),
     Wkb(Edges, Crs),
+    WkbView(Edges, Crs),
 }
 
 /// Edge interpolations
@@ -35,11 +36,23 @@ pub enum Edges {
 /// matching (and `SedonaPhysicalType::Wkb(...)` is verbose)
 pub const WKB_GEOMETRY: SedonaPhysicalType = SedonaPhysicalType::Wkb(Edges::Planar, Crs::None);
 
+/// Sentinel for [`SedonaPhysicalType::WkbView`] with planar edges
+///
+/// See [`WKB_GEOMETRY`]
+pub const WKB_VIEW_GEOMETRY: SedonaPhysicalType =
+    SedonaPhysicalType::WkbView(Edges::Planar, Crs::None);
+
 /// Sentinel for [`SedonaPhysicalType::Wkb`] with spherical edges
 ///
 /// This constant is useful when defining type signatures as these ignore the Crs when
 /// matching (and `SedonaPhysicalType::Wkb(...)` is verbose)
 pub const WKB_GEOGRAPHY: SedonaPhysicalType = SedonaPhysicalType::Wkb(Edges::Spherical, Crs::None);
+
+/// Sentinel for [`SedonaPhysicalType::WkbView`] with spherical edges
+///
+/// See [`WKB_GEOGRAPHY`]
+pub const WKB_VIEW_GEOGRAPHY: SedonaPhysicalType =
+    SedonaPhysicalType::WkbView(Edges::Spherical, Crs::None);
 
 /// Longitude/latitude CRS (WGS84)
 ///
@@ -142,12 +155,7 @@ impl SedonaPhysicalType {
     pub fn data_type(&self) -> DataType {
         match &self {
             SedonaPhysicalType::Arrow(data_type) => data_type.clone(),
-            SedonaPhysicalType::Wkb(edges, crs) => ExtensionType::new(
-                "geoarrow.wkb",
-                DataType::Binary,
-                Some(serialize_edges_and_crs(edges, crs)),
-            )
-            .to_data_type(),
+            _ => self.extension_type().unwrap().to_data_type(),
         }
     }
 
@@ -163,6 +171,10 @@ impl SedonaPhysicalType {
             (SedonaPhysicalType::Wkb(edges, _), SedonaPhysicalType::Wkb(other_edges, _)) => {
                 edges == other_edges
             }
+            (
+                SedonaPhysicalType::WkbView(edges, _),
+                SedonaPhysicalType::WkbView(other_edges, _),
+            ) => edges == other_edges,
             _ => false,
         }
     }
@@ -194,14 +206,35 @@ impl SedonaPhysicalType {
         )
     }
 
+    /// Compute the storage [`DataType`] as it would appear in an external [`RecordBatch`]
+    pub fn storage_type(&self) -> &DataType {
+        match self {
+            SedonaPhysicalType::Arrow(data_type) => data_type,
+            SedonaPhysicalType::Wkb(_, _) => &DataType::Binary,
+            SedonaPhysicalType::WkbView(_, _) => &DataType::BinaryView,
+        }
+    }
+
+    /// Compute the extension name if this is an Arrow extension type or `None` otherwise
+    pub fn extension_name(&self) -> Option<&'static str> {
+        match self {
+            SedonaPhysicalType::Arrow(_) => None,
+            SedonaPhysicalType::Wkb(_, _) | SedonaPhysicalType::WkbView(_, _) => {
+                Some("geoarrow.wkb")
+            }
+        }
+    }
+
     /// Construct the [`ExtensionType`] that represents this type, if any
     pub fn extension_type(&self) -> Option<ExtensionType> {
         match self {
-            SedonaPhysicalType::Wkb(edges, crs) => Some(ExtensionType::new(
-                "geoarrow.wkb",
-                DataType::Binary,
-                Some(serialize_edges_and_crs(edges, crs)),
-            )),
+            SedonaPhysicalType::Wkb(edges, crs) | SedonaPhysicalType::WkbView(edges, crs) => {
+                Some(ExtensionType::new(
+                    self.extension_name().unwrap(),
+                    self.storage_type().clone(),
+                    Some(serialize_edges_and_crs(edges, crs)),
+                ))
+            }
             _ => None,
         }
     }
@@ -211,13 +244,13 @@ impl SedonaPhysicalType {
 
 /// Check a storage type for SedonaPhysicalType::Wkb
 fn physical_type_wkb(edges: Edges, crs: Crs, storage_type: DataType) -> Result<SedonaPhysicalType> {
-    if let DataType::Binary = storage_type {
-        Ok(SedonaPhysicalType::Wkb(edges, crs))
-    } else {
-        internal_err!(
+    match storage_type {
+        DataType::Binary => Ok(SedonaPhysicalType::Wkb(edges, crs)),
+        DataType::BinaryView => Ok(SedonaPhysicalType::WkbView(edges, crs)),
+        _ => internal_err!(
             "Expected Wkb type with Binary storage but got {}",
             storage_type
-        )
+        ),
     }
 }
 
@@ -373,6 +406,21 @@ mod tests {
         );
 
         assert!(WKB_GEOMETRY.match_signature(&WKB_GEOMETRY));
+        Ok(())
+    }
+
+    #[test]
+    fn physical_type_wkb_view() -> Result<()> {
+        assert_eq!(WKB_VIEW_GEOMETRY.storage_type(), &DataType::BinaryView);
+        assert_eq!(WKB_VIEW_GEOGRAPHY.storage_type(), &DataType::BinaryView);
+
+        assert_eq!(WKB_VIEW_GEOMETRY, WKB_VIEW_GEOMETRY);
+        assert_eq!(WKB_VIEW_GEOGRAPHY, WKB_VIEW_GEOGRAPHY);
+
+        let data_type = WKB_VIEW_GEOMETRY.data_type();
+        assert!(data_type.is_nested());
+        assert_eq!(SedonaPhysicalType::from_data_type(&data_type)?, WKB_VIEW_GEOMETRY);
+
         Ok(())
     }
 

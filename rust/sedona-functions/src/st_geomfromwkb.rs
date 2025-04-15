@@ -1,18 +1,17 @@
 use std::{sync::Arc, vec};
 
 use arrow_schema::DataType;
-use datafusion_common::cast::as_binary_array;
 use datafusion_common::error::Result;
 use datafusion_expr::{
     scalar_doc_sections::DOC_SECTION_OTHER, ColumnarValue, Documentation, Volatility,
 };
-use sedona_schema::datatypes::{WKB_GEOGRAPHY, WKB_GEOMETRY};
+use sedona_schema::datatypes::{Edges, WKB_GEOGRAPHY, WKB_GEOMETRY};
 use sedona_schema::{
     datatypes::SedonaPhysicalType,
     udf::{ArgMatcher, SedonaScalarKernel, SedonaScalarUDF},
 };
 
-use crate::geo_iterator::{iter_wkb_array, try_iter_wkb_scalar};
+use crate::iter_geo_traits;
 
 /// ST_GeomFromWKB() scalar UDF implementation
 ///
@@ -76,30 +75,33 @@ impl SedonaScalarKernel for STGeomFromWKB {
 
     fn invoke_batch(
         &self,
-        _: &[SedonaPhysicalType],
-        _: &SedonaPhysicalType,
+        arg_types: &[SedonaPhysicalType],
+        out_type: &SedonaPhysicalType,
         args: &[ColumnarValue],
-        num_rows: usize,
+        _: usize,
     ) -> Result<ColumnarValue> {
-        if let ColumnarValue::Scalar(scalar) = &args[0] {
-            if self.validate {
-                for item in try_iter_wkb_scalar(scalar, 1)?.flatten() {
+        if self.validate {
+            let iter_type = match &arg_types[0] {
+                SedonaPhysicalType::Arrow(data_type) => match data_type {
+                    DataType::Binary => WKB_GEOMETRY,
+                    DataType::BinaryView => SedonaPhysicalType::WkbView(Edges::Planar, None),
+                    _ => unreachable!(),
+                },
+                _ => {
+                    unreachable!()
+                }
+            };
+
+            iter_geo_traits!(iter_type, &args[0], |_i, maybe_item| -> Result<()> {
+                if let Some(item) = maybe_item {
                     item?;
                 }
-            }
 
-            return args[0].cast_to(&DataType::Binary, None);
+                Ok(())
+            });
         }
 
-        let x_array = args[0].to_array(num_rows)?;
-        if self.validate {
-            let x_binary_array = as_binary_array(&x_array)?;
-            for item in iter_wkb_array(x_binary_array).flatten() {
-                item?;
-            }
-        }
-
-        Ok(ColumnarValue::Array(x_array))
+        args[0].cast_to(out_type.storage_type(), None)
     }
 }
 
