@@ -9,7 +9,7 @@ use datafusion_expr::{
     scalar_doc_sections::DOC_SECTION_OTHER, ColumnarValue, Documentation, Volatility,
 };
 use sedona_schema::{
-    datatypes::{SedonaPhysicalType, WKB_GEOGRAPHY, WKB_GEOMETRY},
+    datatypes::{SedonaType, WKB_GEOGRAPHY, WKB_GEOMETRY},
     udf::{ArgMatcher, SedonaScalarKernel, SedonaScalarUDF},
 };
 
@@ -59,11 +59,11 @@ fn doc(name: &str, out_type_name: &str) -> Documentation {
 
 #[derive(Debug)]
 struct STGeoFromPoint {
-    out_type: SedonaPhysicalType,
+    out_type: SedonaType,
 }
 
 impl SedonaScalarKernel for STGeoFromPoint {
-    fn return_type(&self, args: &[SedonaPhysicalType]) -> Result<Option<SedonaPhysicalType>> {
+    fn return_type(&self, args: &[SedonaType]) -> Result<Option<SedonaType>> {
         let matcher = ArgMatcher::new(
             vec![ArgMatcher::is_numeric(), ArgMatcher::is_numeric()],
             self.out_type.clone(),
@@ -73,8 +73,8 @@ impl SedonaScalarKernel for STGeoFromPoint {
 
     fn invoke_batch(
         &self,
-        _: &[SedonaPhysicalType],
-        _: &SedonaPhysicalType,
+        _: &[SedonaType],
+        _: &SedonaType,
         args: &[ColumnarValue],
         num_rows: usize,
     ) -> Result<ColumnarValue> {
@@ -140,7 +140,7 @@ mod tests {
     use datafusion_expr::ScalarUDF;
     use geo_traits::{to_geo::ToGeoGeometry, Dimensions, GeometryTrait};
     use geo_types::Point;
-    use sedona_schema::datatypes::SedonaPhysicalType;
+    use sedona_schema::datatypes::SedonaType;
 
     use super::*;
 
@@ -285,10 +285,7 @@ mod tests {
             3,
         )?;
 
-        assert_eq!(
-            SedonaPhysicalType::from_data_type(&out.data_type())?,
-            WKB_GEOGRAPHY
-        );
+        assert_eq!(SedonaType::from_data_type(&out.data_type())?, WKB_GEOGRAPHY);
 
         Ok(())
     }

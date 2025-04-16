@@ -6,7 +6,7 @@ use datafusion_expr::{
     scalar_doc_sections::DOC_SECTION_OTHER, ColumnarValue, Documentation, Volatility,
 };
 use sedona_schema::{
-    datatypes::SedonaPhysicalType,
+    datatypes::SedonaType,
     udf::{ArgMatcher, SedonaScalarKernel, SedonaScalarUDF},
 };
 
@@ -36,7 +36,7 @@ fn st_asbinary_doc() -> Documentation {
 struct STAsBinary {}
 
 impl SedonaScalarKernel for STAsBinary {
-    fn return_type(&self, args: &[SedonaPhysicalType]) -> Result<Option<SedonaPhysicalType>> {
+    fn return_type(&self, args: &[SedonaType]) -> Result<Option<SedonaType>> {
         let matcher = ArgMatcher::new(
             vec![ArgMatcher::is_geometry_or_geography()],
             DataType::Binary.try_into().unwrap(),
@@ -47,8 +47,8 @@ impl SedonaScalarKernel for STAsBinary {
 
     fn invoke_batch(
         &self,
-        _: &[SedonaPhysicalType],
-        _: &SedonaPhysicalType,
+        _: &[SedonaType],
+        _: &SedonaType,
         args: &[ColumnarValue],
         _: usize,
     ) -> Result<ColumnarValue> {

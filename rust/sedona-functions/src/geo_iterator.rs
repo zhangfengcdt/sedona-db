@@ -11,7 +11,7 @@ use geo_traits::GeometryTrait;
 /// there are several cases we have to consider that return different iterator types
 /// (e.g., scalar, array, and in the future GeoArrow types).
 ///
-/// This macro is invoked with the SedonaPhysicalType of the argument, the ColumnarValue
+/// This macro is invoked with the SedonaType of the argument, the ColumnarValue
 /// argument, and the function to call for each element (that returns `Result<()>`).
 /// For scalars the function is called exactly once; for array input the function is
 /// called once per element. Generally the function will perform the computation and
@@ -25,7 +25,7 @@ macro_rules! iter_geo_traits {
                 ($lambda)(0, geo_item)?;
             }
             ColumnarValue::Array(array) => match $arg_type {
-                sedona_schema::datatypes::SedonaPhysicalType::Wkb(_, _) => {
+                sedona_schema::datatypes::SedonaType::Wkb(_, _) => {
                     #[allow(unused_mut)]
                     let mut func = $lambda;
                     let concrete_array = datafusion_common::cast::as_binary_array(array)?;
@@ -35,7 +35,7 @@ macro_rules! iter_geo_traits {
                         func(i, maybe_item)?
                     }
                 }
-                sedona_schema::datatypes::SedonaPhysicalType::WkbView(..) => {
+                sedona_schema::datatypes::SedonaType::WkbView(..) => {
                     #[allow(unused_mut)]
                     let mut func = $lambda;
                     let concrete_array = datafusion_common::cast::as_binary_view_array(array)?;

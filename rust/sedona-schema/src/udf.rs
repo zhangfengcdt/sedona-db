@@ -7,7 +7,7 @@ use datafusion_common::error::Result;
 use datafusion_common::not_impl_err;
 use datafusion_expr::{ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility};
 
-use crate::datatypes::SedonaPhysicalType;
+use crate::datatypes::SedonaType;
 
 /// Top-level scalar user-defined function
 ///
@@ -39,7 +39,7 @@ pub trait SedonaScalarKernel: Debug {
     ///
     /// The [`ArgMatcher`] contains a set of helper functions to help implement this
     /// function.
-    fn return_type(&self, args: &[SedonaPhysicalType]) -> Result<Option<SedonaPhysicalType>>;
+    fn return_type(&self, args: &[SedonaType]) -> Result<Option<SedonaType>>;
 
     /// Compute a batch of results
     ///
@@ -48,8 +48,8 @@ pub trait SedonaScalarKernel: Debug {
     /// of any extension type (e.g., for Wkb the provided ColumnarValue will be Binary).
     fn invoke_batch(
         &self,
-        arg_types: &[SedonaPhysicalType],
-        out_type: &SedonaPhysicalType,
+        arg_types: &[SedonaType],
+        out_type: &SedonaType,
         args: &[ColumnarValue],
         num_rows: usize,
     ) -> Result<ColumnarValue>;
@@ -59,15 +59,12 @@ pub trait SedonaScalarKernel: Debug {
 #[derive(Debug)]
 pub struct ArgMatcher {
     matchers: Vec<Arc<dyn TypeMatcher + Send + Sync>>,
-    out_type: SedonaPhysicalType,
+    out_type: SedonaType,
 }
 
 impl ArgMatcher {
     /// Create a new ArgMatcher
-    pub fn new(
-        matchers: Vec<Arc<dyn TypeMatcher + Send + Sync>>,
-        out_type: SedonaPhysicalType,
-    ) -> Self {
+    pub fn new(matchers: Vec<Arc<dyn TypeMatcher + Send + Sync>>, out_type: SedonaType) -> Self {
         Self { matchers, out_type }
     }
 
@@ -75,7 +72,7 @@ impl ArgMatcher {
     ///
     /// Returns Some(physical_type) if this kernel applies to the input types or
     /// None otherwise.
-    pub fn match_args(&self, args: &[SedonaPhysicalType]) -> Result<Option<SedonaPhysicalType>> {
+    pub fn match_args(&self, args: &[SedonaType]) -> Result<Option<SedonaType>> {
         if args.len() != self.matchers.len() {
             return Ok(None);
         }
@@ -92,7 +89,7 @@ impl ArgMatcher {
     /// Matches the given Arrow type using PartialEq
     pub fn is_arrow(data_type: DataType) -> Arc<dyn TypeMatcher + Send + Sync> {
         Arc::new(IsExact {
-            exact_type: SedonaPhysicalType::Arrow(data_type),
+            exact_type: SedonaType::Arrow(data_type),
         })
     }
 
@@ -118,16 +115,16 @@ impl ArgMatcher {
 }
 
 pub trait TypeMatcher: Debug {
-    fn match_type(&self, arg: &SedonaPhysicalType) -> bool;
+    fn match_type(&self, arg: &SedonaType) -> bool;
 }
 
 #[derive(Debug)]
 struct IsExact {
-    exact_type: SedonaPhysicalType,
+    exact_type: SedonaType,
 }
 
 impl TypeMatcher for IsExact {
-    fn match_type(&self, arg: &SedonaPhysicalType) -> bool {
+    fn match_type(&self, arg: &SedonaType) -> bool {
         self.exact_type.match_signature(arg)
     }
 }
@@ -136,8 +133,8 @@ impl TypeMatcher for IsExact {
 struct IsGeometryOrGeography {}
 
 impl TypeMatcher for IsGeometryOrGeography {
-    fn match_type(&self, arg: &SedonaPhysicalType) -> bool {
-        matches!(arg, SedonaPhysicalType::Wkb(_, _))
+    fn match_type(&self, arg: &SedonaType) -> bool {
+        matches!(arg, SedonaType::Wkb(_, _))
     }
 }
 
@@ -145,9 +142,9 @@ impl TypeMatcher for IsGeometryOrGeography {
 struct IsNumeric {}
 
 impl TypeMatcher for IsNumeric {
-    fn match_type(&self, arg: &SedonaPhysicalType) -> bool {
+    fn match_type(&self, arg: &SedonaType) -> bool {
         match arg {
-            SedonaPhysicalType::Arrow(data_type) => data_type.is_numeric(),
+            SedonaType::Arrow(data_type) => data_type.is_numeric(),
             _ => false,
         }
     }
@@ -157,9 +154,9 @@ impl TypeMatcher for IsNumeric {
 struct IsString {}
 
 impl TypeMatcher for IsString {
-    fn match_type(&self, arg: &SedonaPhysicalType) -> bool {
+    fn match_type(&self, arg: &SedonaType) -> bool {
         match arg {
-            SedonaPhysicalType::Arrow(data_type) => {
+            SedonaType::Arrow(data_type) => {
                 matches!(
                     data_type,
                     DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
@@ -174,9 +171,9 @@ impl TypeMatcher for IsString {
 struct IsBinary {}
 
 impl TypeMatcher for IsBinary {
-    fn match_type(&self, arg: &SedonaPhysicalType) -> bool {
+    fn match_type(&self, arg: &SedonaType) -> bool {
         match arg {
-            SedonaPhysicalType::Arrow(data_type) => {
+            SedonaType::Arrow(data_type) => {
                 matches!(
                     data_type,
                     DataType::Binary
@@ -192,12 +189,7 @@ impl TypeMatcher for IsBinary {
 
 /// Type defenition for a Scalar kernel implementation function
 pub type SedonaScalarKernelImpl = Arc<
-    dyn Fn(
-            &[SedonaPhysicalType],
-            &SedonaPhysicalType,
-            &[ColumnarValue],
-            usize,
-        ) -> Result<ColumnarValue>
+    dyn Fn(&[SedonaType], &SedonaType, &[ColumnarValue], usize) -> Result<ColumnarValue>
         + Send
         + Sync,
 >;
@@ -224,14 +216,14 @@ impl SimpleSedonaScalarKernel {
 }
 
 impl SedonaScalarKernel for SimpleSedonaScalarKernel {
-    fn return_type(&self, args: &[SedonaPhysicalType]) -> Result<Option<SedonaPhysicalType>> {
+    fn return_type(&self, args: &[SedonaType]) -> Result<Option<SedonaType>> {
         self.arg_matcher.match_args(args)
     }
 
     fn invoke_batch(
         &self,
-        arg_types: &[SedonaPhysicalType],
-        out_type: &SedonaPhysicalType,
+        arg_types: &[SedonaType],
+        out_type: &SedonaType,
         args: &[ColumnarValue],
         num_rows: usize,
     ) -> Result<ColumnarValue> {
@@ -255,16 +247,14 @@ impl SedonaScalarUDF {
         }
     }
 
-    fn physical_types(args: &[DataType]) -> Result<Vec<SedonaPhysicalType>> {
-        args.iter()
-            .map(SedonaPhysicalType::from_data_type)
-            .collect()
+    fn physical_types(args: &[DataType]) -> Result<Vec<SedonaType>> {
+        args.iter().map(SedonaType::from_data_type).collect()
     }
 
     fn return_type_impl(
         &self,
-        args: &[SedonaPhysicalType],
-    ) -> Result<(&dyn SedonaScalarKernel, SedonaPhysicalType)> {
+        args: &[SedonaType],
+    ) -> Result<(&dyn SedonaScalarKernel, SedonaType)> {
         for kernel in &self.kernels {
             if let Some(return_type) = kernel.return_type(args)? {
                 return Ok((kernel.as_ref(), return_type));
@@ -329,25 +319,21 @@ mod tests {
 
     #[test]
     fn matchers() {
-        assert!(ArgMatcher::is_arrow(DataType::Null)
-            .match_type(&SedonaPhysicalType::Arrow(DataType::Null)));
+        assert!(ArgMatcher::is_arrow(DataType::Null).match_type(&SedonaType::Arrow(DataType::Null)));
 
         assert!(ArgMatcher::is_geometry_or_geography().match_type(&WKB_GEOMETRY));
         assert!(ArgMatcher::is_geometry_or_geography().match_type(&WKB_GEOGRAPHY));
-        assert!(ArgMatcher::is_numeric().match_type(&SedonaPhysicalType::Arrow(DataType::Int32)));
-        assert!(ArgMatcher::is_numeric().match_type(&SedonaPhysicalType::Arrow(DataType::Float64)));
-        assert!(ArgMatcher::is_string().match_type(&SedonaPhysicalType::Arrow(DataType::Utf8)));
-        assert!(ArgMatcher::is_string().match_type(&SedonaPhysicalType::Arrow(DataType::Utf8View)));
-        assert!(ArgMatcher::is_string().match_type(&SedonaPhysicalType::Arrow(DataType::LargeUtf8)));
-        assert!(ArgMatcher::is_binary().match_type(&SedonaPhysicalType::Arrow(DataType::Binary)));
+        assert!(ArgMatcher::is_numeric().match_type(&SedonaType::Arrow(DataType::Int32)));
+        assert!(ArgMatcher::is_numeric().match_type(&SedonaType::Arrow(DataType::Float64)));
+        assert!(ArgMatcher::is_string().match_type(&SedonaType::Arrow(DataType::Utf8)));
+        assert!(ArgMatcher::is_string().match_type(&SedonaType::Arrow(DataType::Utf8View)));
+        assert!(ArgMatcher::is_string().match_type(&SedonaType::Arrow(DataType::LargeUtf8)));
+        assert!(ArgMatcher::is_binary().match_type(&SedonaType::Arrow(DataType::Binary)));
+        assert!(ArgMatcher::is_binary().match_type(&SedonaType::Arrow(DataType::BinaryView)));
+        assert!(ArgMatcher::is_binary().match_type(&SedonaType::Arrow(DataType::LargeBinary)));
         assert!(
-            ArgMatcher::is_binary().match_type(&SedonaPhysicalType::Arrow(DataType::BinaryView))
+            ArgMatcher::is_binary().match_type(&SedonaType::Arrow(DataType::FixedSizeBinary(1)))
         );
-        assert!(
-            ArgMatcher::is_binary().match_type(&SedonaPhysicalType::Arrow(DataType::LargeBinary))
-        );
-        assert!(ArgMatcher::is_binary()
-            .match_type(&SedonaPhysicalType::Arrow(DataType::FixedSizeBinary(1))));
     }
 
     #[test]
@@ -376,7 +362,7 @@ mod tests {
         let kernel_geo = SimpleSedonaScalarKernel::new_ref(
             ArgMatcher::new(
                 vec![ArgMatcher::is_geometry_or_geography()],
-                SedonaPhysicalType::Arrow(DataType::Null),
+                SedonaType::Arrow(DataType::Null),
             ),
             Arc::new(|_, _, _, _| Ok(ColumnarValue::Scalar(ScalarValue::Null))),
         );
@@ -384,7 +370,7 @@ mod tests {
         let kernel_arrow = SimpleSedonaScalarKernel::new_ref(
             ArgMatcher::new(
                 vec![ArgMatcher::is_arrow(DataType::Boolean)],
-                SedonaPhysicalType::Arrow(DataType::Boolean),
+                SedonaType::Arrow(DataType::Boolean),
             ),
             Arc::new(|_, _, _, _| Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)))),
         );

@@ -7,7 +7,7 @@ use datafusion_expr::{
 };
 use sedona_schema::datatypes::{Edges, WKB_GEOGRAPHY, WKB_GEOMETRY};
 use sedona_schema::{
-    datatypes::SedonaPhysicalType,
+    datatypes::SedonaType,
     udf::{ArgMatcher, SedonaScalarKernel, SedonaScalarUDF},
 };
 
@@ -63,11 +63,11 @@ fn doc(name: &str, out_type_name: &str) -> Documentation {
 #[derive(Debug)]
 struct STGeomFromWKB {
     validate: bool,
-    out_type: SedonaPhysicalType,
+    out_type: SedonaType,
 }
 
 impl SedonaScalarKernel for STGeomFromWKB {
-    fn return_type(&self, args: &[SedonaPhysicalType]) -> Result<Option<SedonaPhysicalType>> {
+    fn return_type(&self, args: &[SedonaType]) -> Result<Option<SedonaType>> {
         let matcher = ArgMatcher::new(vec![ArgMatcher::is_binary()], self.out_type.clone());
 
         matcher.match_args(args)
@@ -75,16 +75,16 @@ impl SedonaScalarKernel for STGeomFromWKB {
 
     fn invoke_batch(
         &self,
-        arg_types: &[SedonaPhysicalType],
-        out_type: &SedonaPhysicalType,
+        arg_types: &[SedonaType],
+        out_type: &SedonaType,
         args: &[ColumnarValue],
         _: usize,
     ) -> Result<ColumnarValue> {
         if self.validate {
             let iter_type = match &arg_types[0] {
-                SedonaPhysicalType::Arrow(data_type) => match data_type {
+                SedonaType::Arrow(data_type) => match data_type {
                     DataType::Binary => WKB_GEOMETRY,
-                    DataType::BinaryView => SedonaPhysicalType::WkbView(Edges::Planar, None),
+                    DataType::BinaryView => SedonaType::WkbView(Edges::Planar, None),
                     _ => unreachable!(),
                 },
                 _ => {
@@ -191,10 +191,7 @@ mod tests {
 
         let wkb_scalar = ScalarValue::Binary(Some(POINT.to_vec()));
         let out = udf.invoke_batch(&[wkb_scalar.clone().into()], 1)?;
-        assert_eq!(
-            SedonaPhysicalType::from_data_type(&out.data_type())?,
-            WKB_GEOGRAPHY
-        );
+        assert_eq!(SedonaType::from_data_type(&out.data_type())?, WKB_GEOGRAPHY);
 
         Ok(())
     }

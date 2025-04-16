@@ -12,7 +12,7 @@ use crate::extension_type::ExtensionType;
 
 /// Data types supported by Sedona that resolve to a concrete Arrow DataType
 #[derive(Debug, PartialEq, Clone)]
-pub enum SedonaPhysicalType {
+pub enum SedonaType {
     Arrow(DataType),
     Wkb(Edges, Crs),
     WkbView(Edges, Crs),
@@ -31,29 +31,27 @@ pub enum Edges {
     Spherical,
 }
 
-/// Sentinel for [`SedonaPhysicalType::Wkb`] with planar edges
+/// Sentinel for [`SedonaType::Wkb`] with planar edges
 ///
 /// This constant is useful when defining type signatures as these ignore the Crs when
-/// matching (and `SedonaPhysicalType::Wkb(...)` is verbose)
-pub const WKB_GEOMETRY: SedonaPhysicalType = SedonaPhysicalType::Wkb(Edges::Planar, Crs::None);
+/// matching (and `SedonaType::Wkb(...)` is verbose)
+pub const WKB_GEOMETRY: SedonaType = SedonaType::Wkb(Edges::Planar, Crs::None);
 
-/// Sentinel for [`SedonaPhysicalType::WkbView`] with planar edges
+/// Sentinel for [`SedonaType::WkbView`] with planar edges
 ///
 /// See [`WKB_GEOMETRY`]
-pub const WKB_VIEW_GEOMETRY: SedonaPhysicalType =
-    SedonaPhysicalType::WkbView(Edges::Planar, Crs::None);
+pub const WKB_VIEW_GEOMETRY: SedonaType = SedonaType::WkbView(Edges::Planar, Crs::None);
 
-/// Sentinel for [`SedonaPhysicalType::Wkb`] with spherical edges
+/// Sentinel for [`SedonaType::Wkb`] with spherical edges
 ///
 /// This constant is useful when defining type signatures as these ignore the Crs when
-/// matching (and `SedonaPhysicalType::Wkb(...)` is verbose)
-pub const WKB_GEOGRAPHY: SedonaPhysicalType = SedonaPhysicalType::Wkb(Edges::Spherical, Crs::None);
+/// matching (and `SedonaType::Wkb(...)` is verbose)
+pub const WKB_GEOGRAPHY: SedonaType = SedonaType::Wkb(Edges::Spherical, Crs::None);
 
-/// Sentinel for [`SedonaPhysicalType::WkbView`] with spherical edges
+/// Sentinel for [`SedonaType::WkbView`] with spherical edges
 ///
 /// See [`WKB_GEOGRAPHY`]
-pub const WKB_VIEW_GEOGRAPHY: SedonaPhysicalType =
-    SedonaPhysicalType::WkbView(Edges::Spherical, Crs::None);
+pub const WKB_VIEW_GEOGRAPHY: SedonaType = SedonaType::WkbView(Edges::Spherical, Crs::None);
 
 /// Longitude/latitude CRS (WGS84)
 ///
@@ -91,55 +89,55 @@ pub trait CoordinateReferenceSystem: Debug {
 
 // Implementation details
 
-impl TryFrom<&DataType> for SedonaPhysicalType {
+impl TryFrom<&DataType> for SedonaType {
     type Error = DataFusionError;
 
     fn try_from(value: &DataType) -> Result<Self> {
-        SedonaPhysicalType::from_data_type(value)
+        SedonaType::from_data_type(value)
     }
 }
 
-impl TryFrom<DataType> for SedonaPhysicalType {
+impl TryFrom<DataType> for SedonaType {
     type Error = DataFusionError;
 
     fn try_from(value: DataType) -> Result<Self> {
-        SedonaPhysicalType::from_data_type(&value)
+        SedonaType::from_data_type(&value)
     }
 }
 
-impl From<&SedonaPhysicalType> for DataType {
-    fn from(value: &SedonaPhysicalType) -> Self {
+impl From<&SedonaType> for DataType {
+    fn from(value: &SedonaType) -> Self {
         value.data_type()
     }
 }
 
-impl From<SedonaPhysicalType> for DataType {
-    fn from(value: SedonaPhysicalType) -> Self {
+impl From<SedonaType> for DataType {
+    fn from(value: SedonaType) -> Self {
         value.data_type()
     }
 }
 
-impl SedonaPhysicalType {
-    /// Given a data type, return the appropriate SedonaPhysicalType
+impl SedonaType {
+    /// Given a data type, return the appropriate SedonaType
     ///
     /// This is expected to be the "wrapped" version of an extension type.
-    pub fn from_data_type(data_type: &DataType) -> Result<SedonaPhysicalType> {
+    pub fn from_data_type(data_type: &DataType) -> Result<SedonaType> {
         match ExtensionType::from_data_type(data_type) {
             Some(ext) => Self::from_extension_type(ext),
             None => Ok(Self::Arrow(data_type.clone())),
         }
     }
 
-    /// Given a field as it would appear in an external Schema return the appropriate SedonaPhysicalType
-    pub fn from_storage_field(field: &Field) -> Result<SedonaPhysicalType> {
+    /// Given a field as it would appear in an external Schema return the appropriate SedonaType
+    pub fn from_storage_field(field: &Field) -> Result<SedonaType> {
         match ExtensionType::from_field(field) {
             Some(ext) => Self::from_extension_type(ext),
             None => Ok(Self::Arrow(field.data_type().clone())),
         }
     }
 
-    /// Given an [`ExtensionType`], construct a SedonaPhysicalType
-    pub fn from_extension_type(extension: ExtensionType) -> Result<SedonaPhysicalType> {
+    /// Given an [`ExtensionType`], construct a SedonaType
+    pub fn from_extension_type(extension: ExtensionType) -> Result<SedonaType> {
         let (edges, crs) = deserialize_edges_and_crs(&extension.extension_metadata)?;
         if extension.extension_name == "geoarrow.wkb" {
             physical_type_wkb(edges, crs, extension.storage_type)
@@ -155,7 +153,7 @@ impl SedonaPhysicalType {
     /// Compute the Arrow data type used to represent this physical type in DataFusion
     pub fn data_type(&self) -> DataType {
         match &self {
-            SedonaPhysicalType::Arrow(data_type) => data_type.clone(),
+            SedonaType::Arrow(data_type) => data_type.clone(),
             _ => self.extension_type().unwrap().to_data_type(),
         }
     }
@@ -164,18 +162,15 @@ impl SedonaPhysicalType {
     ///
     /// For Arrow types this matches on type equality; for other type it matches on edges
     /// but not crs.
-    pub fn match_signature(&self, other: &SedonaPhysicalType) -> bool {
+    pub fn match_signature(&self, other: &SedonaType) -> bool {
         match (self, other) {
-            (SedonaPhysicalType::Arrow(data_type), SedonaPhysicalType::Arrow(other_data_type)) => {
+            (SedonaType::Arrow(data_type), SedonaType::Arrow(other_data_type)) => {
                 data_type == other_data_type
             }
-            (SedonaPhysicalType::Wkb(edges, _), SedonaPhysicalType::Wkb(other_edges, _)) => {
+            (SedonaType::Wkb(edges, _), SedonaType::Wkb(other_edges, _)) => edges == other_edges,
+            (SedonaType::WkbView(edges, _), SedonaType::WkbView(other_edges, _)) => {
                 edges == other_edges
             }
-            (
-                SedonaPhysicalType::WkbView(edges, _),
-                SedonaPhysicalType::WkbView(other_edges, _),
-            ) => edges == other_edges,
             _ => false,
         }
     }
@@ -183,7 +178,7 @@ impl SedonaPhysicalType {
     /// Wrap a [`ColumnarValue`] representing the storage of an [`ExtensionType`]
     ///
     /// This operation occurs when reading Arrow data from a datasource where
-    /// field metadata was used to construct the SedonaPhysicalType or after
+    /// field metadata was used to construct the SedonaType or after
     /// a compute kernel has returned a value.
     pub fn wrap_arg(&self, arg: &ColumnarValue) -> Result<ColumnarValue> {
         self.extension_type()
@@ -193,7 +188,7 @@ impl SedonaPhysicalType {
     /// Wrap an [`ArrayRef`] representing the storage of an [`ExtensionType`]
     ///
     /// This operation occurs when reading Arrow data from a datasource where
-    /// field metadata was used to construct the SedonaPhysicalType or after
+    /// field metadata was used to construct the SedonaType or after
     /// a compute kernel has returned a value.
     pub fn wrap_array(&self, arg: &ArrayRef) -> Result<ArrayRef> {
         self.extension_type().map_or(Ok(arg.clone()), |extension| {
@@ -204,7 +199,7 @@ impl SedonaPhysicalType {
     /// Wrap an [`ScalarValue`] representing the storage of an [`ExtensionType`]
     ///
     /// This operation occurs when reading Arrow data from a datasource where
-    /// field metadata was used to construct the SedonaPhysicalType or after
+    /// field metadata was used to construct the SedonaType or after
     /// a compute kernel has returned a value.
     pub fn wrap_scalar(&self, arg: &ScalarValue) -> Result<ScalarValue> {
         self.extension_type()
@@ -251,26 +246,24 @@ impl SedonaPhysicalType {
     /// Compute the storage [`DataType`] as it would appear in an external [`RecordBatch`]
     pub fn storage_type(&self) -> &DataType {
         match self {
-            SedonaPhysicalType::Arrow(data_type) => data_type,
-            SedonaPhysicalType::Wkb(_, _) => &DataType::Binary,
-            SedonaPhysicalType::WkbView(_, _) => &DataType::BinaryView,
+            SedonaType::Arrow(data_type) => data_type,
+            SedonaType::Wkb(_, _) => &DataType::Binary,
+            SedonaType::WkbView(_, _) => &DataType::BinaryView,
         }
     }
 
     /// Compute the extension name if this is an Arrow extension type or `None` otherwise
     pub fn extension_name(&self) -> Option<&'static str> {
         match self {
-            SedonaPhysicalType::Arrow(_) => None,
-            SedonaPhysicalType::Wkb(_, _) | SedonaPhysicalType::WkbView(_, _) => {
-                Some("geoarrow.wkb")
-            }
+            SedonaType::Arrow(_) => None,
+            SedonaType::Wkb(_, _) | SedonaType::WkbView(_, _) => Some("geoarrow.wkb"),
         }
     }
 
     /// Construct the [`ExtensionType`] that represents this type, if any
     pub fn extension_type(&self) -> Option<ExtensionType> {
         match self {
-            SedonaPhysicalType::Wkb(edges, crs) | SedonaPhysicalType::WkbView(edges, crs) => {
+            SedonaType::Wkb(edges, crs) | SedonaType::WkbView(edges, crs) => {
                 Some(ExtensionType::new(
                     self.extension_name().unwrap(),
                     self.storage_type().clone(),
@@ -284,11 +277,11 @@ impl SedonaPhysicalType {
 
 // Implementation details for importing/exporting types from/to Arrow + metadata
 
-/// Check a storage type for SedonaPhysicalType::Wkb
-fn physical_type_wkb(edges: Edges, crs: Crs, storage_type: DataType) -> Result<SedonaPhysicalType> {
+/// Check a storage type for SedonaType::Wkb
+fn physical_type_wkb(edges: Edges, crs: Crs, storage_type: DataType) -> Result<SedonaType> {
     match storage_type {
-        DataType::Binary => Ok(SedonaPhysicalType::Wkb(edges, crs)),
-        DataType::BinaryView => Ok(SedonaPhysicalType::WkbView(edges, crs)),
+        DataType::Binary => Ok(SedonaType::Wkb(edges, crs)),
+        DataType::BinaryView => Ok(SedonaType::WkbView(edges, crs)),
         _ => internal_err!(
             "Expected Wkb type with Binary storage but got {}",
             storage_type
@@ -428,11 +421,11 @@ mod tests {
 
     #[test]
     fn physical_type_arrow() -> Result<()> {
-        let physical_type = SedonaPhysicalType::from_data_type(&DataType::Int32)?;
+        let physical_type = SedonaType::from_data_type(&DataType::Int32)?;
         assert_eq!(physical_type.data_type(), DataType::Int32);
-        assert_eq!(physical_type, SedonaPhysicalType::Arrow(DataType::Int32));
-        assert!(physical_type.match_signature(&SedonaPhysicalType::Arrow(DataType::Int32)));
-        assert!(!physical_type.match_signature(&SedonaPhysicalType::Arrow(DataType::Utf8)));
+        assert_eq!(physical_type, SedonaType::Arrow(DataType::Int32));
+        assert!(physical_type.match_signature(&SedonaType::Arrow(DataType::Int32)));
+        assert!(!physical_type.match_signature(&SedonaType::Arrow(DataType::Utf8)));
 
         Ok(())
     }
@@ -443,7 +436,7 @@ mod tests {
 
         assert!(WKB_GEOMETRY.data_type().is_nested());
         assert_eq!(
-            SedonaPhysicalType::from_data_type(&WKB_GEOMETRY.data_type())?,
+            SedonaType::from_data_type(&WKB_GEOMETRY.data_type())?,
             WKB_GEOMETRY
         );
 
@@ -461,10 +454,7 @@ mod tests {
 
         let data_type = WKB_VIEW_GEOMETRY.data_type();
         assert!(data_type.is_nested());
-        assert_eq!(
-            SedonaPhysicalType::from_data_type(&data_type)?,
-            WKB_VIEW_GEOMETRY
-        );
+        assert_eq!(SedonaType::from_data_type(&data_type)?, WKB_VIEW_GEOMETRY);
 
         Ok(())
     }
@@ -475,7 +465,7 @@ mod tests {
 
         assert!(WKB_GEOGRAPHY.data_type().is_nested());
         assert_eq!(
-            SedonaPhysicalType::from_data_type(&WKB_GEOGRAPHY.data_type())?,
+            SedonaType::from_data_type(&WKB_GEOGRAPHY.data_type())?,
             WKB_GEOGRAPHY
         );
 
@@ -525,7 +515,7 @@ mod tests {
         let bad_json =
             ExtensionType::new("geoarrow.wkb", DataType::Binary, Some(r#"{"#.to_string()))
                 .to_data_type();
-        assert!(SedonaPhysicalType::from_data_type(&bad_json)
+        assert!(SedonaType::from_data_type(&bad_json)
             .unwrap_err()
             .message()
             .contains("Error deserializing GeoArrow metadata"));
@@ -533,7 +523,7 @@ mod tests {
         let bad_type =
             ExtensionType::new("geoarrow.wkb", DataType::Binary, Some(r#"[]"#.to_string()))
                 .to_data_type();
-        assert!(SedonaPhysicalType::from_data_type(&bad_type)
+        assert!(SedonaType::from_data_type(&bad_type)
             .unwrap_err()
             .message()
             .contains("Expected GeoArrow metadata as JSON object"));
@@ -544,7 +534,7 @@ mod tests {
             Some(r#"{"edges": []}"#.to_string()),
         )
         .to_data_type();
-        assert!(SedonaPhysicalType::from_data_type(&bad_edges_type)
+        assert!(SedonaType::from_data_type(&bad_edges_type)
             .unwrap_err()
             .message()
             .contains("Unsupported edges JSON type"));
@@ -555,7 +545,7 @@ mod tests {
             Some(r#"{"edges": "gazornenplat"}"#.to_string()),
         )
         .to_data_type();
-        assert!(SedonaPhysicalType::from_data_type(&bad_edges_value)
+        assert!(SedonaType::from_data_type(&bad_edges_value)
             .unwrap_err()
             .message()
             .contains("Unsupported edges value"));

@@ -9,7 +9,7 @@ use datafusion_expr::{
     scalar_doc_sections::DOC_SECTION_OTHER, ColumnarValue, Documentation, Volatility,
 };
 use sedona_schema::{
-    datatypes::SedonaPhysicalType,
+    datatypes::SedonaType,
     udf::{ArgMatcher, SedonaScalarKernel, SedonaScalarUDF},
 };
 
@@ -40,7 +40,7 @@ fn st_astext_doc() -> Documentation {
 struct STAsText {}
 
 impl SedonaScalarKernel for STAsText {
-    fn return_type(&self, args: &[SedonaPhysicalType]) -> Result<Option<SedonaPhysicalType>> {
+    fn return_type(&self, args: &[SedonaType]) -> Result<Option<SedonaType>> {
         let matcher = ArgMatcher::new(
             vec![ArgMatcher::is_geometry_or_geography()],
             DataType::Utf8.try_into().unwrap(),
@@ -51,8 +51,8 @@ impl SedonaScalarKernel for STAsText {
 
     fn invoke_batch(
         &self,
-        arg_types: &[SedonaPhysicalType],
-        _: &SedonaPhysicalType,
+        arg_types: &[SedonaType],
+        _: &SedonaType,
         args: &[ColumnarValue],
         num_rows: usize,
     ) -> Result<ColumnarValue> {

@@ -7,7 +7,7 @@ use datafusion_common::{
     ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
-use sedona_schema::datatypes::SedonaPhysicalType;
+use sedona_schema::datatypes::SedonaType;
 
 /// Assert two [`ColumnarValue`]s are equal
 ///
@@ -59,17 +59,17 @@ pub fn assert_array_equal(actual: &ArrayRef, expected: &ArrayRef) {
     }
 
     match (&actual_sedona, &expected_sedona) {
-        (SedonaPhysicalType::Arrow(_), SedonaPhysicalType::Arrow(_)) => {
+        (SedonaType::Arrow(_), SedonaType::Arrow(_)) => {
             assert_eq!(actual, expected)
         }
 
-        (SedonaPhysicalType::Wkb(_, _), SedonaPhysicalType::Wkb(_, _)) => {
+        (SedonaType::Wkb(_, _), SedonaType::Wkb(_, _)) => {
             assert_wkb_sequences_equal(
                 as_binary_array(&actual_sedona.unwrap_array(actual).unwrap()).unwrap(),
                 as_binary_array(&expected_sedona.unwrap_array(expected).unwrap()).unwrap(),
             );
         }
-        (SedonaPhysicalType::WkbView(_, _), SedonaPhysicalType::WkbView(_, _)) => {
+        (SedonaType::WkbView(_, _), SedonaType::WkbView(_, _)) => {
             assert_wkb_sequences_equal(
                 as_binary_view_array(&actual_sedona.unwrap_array(actual).unwrap()).unwrap(),
                 as_binary_view_array(&expected_sedona.unwrap_array(expected).unwrap()).unwrap(),
@@ -94,11 +94,9 @@ pub fn assert_scalar_equal(actual: &ScalarValue, expected: &ScalarValue) {
     );
 
     match (&actual_sedona, &expected_sedona) {
-        (SedonaPhysicalType::Arrow(_), SedonaPhysicalType::Arrow(_)) => {
-            assert_arrow_scalar_equal(actual, expected)
-        }
-        (SedonaPhysicalType::Wkb(_, _), SedonaPhysicalType::Wkb(_, _))
-        | (SedonaPhysicalType::WkbView(_, _), SedonaPhysicalType::WkbView(_, _)) => {
+        (SedonaType::Arrow(_), SedonaType::Arrow(_)) => assert_arrow_scalar_equal(actual, expected),
+        (SedonaType::Wkb(_, _), SedonaType::Wkb(_, _))
+        | (SedonaType::WkbView(_, _), SedonaType::WkbView(_, _)) => {
             assert_wkb_scalar_equal(
                 &actual_sedona.unwrap_scalar(actual).unwrap(),
                 &expected_sedona.unwrap_scalar(expected).unwrap(),
@@ -113,9 +111,9 @@ fn assert_type_equal(
     expected: &DataType,
     actual_label: &str,
     expected_label: &str,
-) -> (SedonaPhysicalType, SedonaPhysicalType) {
-    let actual_sedona = SedonaPhysicalType::from_data_type(actual).unwrap();
-    let expected_sedona = SedonaPhysicalType::from_data_type(expected).unwrap();
+) -> (SedonaType, SedonaType) {
+    let actual_sedona = SedonaType::from_data_type(actual).unwrap();
+    let expected_sedona = SedonaType::from_data_type(expected).unwrap();
     if actual_sedona != expected_sedona {
         panic!(
             "{actual_label} != {expected_label}:\n{actual_label} has type {:?}, {expected_label} has type {:?}",

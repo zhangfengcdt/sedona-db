@@ -119,7 +119,7 @@ mod tests {
     use datafusion_expr::{ColumnarValue, ScalarUDF};
     use futures::TryStreamExt;
     use sedona_functions::st_point::st_point_udf;
-    use sedona_schema::datatypes::{SedonaPhysicalType, WKB_GEOMETRY};
+    use sedona_schema::datatypes::{SedonaType, WKB_GEOMETRY};
 
     use super::*;
 
@@ -191,8 +191,7 @@ mod tests {
         let batch_in = test_batch()?;
 
         let df = ctx.read_batch(batch_in.clone())?;
-        let geometry_physical_type: SedonaPhysicalType =
-            df.schema().field(1).data_type().try_into()?;
+        let geometry_physical_type: SedonaType = df.schema().field(1).data_type().try_into()?;
         assert_eq!(geometry_physical_type, WKB_GEOMETRY);
 
         let batches_out = df.collect_sedona().await?;
@@ -208,8 +207,7 @@ mod tests {
         let batch_in = test_batch()?;
 
         let df = ctx.read_batches(vec![batch_in.clone(), batch_in.clone()])?;
-        let geometry_physical_type: SedonaPhysicalType =
-            df.schema().field(1).data_type().try_into()?;
+        let geometry_physical_type: SedonaType = df.schema().field(1).data_type().try_into()?;
         assert_eq!(geometry_physical_type, WKB_GEOMETRY);
 
         let batches_out = df.collect_sedona().await?;
@@ -227,8 +225,7 @@ mod tests {
 
         let df = ctx.read_batches(vec![batch_in.clone(), batch_in.clone()])?;
         let stream = df.execute_stream_sedona().await?;
-        let geometry_physical_type =
-            SedonaPhysicalType::from_storage_field(stream.schema().field(1))?;
+        let geometry_physical_type = SedonaType::from_storage_field(stream.schema().field(1))?;
         assert_eq!(geometry_physical_type, WKB_GEOMETRY);
 
         let batches_out: Vec<_> = stream.try_collect().await?;
