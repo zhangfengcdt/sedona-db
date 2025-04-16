@@ -79,8 +79,22 @@ impl ExtensionType {
         DataType::Struct(Fields::from(vec![field]))
     }
 
+    /// Wrap storage ColumnarValue as a StructArray
+    pub fn wrap_arg(&self, arg: &ColumnarValue) -> Result<ColumnarValue> {
+        match arg {
+            ColumnarValue::Array(array) => {
+                let array_out = self.wrap_array(array.clone())?;
+                Ok(ColumnarValue::Array(array_out))
+            }
+            ColumnarValue::Scalar(scalar) => {
+                let scalar_out = self.wrap_scalar(scalar)?;
+                Ok(ColumnarValue::Scalar(scalar_out))
+            }
+        }
+    }
+
     /// Wrap storage array as a StructArray
-    pub fn wrap_storage(&self, array: ArrayRef) -> Result<ArrayRef> {
+    pub fn wrap_array(&self, array: ArrayRef) -> Result<ArrayRef> {
         if array.data_type() != &self.storage_type {
             return internal_err!(
                 "Type to wrap ({}) does not match storage type ({})",
@@ -100,35 +114,30 @@ impl ExtensionType {
         Ok(Arc::new(wrapped))
     }
 
-    pub fn wrap_arg(&self, arg: &ColumnarValue) -> Result<ColumnarValue> {
-        match arg {
-            ColumnarValue::Array(array) => {
-                let array_out = self.wrap_storage(array.clone())?;
-                Ok(ColumnarValue::Array(array_out))
-            }
-            ColumnarValue::Scalar(scalar_value) => {
-                let array_in = scalar_value.to_array()?;
-                let array_out = self.wrap_storage(array_in)?;
-                let scalar_out = ScalarValue::try_from_array(&array_out, 0)?;
-                Ok(ColumnarValue::Scalar(scalar_out))
-            }
-        }
+    /// Wrap storage scalar as a StructArray
+    pub fn wrap_scalar(&self, scalar: &ScalarValue) -> Result<ScalarValue> {
+        let array_in = scalar.to_array()?;
+        let array_out = self.wrap_array(array_in)?;
+        ScalarValue::try_from_array(&array_out, 0)
     }
 
     pub fn unwrap_arg(&self, arg: &ColumnarValue) -> Result<ColumnarValue> {
         match arg {
-            ColumnarValue::Array(array) => {
-                let struct_array = StructArray::from(array.to_data());
-                Ok(ColumnarValue::Array(struct_array.column(0).clone()))
-            }
-            ColumnarValue::Scalar(scalar_value) => {
-                let array = scalar_value.to_array()?;
-                let struct_array = StructArray::from(array.to_data());
-                let array_out = struct_array.column(0).clone();
-                let scalar_out = ScalarValue::try_from_array(&array_out, 0)?;
-                Ok(ColumnarValue::Scalar(scalar_out))
-            }
+            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(self.unwrap_array(array)?)),
+            ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(self.unwrap_scalar(scalar)?)),
         }
+    }
+
+    pub fn unwrap_array(&self, array: &ArrayRef) -> Result<ArrayRef> {
+        let struct_array = StructArray::from(array.to_data());
+        Ok(struct_array.column(0).clone())
+    }
+
+    pub fn unwrap_scalar(&self, scalar: &ScalarValue) -> Result<ScalarValue> {
+        let array = scalar.to_array()?;
+        let struct_array = StructArray::from(array.to_data());
+        let array_out = struct_array.column(0).clone();
+        ScalarValue::try_from_array(&array_out, 0)
     }
 
     /// Unwrap a Field into an ExtensionType if the field represents one

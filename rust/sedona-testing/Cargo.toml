@@ -1,0 +1,20 @@
+[package]
+name = "sedona-testing"
+version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description.workspace = true
+readme.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+arrow-schema = { workspace = true }
+arrow-array = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
+geo-traits = { workspace = true }
+geo-types = { workspace = true }
+sedona-schema = { path = "../sedona-schema" }
+wkb = { workspace = true }
+wkt = { workspace = true }

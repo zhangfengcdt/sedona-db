@@ -3928,6 +3928,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "sedona-testing"
+version = "0.0.1"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "datafusion-common",
+ "datafusion-expr",
+ "geo-traits",
+ "geo-types",
+ "sedona-schema",
+ "wkb",
+ "wkt",
+]
+
+[[package]]
 name = "semver"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"

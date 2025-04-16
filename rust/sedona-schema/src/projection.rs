@@ -56,7 +56,7 @@ pub fn wrap_batch(batch: RecordBatch) -> RecordBatch {
         .enumerate()
         .map(|(i, column)| {
             if let Some(ext) = ExtensionType::from_field(batch.schema().field(i)) {
-                ext.wrap_storage(column.clone()).unwrap()
+                ext.wrap_array(column.clone()).unwrap()
             } else {
                 column.clone()
             }

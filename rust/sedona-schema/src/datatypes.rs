@@ -1,5 +1,6 @@
+use arrow_array::ArrayRef;
 use datafusion_common::error::{DataFusionError, Result};
-use datafusion_common::{internal_err, not_impl_err};
+use datafusion_common::{internal_err, not_impl_err, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use serde_json::Value;
 use std::fmt::Debug;
@@ -189,6 +190,27 @@ impl SedonaPhysicalType {
             .map_or(Ok(arg.clone()), |extension| extension.wrap_arg(arg))
     }
 
+    /// Wrap an [`ArrayRef`] representing the storage of an [`ExtensionType`]
+    ///
+    /// This operation occurs when reading Arrow data from a datasource where
+    /// field metadata was used to construct the SedonaPhysicalType or after
+    /// a compute kernel has returned a value.
+    pub fn wrap_array(&self, arg: &ArrayRef) -> Result<ArrayRef> {
+        self.extension_type().map_or(Ok(arg.clone()), |extension| {
+            extension.wrap_array(arg.clone())
+        })
+    }
+
+    /// Wrap an [`ScalarValue`] representing the storage of an [`ExtensionType`]
+    ///
+    /// This operation occurs when reading Arrow data from a datasource where
+    /// field metadata was used to construct the SedonaPhysicalType or after
+    /// a compute kernel has returned a value.
+    pub fn wrap_scalar(&self, arg: &ScalarValue) -> Result<ScalarValue> {
+        self.extension_type()
+            .map_or(Ok(arg.clone()), |extension| extension.wrap_scalar(arg))
+    }
+
     /// Unwrap a [`ColumnarValue`] into storage
     ///
     /// This operation occurs when exporting Arrow data into an external datasource
@@ -196,6 +218,26 @@ impl SedonaPhysicalType {
     pub fn unwrap_arg(&self, arg: &ColumnarValue) -> Result<ColumnarValue> {
         self.extension_type()
             .map_or(Ok(arg.clone()), |extension| extension.unwrap_arg(arg))
+    }
+
+    /// Unwrap a [`ScalarValue`] into storage
+    ///
+    /// This operation occurs when exporting Arrow data into an external datasource
+    /// or before passing to a compute kernel.
+    pub fn unwrap_array(&self, array: &ArrayRef) -> Result<ArrayRef> {
+        self.extension_type()
+            .map_or(Ok(array.clone()), |extension| extension.unwrap_array(array))
+    }
+
+    /// Unwrap a [`ScalarValue`] into storage
+    ///
+    /// This operation occurs when exporting Arrow data into an external datasource
+    /// or before passing to a compute kernel.
+    pub fn unwrap_scalar(&self, scalar: &ScalarValue) -> Result<ScalarValue> {
+        self.extension_type()
+            .map_or(Ok(scalar.clone()), |extension| {
+                extension.unwrap_scalar(scalar)
+            })
     }
 
     /// Construct a [`Field`] as it would appear in an external [`RecordBatch`]
@@ -419,7 +461,10 @@ mod tests {
 
         let data_type = WKB_VIEW_GEOMETRY.data_type();
         assert!(data_type.is_nested());
-        assert_eq!(SedonaPhysicalType::from_data_type(&data_type)?, WKB_VIEW_GEOMETRY);
+        assert_eq!(
+            SedonaPhysicalType::from_data_type(&data_type)?,
+            WKB_VIEW_GEOMETRY
+        );
 
         Ok(())
     }

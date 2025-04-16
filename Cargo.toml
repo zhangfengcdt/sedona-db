@@ -2,6 +2,7 @@
 members = [
     "rust/sedona-functions",
     "rust/sedona-schema",
+    "rust/sedona-testing",
     "rust/sedona",
     "sedona-cli"
 ]
