@@ -1,0 +1,18 @@
+[package]
+name = "sedona-adbc"
+version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description.workspace = true
+readme.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+adbc_core = { version = "0.17.0" }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+datafusion = { workspace = true }
+futures = { workspace = true }
+sedona = { path = "../sedona" }
+tokio = { workspace = true, features = ["rt-multi-thread"] }

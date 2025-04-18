@@ -3,6 +3,16 @@
 version = 4
 
 [[package]]
+name = "adbc_core"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c00daa298739db8f033952bdf3c67ccbcf2ccee9652df7eb4c7cd3397a7646d"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+]
+
+[[package]]
 name = "addr2line"
 version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3870,6 +3880,19 @@ dependencies = [
  "geo-types",
  "sedona-functions",
  "sedona-schema",
+ "tokio",
+]
+
+[[package]]
+name = "sedona-adbc"
+version = "0.0.1"
+dependencies = [
+ "adbc_core",
+ "arrow-array",
+ "arrow-schema",
+ "datafusion",
+ "futures",
+ "sedona",
  "tokio",
 ]
 

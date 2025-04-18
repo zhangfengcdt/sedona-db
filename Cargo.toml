@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "rust/sedona-adbc",
     "rust/sedona-functions",
     "rust/sedona-schema",
     "rust/sedona-testing",
