@@ -73,17 +73,28 @@ impl ArgMatcher {
     /// Returns Some(physical_type) if this kernel applies to the input types or
     /// None otherwise.
     pub fn match_args(&self, args: &[SedonaType]) -> Result<Option<SedonaType>> {
+        if self.matches(args) {
+            Ok(Some(self.out_type.clone()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Check for an input type match
+    ///
+    /// Returns true if args applies to the input types.
+    pub fn matches(&self, args: &[SedonaType]) -> bool {
         if args.len() != self.matchers.len() {
-            return Ok(None);
+            return false;
         }
 
         for (actual, matcher) in zip(args, &self.matchers) {
             if !matcher.match_type(actual) {
-                return Ok(None);
+                return false;
             }
         }
 
-        Ok(Some(self.out_type.clone()))
+        true
     }
 
     /// Matches the given Arrow type using PartialEq
@@ -134,7 +145,7 @@ struct IsGeometryOrGeography {}
 
 impl TypeMatcher for IsGeometryOrGeography {
     fn match_type(&self, arg: &SedonaType) -> bool {
-        matches!(arg, SedonaType::Wkb(_, _))
+        matches!(arg, SedonaType::Wkb(_, _) | SedonaType::WkbView(_, _))
     }
 }
 
@@ -174,13 +185,7 @@ impl TypeMatcher for IsBinary {
     fn match_type(&self, arg: &SedonaType) -> bool {
         match arg {
             SedonaType::Arrow(data_type) => {
-                matches!(
-                    data_type,
-                    DataType::Binary
-                        | DataType::BinaryView
-                        | DataType::LargeBinary
-                        | DataType::FixedSizeBinary(_)
-                )
+                matches!(data_type, DataType::Binary | DataType::BinaryView)
             }
             _ => false,
         }
@@ -330,10 +335,6 @@ mod tests {
         assert!(ArgMatcher::is_string().match_type(&SedonaType::Arrow(DataType::LargeUtf8)));
         assert!(ArgMatcher::is_binary().match_type(&SedonaType::Arrow(DataType::Binary)));
         assert!(ArgMatcher::is_binary().match_type(&SedonaType::Arrow(DataType::BinaryView)));
-        assert!(ArgMatcher::is_binary().match_type(&SedonaType::Arrow(DataType::LargeBinary)));
-        assert!(
-            ArgMatcher::is_binary().match_type(&SedonaType::Arrow(DataType::FixedSizeBinary(1)))
-        );
     }
 
     #[test]

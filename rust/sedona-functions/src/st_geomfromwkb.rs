@@ -5,7 +5,7 @@ use datafusion_common::error::Result;
 use datafusion_expr::{
     scalar_doc_sections::DOC_SECTION_OTHER, ColumnarValue, Documentation, Volatility,
 };
-use sedona_schema::datatypes::{Edges, WKB_GEOGRAPHY, WKB_GEOMETRY};
+use sedona_schema::datatypes::{WKB_GEOMETRY, WKB_VIEW_GEOGRAPHY, WKB_VIEW_GEOMETRY};
 use sedona_schema::{
     datatypes::SedonaType,
     udf::{ArgMatcher, SedonaScalarKernel, SedonaScalarUDF},
@@ -21,7 +21,7 @@ pub fn st_geomfromwkb_udf() -> SedonaScalarUDF {
         "st_geomfromwkb",
         vec![Arc::new(STGeomFromWKB {
             validate: true,
-            out_type: WKB_GEOMETRY,
+            out_type: WKB_VIEW_GEOMETRY,
         })],
         Volatility::Immutable,
         Some(doc("ST_GeomFromWKB", "Geometry")),
@@ -36,7 +36,7 @@ pub fn st_geogfromwkb_udf() -> SedonaScalarUDF {
         "st_geogfromwkb",
         vec![Arc::new(STGeomFromWKB {
             validate: true,
-            out_type: WKB_GEOGRAPHY,
+            out_type: WKB_VIEW_GEOGRAPHY,
         })],
         Volatility::Immutable,
         Some(doc("ST_GeogFromWKB", "Geography")),
@@ -69,7 +69,6 @@ struct STGeomFromWKB {
 impl SedonaScalarKernel for STGeomFromWKB {
     fn return_type(&self, args: &[SedonaType]) -> Result<Option<SedonaType>> {
         let matcher = ArgMatcher::new(vec![ArgMatcher::is_binary()], self.out_type.clone());
-
         matcher.match_args(args)
     }
 
@@ -78,13 +77,13 @@ impl SedonaScalarKernel for STGeomFromWKB {
         arg_types: &[SedonaType],
         out_type: &SedonaType,
         args: &[ColumnarValue],
-        _: usize,
+        _num_rows: usize,
     ) -> Result<ColumnarValue> {
         if self.validate {
             let iter_type = match &arg_types[0] {
                 SedonaType::Arrow(data_type) => match data_type {
                     DataType::Binary => WKB_GEOMETRY,
-                    DataType::BinaryView => SedonaType::WkbView(Edges::Planar, None),
+                    DataType::BinaryView => WKB_VIEW_GEOGRAPHY,
                     _ => unreachable!(),
                 },
                 _ => {
@@ -107,72 +106,69 @@ impl SedonaScalarKernel for STGeomFromWKB {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::create_array;
+    use arrow_array::BinaryArray;
     use datafusion_common::scalar::ScalarValue;
     use datafusion_expr::ScalarUDF;
-    use sedona_schema::datatypes::WKB_GEOMETRY;
-
-    use crate::st_point::st_point_udf;
+    use rstest::rstest;
+    use sedona_testing::{
+        compare::assert_value_equal,
+        create::{create_array_value, create_scalar_value},
+    };
 
     use super::*;
 
-    const POINT: [u8; 21] = [
+    const POINT12: [u8; 21] = [
         0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x3f, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x40,
     ];
 
     #[test]
-    fn udf_array() -> Result<()> {
+    fn udf_metadata() {
+        let geog_from_wkb: ScalarUDF = st_geogfromwkb_udf().into();
+        assert_eq!(geog_from_wkb.name(), "st_geogfromwkb");
+        assert!(geog_from_wkb.documentation().is_some());
+
+        let geom_from_wkb: ScalarUDF = st_geomfromwkb_udf().into();
+        assert_eq!(geom_from_wkb.name(), "st_geomfromwkb");
+        assert!(geom_from_wkb.documentation().is_some());
+    }
+
+    #[rstest]
+    fn udf(#[values(DataType::Binary, DataType::BinaryView)] data_type: DataType) {
         let udf: ScalarUDF = st_geomfromwkb_udf().into();
-        assert_eq!(udf.name(), "st_geomfromwkb");
 
-        let n = 3;
-        let xs = create_array!(Float64, [Some(1.0), Some(2.0), None]);
-        let ys = create_array!(Float64, [5.0, 6.0, 7.0]);
-        let st_point: ScalarUDF = st_point_udf().into();
-        let array_from_point =
-            st_point.invoke_batch(&[ColumnarValue::Array(xs), ColumnarValue::Array(ys)], n)?;
-        let wkb_from_point = WKB_GEOMETRY.unwrap_arg(&array_from_point)?;
+        assert_value_equal(
+            &udf.invoke_batch(
+                &[ColumnarValue::Scalar(ScalarValue::Binary(Some(
+                    POINT12.to_vec(),
+                )))],
+                1,
+            )
+            .unwrap(),
+            &create_scalar_value(Some("POINT (1 2)"), &WKB_VIEW_GEOMETRY),
+        );
 
-        let out = udf.invoke_batch(&[wkb_from_point.clone()], n)?;
-        assert_eq!(&out.to_array(n)?, &array_from_point.to_array(n)?);
+        assert_value_equal(
+            &udf.invoke_batch(&[ColumnarValue::Scalar(ScalarValue::Binary(None))], 1)
+                .unwrap(),
+            &create_scalar_value(None, &WKB_VIEW_GEOMETRY),
+        );
 
-        Ok(())
+        let binary_array: BinaryArray = [Some(POINT12), None, Some(POINT12)].iter().collect();
+        let binary_value = ColumnarValue::Array(Arc::new(binary_array))
+            .cast_to(&data_type, None)
+            .unwrap();
+        assert_value_equal(
+            &udf.invoke_batch(&[binary_value], 1).unwrap(),
+            &create_array_value(
+                &[Some("POINT (1 2)"), None, Some("POINT (1 2)")],
+                &WKB_VIEW_GEOMETRY,
+            ),
+        );
     }
 
     #[test]
-    fn udf_scalar() -> Result<()> {
-        let udf: ScalarUDF = st_geomfromwkb_udf().into();
-
-        let wkb_scalar = ScalarValue::Binary(Some(POINT.to_vec()));
-        let out = udf.invoke_batch(&[wkb_scalar.clone().into()], 1)?;
-        if let ColumnarValue::Scalar(out_scalar) = WKB_GEOMETRY.unwrap_arg(&out)? {
-            assert_eq!(out_scalar, wkb_scalar)
-        } else {
-            panic!("Expected scalar binary but got {:?}", out);
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn udf_scalar_nulls() -> Result<()> {
-        let udf: ScalarUDF = st_geomfromwkb_udf().into();
-
-        let out = udf.invoke_batch(&[ScalarValue::Binary(None).into()], 1)?;
-        if let ColumnarValue::Scalar(ScalarValue::Binary(out_binary)) =
-            WKB_GEOMETRY.unwrap_arg(&out)?
-        {
-            assert!(out_binary.is_none());
-        } else {
-            panic!("Expected scalar binary but got {:?}", out);
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn udf_invalid_wkb() -> Result<()> {
+    fn invalid_wkb() {
         let udf: ScalarUDF = st_geomfromwkb_udf().into();
 
         let err = udf
@@ -180,19 +176,16 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(err.message(), "failed to fill whole buffer");
-
-        Ok(())
     }
 
     #[test]
-    fn udf_geog() -> Result<()> {
+    fn geog() {
         let udf: ScalarUDF = st_geogfromwkb_udf().into();
-        assert_eq!(udf.name(), "st_geogfromwkb");
+        let wkb_scalar = ScalarValue::Binary(Some(POINT12.to_vec()));
 
-        let wkb_scalar = ScalarValue::Binary(Some(POINT.to_vec()));
-        let out = udf.invoke_batch(&[wkb_scalar.clone().into()], 1)?;
-        assert_eq!(SedonaType::from_data_type(&out.data_type())?, WKB_GEOGRAPHY);
-
-        Ok(())
+        assert_value_equal(
+            &udf.invoke_batch(&[wkb_scalar.clone().into()], 1).unwrap(),
+            &create_scalar_value(Some("POINT (1 2)"), &WKB_VIEW_GEOGRAPHY),
+        );
     }
 }

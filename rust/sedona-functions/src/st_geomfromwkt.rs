@@ -1,7 +1,8 @@
 use std::{str::FromStr, sync::Arc, vec};
 
 use arrow_array::builder::BinaryBuilder;
-use datafusion_common::cast::as_string_array;
+use arrow_schema::DataType;
+use datafusion_common::cast::as_string_view_array;
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common::scalar::ScalarValue;
 use datafusion_expr::{
@@ -79,133 +80,121 @@ impl SedonaScalarKernel for STGeoFromWKT {
         args: &[ColumnarValue],
         num_rows: usize,
     ) -> Result<ColumnarValue> {
-        let wkt = &args[0];
-
-        // Would be slightly better to write directly to the builder's
-        // data buffer but not sure exactly how to do that.
-        let mut item_out = Vec::<u8>::with_capacity(64);
-
-        if let ColumnarValue::Scalar(ScalarValue::Utf8(x_scalar)) = wkt {
-            match x_scalar {
-                Some(wkt_bytes) => {
-                    invoke_scalar(wkt_bytes, &mut item_out)?;
-                    return Ok(ScalarValue::Binary(Some(item_out)).into());
+        match args[0].cast_to(&DataType::Utf8View, None)? {
+            ColumnarValue::Scalar(scalar) => match scalar {
+                ScalarValue::Utf8(maybe_wkt) | ScalarValue::Utf8View(maybe_wkt) => {
+                    match maybe_wkt {
+                        Some(wkt) => {
+                            let mut builder = BinaryBuilder::with_capacity(num_rows, 21);
+                            invoke_scalar(&wkt, &mut builder)?;
+                            builder.append_value(vec![]);
+                            let array = builder.finish();
+                            Ok(ScalarValue::Binary(Some(array.value(0).to_vec())).into())
+                        }
+                        None => Ok(ScalarValue::Binary(None).into()),
+                    }
                 }
-                None => {
-                    return Ok(ScalarValue::Binary(None).into());
-                }
+                _ => unreachable!(),
+            },
+            ColumnarValue::Array(array) => {
+                let mut builder = BinaryBuilder::with_capacity(num_rows, 21 * num_rows);
+                let utf8_array = as_string_view_array(&array)?;
+                let string_view_iter = as_string_view_array(utf8_array)?;
+                invoke_iter(string_view_iter, &mut builder)?;
+                let new_array = builder.finish();
+                Ok(ColumnarValue::Array(Arc::new(new_array)))
             }
         }
-
-        let x_array = wkt.to_array(num_rows)?;
-        let x_utf8 = as_string_array(&x_array)?;
-
-        let mut builder = BinaryBuilder::with_capacity(num_rows, 21 * num_rows);
-
-        for item in x_utf8 {
-            if let Some(wkt_bytes) = item {
-                invoke_scalar(wkt_bytes, &mut item_out)?;
-                builder.append_value(&item_out);
-            } else {
-                builder.append_null();
-            }
-        }
-
-        let new_array = builder.finish();
-        Ok(ColumnarValue::Array(Arc::new(new_array)))
     }
 }
 
-fn invoke_scalar(wkt_bytes: &str, mut item_out: &mut Vec<u8>) -> Result<()> {
+fn invoke_iter<'a, T>(array: T, builder: &mut BinaryBuilder) -> Result<()>
+where
+    T: IntoIterator<Item = Option<&'a str>>,
+{
+    for item in array {
+        if let Some(wkt_bytes) = item {
+            invoke_scalar(wkt_bytes, builder)?;
+            builder.append_value(vec![]);
+        } else {
+            builder.append_null();
+        }
+    }
+
+    Ok(())
+}
+
+fn invoke_scalar(wkt_bytes: &str, builder: &mut BinaryBuilder) -> Result<()> {
     let geometry: Wkt<f64> = Wkt::from_str(wkt_bytes)
         .map_err(|err| DataFusionError::Internal(format!("WKT parse error: {}", err)))?;
 
-    item_out.truncate(0);
-    write_geometry(&mut item_out, &geometry, wkb::Endianness::LittleEndian)
+    write_geometry(builder, &geometry, wkb::Endianness::LittleEndian)
         .map_err(|err| DataFusionError::Internal(format!("WKB write error: {}", err)))
 }
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::create_array;
+    use arrow_array::StringArray;
+    use arrow_schema::DataType;
     use datafusion_common::scalar::ScalarValue;
     use datafusion_expr::ScalarUDF;
-    use SedonaType;
-
-    use crate::st_point::st_point_udf;
+    use rstest::rstest;
+    use sedona_testing::{
+        compare::assert_value_equal,
+        create::{create_array_value, create_scalar_value},
+    };
 
     use super::*;
 
     #[test]
-    fn udf_array() -> Result<()> {
+    fn udf_metadata() {
+        let geog_from_wkt: ScalarUDF = st_geogfromwkt_udf().into();
+        assert_eq!(geog_from_wkt.name(), "st_geogfromwkt");
+        assert!(geog_from_wkt.documentation().is_some());
+
+        let geom_from_wkt: ScalarUDF = st_geomfromwkt_udf().into();
+        assert_eq!(geom_from_wkt.name(), "st_geomfromwkt");
+        assert!(geom_from_wkt.documentation().is_some());
+    }
+
+    #[rstest]
+    fn udf(#[values(DataType::Utf8, DataType::Utf8View)] data_type: DataType) {
         let udf: ScalarUDF = st_geomfromwkt_udf().into();
-        assert_eq!(udf.name(), "st_geomfromwkt");
 
-        let n = 3;
-        let xs = create_array!(Float64, [Some(1.0), Some(2.0), None]);
-        let ys = create_array!(Float64, [5.0, 6.0, 7.0]);
-        let st_point: ScalarUDF = st_point_udf().into();
-        let array_from_point =
-            st_point.invoke_batch(&[ColumnarValue::Array(xs), ColumnarValue::Array(ys)], n)?;
+        assert_value_equal(
+            &udf.invoke_batch(
+                &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                    "POINT (1 2)".to_string(),
+                )))],
+                1,
+            )
+            .unwrap(),
+            &create_scalar_value(Some("POINT (1 2)"), &WKB_GEOMETRY),
+        );
 
-        let wkt_point = create_array!(Utf8, [Some("POINT (1 5)"), Some("POINT (2 6)"), None]);
-        let out = udf.invoke_batch(&[ColumnarValue::Array(wkt_point)], n)?;
-        assert_eq!(&out.to_array(n)?, &array_from_point.to_array(n)?);
+        assert_value_equal(
+            &udf.invoke_batch(&[ColumnarValue::Scalar(ScalarValue::Utf8(None))], 1)
+                .unwrap(),
+            &create_scalar_value(None, &WKB_GEOMETRY),
+        );
 
-        Ok(())
+        let utf8_array: StringArray = [Some("POINT (1 2)"), None, Some("POINT (3 4)")]
+            .iter()
+            .collect();
+        let utf8_value = ColumnarValue::Array(Arc::new(utf8_array))
+            .cast_to(&data_type, None)
+            .unwrap();
+        assert_value_equal(
+            &udf.invoke_batch(&[utf8_value], 1).unwrap(),
+            &create_array_value(
+                &[Some("POINT (1 2)"), None, Some("POINT (3 4)")],
+                &WKB_GEOMETRY,
+            ),
+        );
     }
 
     #[test]
-    fn udf_scalar() -> Result<()> {
-        let udf: ScalarUDF = st_geomfromwkt_udf().into();
-
-        let st_point: ScalarUDF = st_point_udf().into();
-        let wkb_point = st_point.invoke_batch(
-            &[
-                ScalarValue::Float64(Some(1.0)).into(),
-                ScalarValue::Float64(Some(2.0)).into(),
-            ],
-            1,
-        )?;
-        let wkb_from_point =
-            if let ColumnarValue::Scalar(s) = WKB_GEOMETRY.unwrap_arg(&wkb_point)? {
-                s
-            } else {
-                panic!("Expected scalar but got {:?}", wkb_point);
-            };
-
-        let out = udf.invoke_batch(
-            &[ScalarValue::Utf8(Some("POINT (1 2)".to_string())).into()],
-            1,
-        )?;
-
-        if let ColumnarValue::Scalar(wkb_from_text) = WKB_GEOMETRY.unwrap_arg(&out)? {
-            assert_eq!(wkb_from_text, wkb_from_point);
-        } else {
-            panic!("Expected scalar but got {:?}", out);
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn udf_scalar_nulls() -> Result<()> {
-        let udf: ScalarUDF = st_geomfromwkt_udf().into();
-
-        let out = udf.invoke_batch(&[ScalarValue::Utf8(None).into()], 1)?;
-        if let ColumnarValue::Scalar(ScalarValue::Binary(out_binary)) =
-            WKB_GEOMETRY.unwrap_arg(&out)?
-        {
-            assert!(out_binary.is_none());
-        } else {
-            panic!("Expected scalar binary but got {:?}", out);
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn udf_invalid_wkt() -> Result<()> {
+    fn invalid_wkt() {
         let udf: ScalarUDF = st_geomfromwkt_udf().into();
 
         let err = udf
@@ -216,22 +205,19 @@ mod tests {
             .unwrap_err();
 
         assert!(err.message().starts_with("WKT parse error"));
-
-        Ok(())
     }
 
     #[test]
-    fn udf_geog() -> Result<()> {
+    fn geog() {
         let udf: ScalarUDF = st_geogfromwkt_udf().into();
-        assert_eq!(udf.name(), "st_geogfromwkt");
 
-        let out = udf.invoke_batch(
-            &[ScalarValue::Utf8(Some("POINT (1 2)".to_string())).into()],
-            1,
-        )?;
-
-        assert_eq!(SedonaType::from_data_type(&out.data_type())?, WKB_GEOGRAPHY);
-
-        Ok(())
+        assert_value_equal(
+            &udf.invoke_batch(
+                &[ScalarValue::Utf8(Some("POINT (1 2)".to_string())).into()],
+                1,
+            )
+            .unwrap(),
+            &create_scalar_value(Some("POINT (1 2)"), &WKB_GEOGRAPHY),
+        );
     }
 }

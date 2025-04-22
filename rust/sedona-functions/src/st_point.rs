@@ -34,12 +34,12 @@ pub fn st_point_udf() -> SedonaScalarUDF {
 /// See [`st_geogpoint_udf`] for the corresponding geography constructor.
 pub fn st_geogpoint_udf() -> SedonaScalarUDF {
     SedonaScalarUDF::new(
-        "ST_GeogPoint",
+        "st_geogpoint",
         vec![Arc::new(STGeoFromPoint {
             out_type: WKB_GEOGRAPHY,
         })],
         Volatility::Immutable,
-        Some(doc("ST_GeogPoint", "Geography")),
+        Some(doc("st_geogpoint", "Geography")),
     )
 }
 
@@ -78,31 +78,28 @@ impl SedonaScalarKernel for STGeoFromPoint {
         args: &[ColumnarValue],
         num_rows: usize,
     ) -> Result<ColumnarValue> {
-        let x = &args[0];
-        let y = &args[1];
+        let x = &args[0].cast_to(&DataType::Float64, None)?;
+        let y = &args[1].cast_to(&DataType::Float64, None)?;
 
         let mut item: [u8; 21] = [0x00; 21];
         item[0] = 0x01;
         item[1] = 0x01;
 
         // Handle the Scalar case to ensure that Scalar + Scalar -> Scalar
-        if let (ColumnarValue::Scalar(x_scalar), ColumnarValue::Scalar(y_scalar)) = (x, y) {
-            let scalar_floats = (
-                x_scalar.cast_to(&DataType::Float64)?,
-                y_scalar.cast_to(&DataType::Float64)?,
-            );
-            if let (ScalarValue::Float64(x_float), ScalarValue::Float64(y_float)) = scalar_floats {
-                if let (Some(x), Some(y)) = (x_float, y_float) {
-                    populate_wkb_item(&mut item, x, y);
-                    return Ok(ScalarValue::Binary(Some(item.to_vec())).into());
-                } else {
-                    return Ok(ScalarValue::Binary(None).into());
-                }
+        if let (
+            ColumnarValue::Scalar(ScalarValue::Float64(x_float)),
+            ColumnarValue::Scalar(ScalarValue::Float64(y_float)),
+        ) = (x, y)
+        {
+            if let (Some(x), Some(y)) = (x_float, y_float) {
+                populate_wkb_item(&mut item, x, y);
+                return Ok(ScalarValue::Binary(Some(item.to_vec())).into());
             } else {
-                unreachable!()
+                return Ok(ScalarValue::Binary(None).into());
             }
         }
 
+        // Ensure both sides are arrays before iterating
         let x_array = x.to_array(num_rows)?;
         let y_array = y.to_array(num_rows)?;
         let x_f64 = as_float64_array(&x_array)?;
@@ -113,7 +110,7 @@ impl SedonaScalarKernel for STGeoFromPoint {
         for (x_elem, y_elem) in zip(x_f64, y_f64) {
             match (x_elem, y_elem) {
                 (Some(x), Some(y)) => {
-                    populate_wkb_item(&mut item, x, y);
+                    populate_wkb_item(&mut item, &x, &y);
                     builder.append_value(item);
                 }
                 _ => {
@@ -127,7 +124,7 @@ impl SedonaScalarKernel for STGeoFromPoint {
     }
 }
 
-fn populate_wkb_item(item: &mut [u8], x: f64, y: f64) {
+fn populate_wkb_item(item: &mut [u8], x: &f64, y: &f64) {
     item[5..13].copy_from_slice(&x.to_le_bytes());
     item[13..21].copy_from_slice(&y.to_le_bytes());
 }
@@ -136,157 +133,126 @@ fn populate_wkb_item(item: &mut [u8], x: f64, y: f64) {
 mod tests {
     use arrow_array::create_array;
     use arrow_schema::DataType;
-    use datafusion_common::cast::as_binary_array;
     use datafusion_expr::ScalarUDF;
-    use geo_traits::{to_geo::ToGeoGeometry, Dimensions, GeometryTrait};
-    use geo_types::Point;
-    use sedona_schema::datatypes::SedonaType;
+    use rstest::rstest;
+    use sedona_testing::{
+        compare::assert_value_equal,
+        create::{create_array_value, create_scalar_value},
+    };
 
     use super::*;
 
     #[test]
-    fn udf_signature() -> Result<()> {
+    fn udf_metadata() {
+        let geom_from_point: ScalarUDF = st_point_udf().into();
+        assert_eq!(geom_from_point.name(), "st_point");
+        assert!(geom_from_point.documentation().is_some());
+
+        let geog_from_point: ScalarUDF = st_geogpoint_udf().into();
+        assert_eq!(geog_from_point.name(), "st_geogpoint");
+        assert!(geog_from_point.documentation().is_some());
+    }
+
+    #[rstest]
+    #[case(DataType::Float64, DataType::Float64)]
+    #[case(DataType::Float32, DataType::Float64)]
+    #[case(DataType::Float64, DataType::Float32)]
+    #[case(DataType::Float32, DataType::Float32)]
+    fn udf_invoke(#[case] lhs_type: DataType, #[case] rhs_type: DataType) {
         let udf: ScalarUDF = st_point_udf().into();
 
-        // All numeric combinations should work
-        assert_eq!(
-            udf.return_type(&[DataType::Float64, DataType::Float64])?,
-            WKB_GEOMETRY.data_type()
+        let lhs_scalar_null = ScalarValue::Float64(None).cast_to(&lhs_type).unwrap();
+        let lhs_scalar = ScalarValue::Float64(Some(1.0)).cast_to(&lhs_type).unwrap();
+        let rhs_scalar_null = ScalarValue::Float64(None).cast_to(&rhs_type).unwrap();
+        let rhs_scalar = ScalarValue::Float64(Some(2.0)).cast_to(&rhs_type).unwrap();
+        let lhs_array =
+            ColumnarValue::Array(create_array!(Float64, [Some(1.0), Some(2.0), None, None]))
+                .cast_to(&lhs_type, None)
+                .unwrap();
+        let rhs_array =
+            ColumnarValue::Array(create_array!(Float64, [Some(5.0), None, Some(7.0), None]))
+                .cast_to(&rhs_type, None)
+                .unwrap();
+
+        // Check scalar
+        assert_value_equal(
+            &udf.invoke_batch(&[lhs_scalar.clone().into(), rhs_scalar.clone().into()], 3)
+                .unwrap(),
+            &create_scalar_value(Some("POINT (1 2)"), &WKB_GEOMETRY),
         );
 
-        assert_eq!(
-            udf.return_type(&[DataType::Int8, DataType::Float16])?,
-            WKB_GEOMETRY.data_type()
+        // Check scalar null combinations
+        assert_value_equal(
+            &udf.invoke_batch(
+                &[lhs_scalar.clone().into(), rhs_scalar_null.clone().into()],
+                1,
+            )
+            .unwrap(),
+            &create_scalar_value(None, &WKB_GEOMETRY),
         );
 
-        // Non-numeric things should not work
-        assert_eq!(
-            udf.return_type(&[DataType::Utf8, DataType::Float64])
-                .unwrap_err()
-                .message(),
-            "st_point([Arrow(Utf8), Arrow(Float64)]): No kernel matching arguments"
+        assert_value_equal(
+            &udf.invoke_batch(
+                &[lhs_scalar_null.clone().into(), rhs_scalar.clone().into()],
+                1,
+            )
+            .unwrap(),
+            &create_scalar_value(None, &WKB_GEOMETRY),
         );
 
-        // Wrong number of args
-        assert_eq!(
-            udf.return_type(&[]).unwrap_err().message(),
-            "st_point([]): No kernel matching arguments"
+        assert_value_equal(
+            &udf.invoke_batch(
+                &[
+                    lhs_scalar_null.clone().into(),
+                    rhs_scalar_null.clone().into(),
+                ],
+                1,
+            )
+            .unwrap(),
+            &create_scalar_value(None, &WKB_GEOMETRY),
         );
 
-        Ok(())
+        // Check array
+        assert_value_equal(
+            &udf.invoke_batch(&[lhs_array.clone(), rhs_array.clone()], 4)
+                .unwrap(),
+            &create_array_value(&[Some("POINT (1 5)"), None, None, None], &WKB_GEOMETRY),
+        );
+
+        // Check array/scalar combinations
+        assert_value_equal(
+            &udf.invoke_batch(&[lhs_array.clone(), rhs_scalar.clone().into()], 4)
+                .unwrap(),
+            &create_array_value(
+                &[Some("POINT (1 2)"), Some("POINT (2 2)"), None, None],
+                &WKB_GEOMETRY,
+            ),
+        );
+
+        assert_value_equal(
+            &udf.invoke_batch(&[lhs_scalar.clone().into(), rhs_array], 4)
+                .unwrap(),
+            &create_array_value(
+                &[Some("POINT (1 5)"), None, Some("POINT (1 7)"), None],
+                &WKB_GEOMETRY,
+            ),
+        );
     }
 
     #[test]
-    fn udf_array() -> Result<()> {
-        let udf: ScalarUDF = st_point_udf().into();
-        assert_eq!(udf.name(), "st_point");
-
-        let n = 3;
-        let xs = create_array!(Float64, [Some(1.0), Some(2.0), None]);
-        let ys = create_array!(Float64, [5.0, 6.0, 7.0]);
-
-        let out = udf.invoke_batch(
-            &[
-                ColumnarValue::Array(xs.clone()),
-                ColumnarValue::Array(ys.clone()),
-            ],
-            n,
-        )?;
-        match &out {
-            ColumnarValue::Array(_) => (),
-            ColumnarValue::Scalar(_) => panic!("Expected array"),
-        }
-
-        let out_binary = WKB_GEOMETRY.unwrap_arg(&out)?.to_array(n)?;
-
-        assert_eq!(out_binary.len(), n);
-        assert!(WKB_GEOMETRY.match_signature(&out.data_type().try_into().unwrap()));
-        for (i, item) in as_binary_array(&out_binary)?.iter().enumerate() {
-            if i == 2 {
-                assert!(item.is_none());
-                continue;
-            }
-
-            let wkb_item = wkb::reader::read_wkb(item.unwrap()).unwrap();
-            assert_eq!(wkb_item.dim(), Dimensions::Xy);
-            let point: Point = wkb_item.to_geometry().try_into().unwrap();
-            assert_eq!(point.x(), xs.value(i));
-            assert_eq!(point.y(), ys.value(i));
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn udf_scalar() -> Result<()> {
-        let udf: ScalarUDF = st_point_udf().into();
-
-        let out = udf.invoke_batch(
-            &[
-                ScalarValue::Float64(Some(1.0)).into(),
-                ScalarValue::Float64(Some(2.0)).into(),
-            ],
-            3,
-        )?;
-
-        if let ColumnarValue::Scalar(out_scalar) = WKB_GEOMETRY.unwrap_arg(&out)? {
-            if let ScalarValue::Binary(out_binary) = out_scalar {
-                let bytes = out_binary.unwrap();
-                let wkb_item = wkb::reader::read_wkb(&bytes).unwrap();
-                assert_eq!(wkb_item.dim(), Dimensions::Xy);
-                let point: Point = wkb_item.to_geometry().try_into().unwrap();
-                assert_eq!(point.x(), 1.0);
-                assert_eq!(point.y(), 2.0);
-            } else {
-                panic!("Expected binary scalar but got {:?}", out);
-            }
-        } else {
-            panic!("Expected scalar but got {:?}", out);
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn udf_scalar_null() -> Result<()> {
-        let udf: ScalarUDF = st_point_udf().into();
-
-        let out = udf.invoke_batch(
-            &[
-                ScalarValue::Float64(Some(1.0)).into(),
-                ScalarValue::Float64(None).into(),
-            ],
-            3,
-        )?;
-
-        if let ColumnarValue::Scalar(out_scalar) = WKB_GEOMETRY.unwrap_arg(&out)? {
-            if let ScalarValue::Binary(out_binary) = out_scalar {
-                assert!(out_binary.is_none());
-            } else {
-                panic!("Expected binary scalar but got {:?}", out);
-            }
-        } else {
-            panic!("Expected scalar but got {:?}", out);
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn udf_geog() -> Result<()> {
+    fn geog() {
         let udf: ScalarUDF = st_geogpoint_udf().into();
-        assert_eq!(udf.name(), "ST_GeogPoint");
 
-        let out = udf.invoke_batch(
-            &[
-                ScalarValue::Float64(None).into(),
-                ScalarValue::Float64(None).into(),
-            ],
-            3,
-        )?;
-
-        assert_eq!(SedonaType::from_data_type(&out.data_type())?, WKB_GEOGRAPHY);
-
-        Ok(())
+        assert_value_equal(
+            &udf.invoke_batch(
+                &[
+                    ScalarValue::Float64(Some(1.0)).into(),
+                    ScalarValue::Float64(Some(2.0)).into(),
+                ],
+                1,
+            )
+            .unwrap(),
+            &create_scalar_value(Some("POINT (1 2)"), &WKB_GEOGRAPHY),
+        );
     }
 }

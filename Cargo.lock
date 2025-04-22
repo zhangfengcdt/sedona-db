@@ -3934,7 +3934,9 @@ dependencies = [
  "datafusion-expr",
  "geo-traits",
  "geo-types",
+ "rstest",
  "sedona-schema",
+ "sedona-testing",
  "wkb",
  "wkt",
 ]

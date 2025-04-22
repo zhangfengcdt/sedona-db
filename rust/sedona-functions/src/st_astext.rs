@@ -94,77 +94,51 @@ impl SedonaScalarKernel for STAsText {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::{create_array, ArrayRef};
+    use arrow_array::StringArray;
     use datafusion_common::scalar::ScalarValue;
     use datafusion_expr::ScalarUDF;
-    use sedona_schema::datatypes::WKB_GEOMETRY;
-
-    use crate::st_point::st_point_udf;
+    use rstest::rstest;
+    use sedona_schema::datatypes::{
+        WKB_GEOGRAPHY, WKB_GEOMETRY, WKB_VIEW_GEOGRAPHY, WKB_VIEW_GEOMETRY,
+    };
+    use sedona_testing::{
+        compare::assert_value_equal, create::create_array_value, create::create_scalar_value,
+    };
 
     use super::*;
 
     #[test]
-    fn udf() -> Result<()> {
-        let st_point: ScalarUDF = st_point_udf().into();
-        let wkb_point = st_point.invoke_batch(
-            &[
-                ScalarValue::Float64(Some(1.0)).into(),
-                ScalarValue::Float64(Some(2.0)).into(),
-            ],
-            1,
-        )?;
-
+    fn udf_metadata() {
         let udf: ScalarUDF = st_astext_udf().into();
         assert_eq!(udf.name(), "st_astext");
-
-        // Check scalar input -> scalar output
-        let out_scalar = udf.invoke_batch(&[wkb_point.clone()], 1)?;
-        match out_scalar {
-            ColumnarValue::Array(_) => panic!("expected scalar"),
-            ColumnarValue::Scalar(scalar) => {
-                assert_eq!(scalar, ScalarValue::Utf8(Some("POINT(1 2)".to_string())));
-            }
-        }
-
-        // Check array input -> array output
-        let wkb_point_array = ColumnarValue::Array(wkb_point.clone().to_array(1)?);
-        let out_array = udf.invoke_batch(&[wkb_point_array], 1)?;
-        match out_array {
-            ColumnarValue::Array(array) => {
-                let expected: ArrayRef = create_array!(Utf8, ["POINT(1 2)"]);
-                assert_eq!(&array, &expected);
-            }
-            ColumnarValue::Scalar(_) => panic!("expected array"),
-        }
-
-        Ok(())
+        assert!(udf.documentation().is_some())
     }
 
-    #[test]
-    fn udf_nulls() -> Result<()> {
+    #[rstest]
+    fn udf(
+        #[values(WKB_GEOMETRY, WKB_GEOGRAPHY, WKB_VIEW_GEOMETRY, WKB_VIEW_GEOGRAPHY)]
+        sedona_type: SedonaType,
+    ) {
         let udf: ScalarUDF = st_astext_udf().into();
-        let null_wkb_scalar = WKB_GEOMETRY.wrap_arg(&ScalarValue::Binary(None).into())?;
 
-        // Check scalar input -> scalar output
-        let out_scalar = udf.invoke_batch(&[null_wkb_scalar.clone()], 1)?;
-        match out_scalar {
-            ColumnarValue::Array(_) => panic!("Expected scalar"),
-            ColumnarValue::Scalar(item) => assert!(item.is_null()),
-        }
+        assert_value_equal(
+            &udf.invoke_batch(&[create_scalar_value(Some("POINT (1 2)"), &sedona_type)], 1)
+                .unwrap(),
+            &ColumnarValue::Scalar(ScalarValue::Utf8(Some("POINT(1 2)".to_string()))),
+        );
 
-        // Check array input -> array output
-        let null_wkb_array = ColumnarValue::Array(null_wkb_scalar.clone().to_array(1)?);
-        let out_array = udf.invoke_batch(&[null_wkb_array], 1)?;
-        match out_array {
-            ColumnarValue::Array(array) => {
-                let mut expected_builder = StringBuilder::new();
-                expected_builder.append_null();
-                let expected: ArrayRef = Arc::new(expected_builder.finish());
-                assert_eq!(&array, &expected);
-            }
-            ColumnarValue::Scalar(_) => panic!("expected array"),
-        }
+        assert_value_equal(
+            &udf.invoke_batch(&[create_scalar_value(None, &sedona_type)], 1)
+                .unwrap(),
+            &ColumnarValue::Scalar(ScalarValue::Utf8(None)),
+        );
 
-        Ok(())
+        let wkt_values = [Some("POINT(1 2)"), None, Some("POINT(3 5)")];
+        let expected_array: StringArray = wkt_values.iter().collect();
+        assert_value_equal(
+            &udf.invoke_batch(&[create_array_value(&wkt_values, &sedona_type)], 1)
+                .unwrap(),
+            &ColumnarValue::Array(Arc::new(expected_array)),
+        );
     }
 }

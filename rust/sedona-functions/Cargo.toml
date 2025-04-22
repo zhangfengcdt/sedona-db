@@ -8,6 +8,10 @@ readme.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[dev-dependencies]
+rstest = { workspace = true }
+sedona-testing = { path = "../sedona-testing" }
+
 [dependencies]
 arrow-schema = { workspace = true }
 arrow-array = { workspace = true }
