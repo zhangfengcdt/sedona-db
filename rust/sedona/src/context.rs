@@ -4,20 +4,30 @@ use arrow_array::RecordBatch;
 use async_trait::async_trait;
 use datafusion::{
     catalog::TableProvider,
+    common::{plan_datafusion_err, plan_err},
     error::{DataFusionError, Result},
-    execution::SendableRecordBatchStream,
-    prelude::{DataFrame, SessionContext},
+    execution::{runtime_env::RuntimeEnvBuilder, SendableRecordBatchStream, SessionStateBuilder},
+    prelude::{DataFrame, SessionConfig, SessionContext},
+    sql::parser::DFParser,
 };
+use datafusion_expr::sqlparser::dialect::dialect_from_str;
 use sedona_expr::projection::wrap_batch;
+use sedona_geoparquet::format::GeoParquetFormatFactory;
 
-use crate::projection::{unwrap_df, wrap_df};
-use crate::{functions::register_sedona_scalar_udfs, projection::unwrap_stream};
+use crate::{
+    catalog::DynamicObjectStoreCatalog,
+    projection::{unwrap_df, wrap_df},
+};
+use crate::{
+    exec::create_plan_from_sql, functions::register_sedona_scalar_udfs, projection::unwrap_stream,
+};
 
 /// Sedona SessionContext wrapper
 ///
 /// As Sedona extends DataFusion, we also extend its context and include the
 /// default geometry-specific functions and datasources (which may vary depending
-/// on the feature flags used to build the sedona crate).
+/// on the feature flags used to build the sedona crate). This provides a common
+/// interface for configuring the behaviour of
 pub struct SedonaContext {
     pub ctx: SessionContext,
 }
@@ -25,14 +35,75 @@ pub struct SedonaContext {
 impl SedonaContext {
     /// Creates a new context with default options
     pub fn new() -> Self {
-        let ctx = SessionContext::new();
+        Self::new_from_context(SessionContext::new())
+    }
+
+    /// Creates a new context with default interactive options
+    ///
+    /// Initializes a context from the current environment and registers access
+    /// to the local file system.
+    pub async fn new_local_interactive() -> Result<Self> {
+        // These three objects enable configuring various elements of the runtime.
+        // Eventually we probably want to have a common set of configuration parameters
+        // exposed via the CLI/Python as arguments, via ADBC as connection options,
+        // and perhaps for all of these initializing them optionally from environment
+        // variables.
+        let session_config = SessionConfig::from_env()?.with_information_schema(true);
+        let rt_builder = RuntimeEnvBuilder::new();
+        let runtime_env = rt_builder.build_arc()?;
+
+        let mut state = SessionStateBuilder::new()
+            .with_default_features()
+            .with_runtime_env(runtime_env)
+            .with_config(session_config)
+            .build();
+        state.register_file_format(Arc::new(GeoParquetFormatFactory::new()), true)?;
+
+        // Enable dynamic file query (i.e., select * from 'filename')
+        let ctx = SessionContext::new_with_state(state).enable_url_table();
+
+        // Install dynamic catalog provider that can register required object stores
+        ctx.refresh_catalogs().await?;
+        ctx.register_catalog_list(Arc::new(DynamicObjectStoreCatalog::new(
+            ctx.state().catalog_list().clone(),
+            ctx.state_weak_ref(),
+        )));
+
+        Ok(Self::new_from_context(ctx))
+    }
+
+    /// Creates a new context from a previously configured DataFusion context
+    pub fn new_from_context(ctx: SessionContext) -> Self {
         register_sedona_scalar_udfs(&ctx);
         Self { ctx }
     }
 
-    /// Creates a [`DataFrame`] from SQL query text.
+    /// Creates a [`DataFrame`] from SQL query text that may contain one or more
+    /// statements
+    pub async fn multi_sql(&self, sql: &str) -> Result<Vec<DataFrame>> {
+        let task_ctx = self.ctx.task_ctx();
+        let dialect = &task_ctx.session_config().options().sql_parser.dialect;
+        let dialect = dialect_from_str(dialect)
+            .ok_or_else(|| plan_datafusion_err!("Unsupported SQL dialect: {dialect}"))?;
+
+        let statements = DFParser::parse_sql_with_dialect(sql, dialect.as_ref())?;
+        let mut results = Vec::with_capacity(statements.len());
+        for statement in statements {
+            let plan = create_plan_from_sql(self, statement.clone()).await?;
+            results.push(DataFrame::new(self.ctx.state(), plan));
+        }
+
+        Ok(results)
+    }
+
+    /// Creates a [`DataFrame`] from SQL query text containing a single statement
     pub async fn sql(&self, sql: &str) -> Result<DataFrame> {
-        self.ctx.sql(sql).await
+        let results = self.multi_sql(sql).await?;
+        if results.len() != 1 {
+            return plan_err!("Expected single SQL statement");
+        }
+
+        Ok(results[0].clone())
     }
 
     /// Registers the [`RecordBatch`] as the specified table name
@@ -119,7 +190,7 @@ mod tests {
     use datafusion_expr::{ColumnarValue, ScalarUDF};
     use futures::TryStreamExt;
     use sedona_functions::st_point::st_point_udf;
-    use sedona_schema::datatypes::{SedonaType, WKB_GEOMETRY};
+    use sedona_schema::datatypes::{lnglat, Edges, SedonaType, WKB_GEOMETRY};
 
     use super::*;
 
@@ -234,5 +305,33 @@ mod tests {
         assert_eq!(batches_out[1], batch_in);
 
         Ok(())
+    }
+
+    fn test_geoparquet(group: &str, name: &str) -> String {
+        let geoarrow_data = "../../submodules/geoarrow-data";
+        format!("{geoarrow_data}/{group}/files/{group}_{name}_geo.parquet")
+    }
+
+    #[tokio::test]
+    async fn geoparquet_format() {
+        // Make sure that our context can be set up to identify and read
+        // GeoParquet files
+        let ctx = SedonaContext::new_local_interactive().await.unwrap();
+        let example = test_geoparquet("example", "geometry");
+        let df = ctx.ctx.table(example).await.unwrap();
+        let sedona_types: Result<Vec<_>> = df
+            .schema()
+            .as_arrow()
+            .fields()
+            .iter()
+            .map(|f| SedonaType::from_data_type(f.data_type()))
+            .collect();
+        let sedona_types = sedona_types.unwrap();
+        assert_eq!(sedona_types.len(), 2);
+        assert_eq!(sedona_types[0], SedonaType::Arrow(DataType::Utf8View));
+        assert_eq!(
+            sedona_types[1],
+            SedonaType::WkbView(Edges::Planar, lnglat())
+        );
     }
 }

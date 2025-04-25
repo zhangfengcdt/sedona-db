@@ -19,7 +19,7 @@ use adbc_core::{
 
 use crate::{
     err_not_implemented, err_unrecognized_option, reader::SedonaStreamReader,
-    statement::SedonaStatement,
+    statement::SedonaStatement, utils::from_datafusion_error,
 };
 
 pub struct SedonaConnection {
@@ -31,8 +31,6 @@ impl SedonaConnection {
     pub(crate) fn try_new(
         opts: impl IntoIterator<Item = (OptionConnection, OptionValue)>,
     ) -> Result<Self> {
-        let ctx = SedonaContext::new();
-
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -42,6 +40,12 @@ impl SedonaConnection {
                     Status::Internal,
                 )
             })?;
+
+        let ctx = runtime.block_on(async {
+            SedonaContext::new_local_interactive()
+                .await
+                .map_err(from_datafusion_error)
+        })?;
 
         let mut connection = Self {
             runtime: Arc::new(runtime),

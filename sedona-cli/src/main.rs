@@ -15,23 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::env;
 use std::path::Path;
 use std::process::ExitCode;
-use std::sync::{Arc, LazyLock};
 
 use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::context::SessionConfig;
-use datafusion::execution::memory_pool::{FairSpillPool, GreedyMemoryPool, MemoryPool};
-use datafusion::execution::runtime_env::RuntimeEnvBuilder;
-use datafusion::prelude::SessionContext;
-use sedona::functions::register_sedona_scalar_udfs;
-use sedona_cli::catalog::DynamicObjectStoreCatalog;
-use sedona_cli::functions::ParquetMetadataFunc;
+use sedona::context::SedonaContext;
 use sedona_cli::{
     exec,
-    pool_type::PoolType,
     print_format::PrintFormat,
     print_options::{MaxRows, PrintOptions},
     DATAFUSION_CLI_VERSION,
@@ -55,14 +46,6 @@ struct Args {
     data_path: Option<String>,
 
     #[clap(
-        short = 'b',
-        long,
-        help = "The batch size of each query, or use DataFusion default",
-        value_parser(parse_batch_size)
-    )]
-    batch_size: Option<usize>,
-
-    #[clap(
         short = 'c',
         long,
         num_args = 0..,
@@ -70,14 +53,6 @@ struct Args {
         value_parser(parse_command)
     )]
     command: Vec<String>,
-
-    #[clap(
-        short = 'm',
-        long,
-        help = "The memory pool limitation (e.g. '10g'), default to None (no limit)",
-        value_parser(extract_memory_pool_size)
-    )]
-    memory_limit: Option<usize>,
 
     #[clap(
         short,
@@ -107,13 +82,6 @@ struct Args {
         help = "Reduce printing other than the results and work quietly"
     )]
     quiet: bool,
-
-    #[clap(
-        long,
-        help = "Specify the memory pool type 'greedy' or 'fair'",
-        default_value_t = PoolType::Greedy
-    )]
-    mem_pool_type: PoolType,
 
     #[clap(
         long,
@@ -151,40 +119,7 @@ async fn main_inner() -> Result<()> {
         env::set_current_dir(p).unwrap();
     };
 
-    let mut session_config = SessionConfig::from_env()?.with_information_schema(true);
-
-    if let Some(batch_size) = args.batch_size {
-        session_config = session_config.with_batch_size(batch_size);
-    };
-
-    let mut rt_builder = RuntimeEnvBuilder::new();
-    // set memory pool size
-    if let Some(memory_limit) = args.memory_limit {
-        // set memory pool type
-        let pool: Arc<dyn MemoryPool> = match args.mem_pool_type {
-            PoolType::Fair => Arc::new(FairSpillPool::new(memory_limit)),
-            PoolType::Greedy => Arc::new(GreedyMemoryPool::new(memory_limit)),
-        };
-        rt_builder = rt_builder.with_memory_pool(pool)
-    }
-
-    let runtime_env = rt_builder.build_arc()?;
-
-    // enable dynamic file query
-    let ctx = SessionContext::new_with_config_rt(session_config, runtime_env)
-        .enable_url_table();
-    ctx.refresh_catalogs().await?;
-    // install dynamic catalog provider that can register required object stores
-    ctx.register_catalog_list(Arc::new(DynamicObjectStoreCatalog::new(
-        ctx.state().catalog_list().clone(),
-        ctx.state_weak_ref(),
-    )));
-    // register `parquet_metadata` table function to get metadata from parquet files
-    ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
-
-    // sedona-cli start
-    register_sedona_scalar_udfs(&ctx);
-    // sedona-cli end
+    let ctx = SedonaContext::new_local_interactive().await?;
 
     let mut print_options = PrintOptions {
         format: args.format,
@@ -194,34 +129,11 @@ async fn main_inner() -> Result<()> {
     };
 
     let commands = args.command;
-    let files = args.file;
-    let rc = match args.rc {
-        Some(file) => file,
-        None => {
-            let mut files = Vec::new();
-            let home = dirs::home_dir();
-            if let Some(p) = home {
-                let home_rc = p.join(".datafusionrc");
-                if home_rc.exists() {
-                    files.push(home_rc.into_os_string().into_string().unwrap());
-                }
-            }
-            files
-        }
-    };
 
-    if commands.is_empty() && files.is_empty() {
-        if !rc.is_empty() {
-            exec::exec_from_files(&ctx, rc, &print_options).await?;
-        }
-        // TODO maybe we can have thiserror for cli but for now let's keep it simple
+    if commands.is_empty() {
         return exec::exec_from_repl(&ctx, &mut print_options)
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)));
-    }
-
-    if !files.is_empty() {
-        exec::exec_from_files(&ctx, files, &print_options).await?;
     }
 
     if !commands.is_empty() {
@@ -247,140 +159,10 @@ fn parse_valid_data_dir(dir: &str) -> Result<String, String> {
     }
 }
 
-fn parse_batch_size(size: &str) -> Result<usize, String> {
-    match size.parse::<usize>() {
-        Ok(size) if size > 0 => Ok(size),
-        _ => Err(format!("Invalid batch size '{}'", size)),
-    }
-}
-
 fn parse_command(command: &str) -> Result<String, String> {
     if !command.is_empty() {
         Ok(command.to_string())
     } else {
         Err("-c flag expects only non empty commands".to_string())
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum ByteUnit {
-    Byte,
-    KiB,
-    MiB,
-    GiB,
-    TiB,
-}
-
-impl ByteUnit {
-    fn multiplier(&self) -> u64 {
-        match self {
-            ByteUnit::Byte => 1,
-            ByteUnit::KiB => 1 << 10,
-            ByteUnit::MiB => 1 << 20,
-            ByteUnit::GiB => 1 << 30,
-            ByteUnit::TiB => 1 << 40,
-        }
-    }
-}
-
-fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
-    static BYTE_SUFFIXES: LazyLock<HashMap<&'static str, ByteUnit>> =
-        LazyLock::new(|| {
-            let mut m = HashMap::new();
-            m.insert("b", ByteUnit::Byte);
-            m.insert("k", ByteUnit::KiB);
-            m.insert("kb", ByteUnit::KiB);
-            m.insert("m", ByteUnit::MiB);
-            m.insert("mb", ByteUnit::MiB);
-            m.insert("g", ByteUnit::GiB);
-            m.insert("gb", ByteUnit::GiB);
-            m.insert("t", ByteUnit::TiB);
-            m.insert("tb", ByteUnit::TiB);
-            m
-        });
-
-    static SUFFIX_REGEX: LazyLock<regex::Regex> =
-        LazyLock::new(|| regex::Regex::new(r"^(-?[0-9]+)([a-z]+)?$").unwrap());
-
-    let lower = size.to_lowercase();
-    if let Some(caps) = SUFFIX_REGEX.captures(&lower) {
-        let num_str = caps.get(1).unwrap().as_str();
-        let num = num_str.parse::<usize>().map_err(|_| {
-            format!("Invalid numeric value in memory pool size '{}'", size)
-        })?;
-
-        let suffix = caps.get(2).map(|m| m.as_str()).unwrap_or("b");
-        let unit = &BYTE_SUFFIXES
-            .get(suffix)
-            .ok_or_else(|| format!("Invalid memory pool size '{}'", size))?;
-        let memory_pool_size = usize::try_from(unit.multiplier())
-            .ok()
-            .and_then(|multiplier| num.checked_mul(multiplier))
-            .ok_or_else(|| format!("Memory pool size '{}' is too large", size))?;
-
-        Ok(memory_pool_size)
-    } else {
-        Err(format!("Invalid memory pool size '{}'", size))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn assert_conversion(input: &str, expected: Result<usize, String>) {
-        let result = extract_memory_pool_size(input);
-        match expected {
-            Ok(v) => assert_eq!(result.unwrap(), v),
-            Err(e) => assert_eq!(result.unwrap_err(), e),
-        }
-    }
-
-    #[test]
-    fn memory_pool_size() -> Result<(), String> {
-        // Test basic sizes without suffix, assumed to be bytes
-        assert_conversion("5", Ok(5));
-        assert_conversion("100", Ok(100));
-
-        // Test various units
-        assert_conversion("5b", Ok(5));
-        assert_conversion("4k", Ok(4 * 1024));
-        assert_conversion("4kb", Ok(4 * 1024));
-        assert_conversion("20m", Ok(20 * 1024 * 1024));
-        assert_conversion("20mb", Ok(20 * 1024 * 1024));
-        assert_conversion("2g", Ok(2 * 1024 * 1024 * 1024));
-        assert_conversion("2gb", Ok(2 * 1024 * 1024 * 1024));
-        assert_conversion("3t", Ok(3 * 1024 * 1024 * 1024 * 1024));
-        assert_conversion("4tb", Ok(4 * 1024 * 1024 * 1024 * 1024));
-
-        // Test case insensitivity
-        assert_conversion("4K", Ok(4 * 1024));
-        assert_conversion("4KB", Ok(4 * 1024));
-        assert_conversion("20M", Ok(20 * 1024 * 1024));
-        assert_conversion("20MB", Ok(20 * 1024 * 1024));
-        assert_conversion("2G", Ok(2 * 1024 * 1024 * 1024));
-        assert_conversion("2GB", Ok(2 * 1024 * 1024 * 1024));
-        assert_conversion("2T", Ok(2 * 1024 * 1024 * 1024 * 1024));
-
-        // Test invalid input
-        assert_conversion(
-            "invalid",
-            Err("Invalid memory pool size 'invalid'".to_string()),
-        );
-        assert_conversion("4kbx", Err("Invalid memory pool size '4kbx'".to_string()));
-        assert_conversion(
-            "-20mb",
-            Err("Invalid numeric value in memory pool size '-20mb'".to_string()),
-        );
-        assert_conversion(
-            "-100",
-            Err("Invalid numeric value in memory pool size '-100'".to_string()),
-        );
-        assert_conversion(
-            "12k12k",
-            Err("Invalid memory pool size '12k12k'".to_string()),
-        );
-
-        Ok(())
     }
 }

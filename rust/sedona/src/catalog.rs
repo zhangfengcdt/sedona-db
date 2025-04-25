@@ -1,20 +1,3 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
-
 use std::any::Any;
 use std::sync::{Arc, Weak};
 
@@ -41,10 +24,7 @@ pub struct DynamicObjectStoreCatalog {
 }
 
 impl DynamicObjectStoreCatalog {
-    pub fn new(
-        inner: Arc<dyn CatalogProviderList>,
-        state: Weak<RwLock<SessionState>>,
-    ) -> Self {
+    pub fn new(inner: Arc<dyn CatalogProviderList>, state: Weak<RwLock<SessionState>>) -> Self {
         Self { inner, state }
     }
 }
@@ -68,9 +48,9 @@ impl CatalogProviderList for DynamicObjectStoreCatalog {
 
     fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
         let state = self.state.clone();
-        self.inner.catalog(name).map(|catalog| {
-            Arc::new(DynamicObjectStoreCatalogProvider::new(catalog, state)) as _
-        })
+        self.inner
+            .catalog(name)
+            .map(|catalog| Arc::new(DynamicObjectStoreCatalogProvider::new(catalog, state)) as _)
     }
 }
 
@@ -82,10 +62,7 @@ struct DynamicObjectStoreCatalogProvider {
 }
 
 impl DynamicObjectStoreCatalogProvider {
-    pub fn new(
-        inner: Arc<dyn CatalogProvider>,
-        state: Weak<RwLock<SessionState>>,
-    ) -> Self {
+    pub fn new(inner: Arc<dyn CatalogProvider>, state: Weak<RwLock<SessionState>>) -> Self {
         Self { inner, state }
     }
 }
@@ -101,9 +78,9 @@ impl CatalogProvider for DynamicObjectStoreCatalogProvider {
 
     fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
         let state = self.state.clone();
-        self.inner.schema(name).map(|schema| {
-            Arc::new(DynamicObjectStoreSchemaProvider::new(schema, state)) as _
-        })
+        self.inner
+            .schema(name)
+            .map(|schema| Arc::new(DynamicObjectStoreSchemaProvider::new(schema, state)) as _)
     }
 
     fn register_schema(
@@ -124,10 +101,7 @@ struct DynamicObjectStoreSchemaProvider {
 }
 
 impl DynamicObjectStoreSchemaProvider {
-    pub fn new(
-        inner: Arc<dyn SchemaProvider>,
-        state: Weak<RwLock<SessionState>>,
-    ) -> Self {
+    pub fn new(inner: Arc<dyn SchemaProvider>, state: Weak<RwLock<SessionState>>) -> Self {
         Self { inner, state }
     }
 }
@@ -205,6 +179,7 @@ impl SchemaProvider for DynamicObjectStoreSchemaProvider {
                 state.runtime_env().register_object_store(url, store);
             }
         }
+
         self.inner.table(name).await
     }
 
@@ -230,21 +205,23 @@ pub fn substitute_tilde(cur: String) -> String {
 #[cfg(test)]
 mod tests {
 
+    use crate::context::SedonaContext;
+
     use super::*;
 
     use datafusion::catalog::SchemaProvider;
-    use datafusion::prelude::SessionContext;
 
-    fn setup_context() -> (SessionContext, Arc<dyn SchemaProvider>) {
-        let ctx = SessionContext::new();
-        ctx.register_catalog_list(Arc::new(DynamicObjectStoreCatalog::new(
-            ctx.state().catalog_list().clone(),
-            ctx.state_weak_ref(),
-        )));
+    fn setup_context() -> (SedonaContext, Arc<dyn SchemaProvider>) {
+        let ctx = SedonaContext::new();
+        ctx.ctx
+            .register_catalog_list(Arc::new(DynamicObjectStoreCatalog::new(
+                ctx.ctx.state().catalog_list().clone(),
+                ctx.ctx.state_weak_ref(),
+            )));
 
         let provider = &DynamicObjectStoreCatalog::new(
-            ctx.state().catalog_list().clone(),
-            ctx.state_weak_ref(),
+            ctx.ctx.state().catalog_list().clone(),
+            ctx.ctx.state_weak_ref(),
         ) as &dyn CatalogProviderList;
         let catalog = provider
             .catalog(provider.catalog_names().first().unwrap())
@@ -270,6 +247,7 @@ mod tests {
 
         // It should still create an object store for the location in the SessionState
         let store = ctx
+            .ctx
             .runtime_env()
             .object_store(ListingTableUrl::parse(location)?)?;
 
@@ -293,6 +271,7 @@ mod tests {
         assert!(table.is_none());
 
         let store = ctx
+            .ctx
             .runtime_env()
             .object_store(ListingTableUrl::parse(location)?)?;
         assert_eq!(format!("{store}"), format!("AmazonS3({bucket})"));
@@ -315,6 +294,7 @@ mod tests {
         assert!(table.is_none());
 
         let store = ctx
+            .ctx
             .runtime_env()
             .object_store(ListingTableUrl::parse(location)?)?;
         assert_eq!(format!("{store}"), format!("GoogleCloudStorage({bucket})"));

@@ -17,8 +17,7 @@
 
 //! Command within CLI
 
-use crate::cli_context::CliSessionContext;
-use crate::exec::{exec_and_print, exec_from_lines};
+use crate::exec::exec_and_print;
 use crate::functions::{display_all_functions, Function};
 use crate::print_format::PrintFormat;
 use crate::print_options::PrintOptions;
@@ -28,9 +27,8 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::exec_err;
 use datafusion::common::instant::Instant;
-use datafusion::error::{DataFusionError, Result};
-use std::fs::File;
-use std::io::BufReader;
+use datafusion::error::Result;
+use sedona::context::SedonaContext;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -42,7 +40,6 @@ pub enum Command {
     ListTables,
     DescribeTableStmt(String),
     ListFunctions,
-    Include(Option<String>),
     SearchFunctions(String),
     QuietMode(Option<bool>),
     OutputFormat(Option<String>),
@@ -55,7 +52,7 @@ pub enum OutputFormat {
 impl Command {
     pub async fn execute(
         &self,
-        ctx: &dyn CliSessionContext,
+        ctx: &SedonaContext,
         print_options: &mut PrintOptions,
     ) -> Result<()> {
         match self {
@@ -66,27 +63,9 @@ impl Command {
                 let num_rows = command_batch.num_rows();
                 print_options.print_batches(schema, &[command_batch], now, num_rows)
             }
-            Self::ListTables => {
-                exec_and_print(ctx, print_options, "SHOW TABLES".into()).await
-            }
+            Self::ListTables => exec_and_print(ctx, print_options, "SHOW TABLES".into()).await,
             Self::DescribeTableStmt(name) => {
-                exec_and_print(ctx, print_options, format!("SHOW COLUMNS FROM {}", name))
-                    .await
-            }
-            Self::Include(filename) => {
-                if let Some(filename) = filename {
-                    let file = File::open(filename).map_err(|e| {
-                        DataFusionError::Execution(format!(
-                            "Error opening {:?} {}",
-                            filename, e
-                        ))
-                    })?;
-                    exec_from_lines(ctx, &mut BufReader::new(file), print_options)
-                        .await?;
-                    Ok(())
-                } else {
-                    exec_err!("Required filename argument is missing")
-                }
+                exec_and_print(ctx, print_options, format!("SHOW COLUMNS FROM {}", name)).await
             }
             Self::QuietMode(quiet) => {
                 if let Some(quiet) = quiet {
@@ -114,9 +93,9 @@ impl Command {
                     exec_err!("{function} is not a supported function")
                 }
             }
-            Self::OutputFormat(_) => exec_err!(
-                "Unexpected change output format, this should be handled outside"
-            ),
+            Self::OutputFormat(_) => {
+                exec_err!("Unexpected change output format, this should be handled outside")
+            }
         }
     }
 
@@ -126,25 +105,19 @@ impl Command {
             Self::ListTables => ("\\d", "list tables"),
             Self::DescribeTableStmt(_) => ("\\d name", "describe table"),
             Self::Help => ("\\?", "help"),
-            Self::Include(_) => {
-                ("\\i filename", "reads input from the specified filename")
-            }
             Self::ListFunctions => ("\\h", "function list"),
             Self::SearchFunctions(_) => ("\\h function", "search function"),
             Self::QuietMode(_) => ("\\quiet (true|false)?", "print or set quiet mode"),
-            Self::OutputFormat(_) => {
-                ("\\pset [NAME [VALUE]]", "set table output option\n(format)")
-            }
+            Self::OutputFormat(_) => ("\\pset [NAME [VALUE]]", "set table output option\n(format)"),
         }
     }
 }
 
-const ALL_COMMANDS: [Command; 9] = [
+const ALL_COMMANDS: [Command; 8] = [
     Command::ListTables,
     Command::DescribeTableStmt(String::new()),
     Command::Quit,
     Command::Help,
-    Command::Include(Some(String::new())),
     Command::ListFunctions,
     Command::SearchFunctions(String::new()),
     Command::QuietMode(None),
@@ -186,18 +159,10 @@ impl FromStr for Command {
             ("?", None) => Self::Help,
             ("h", None) => Self::ListFunctions,
             ("h", Some(function)) => Self::SearchFunctions(function.into()),
-            ("i", None) => Self::Include(None),
-            ("i", Some(filename)) => Self::Include(Some(filename.to_owned())),
-            ("quiet", Some("true" | "t" | "yes" | "y" | "on")) => {
-                Self::QuietMode(Some(true))
-            }
-            ("quiet", Some("false" | "f" | "no" | "n" | "off")) => {
-                Self::QuietMode(Some(false))
-            }
+            ("quiet", Some("true" | "t" | "yes" | "y" | "on")) => Self::QuietMode(Some(true)),
+            ("quiet", Some("false" | "f" | "no" | "n" | "off")) => Self::QuietMode(Some(false)),
             ("quiet", None) => Self::QuietMode(None),
-            ("pset", Some(subcommand)) => {
-                Self::OutputFormat(Some(subcommand.to_string()))
-            }
+            ("pset", Some(subcommand)) => Self::OutputFormat(Some(subcommand.to_string())),
             ("pset", None) => Self::OutputFormat(None),
             _ => return Err(()),
         })

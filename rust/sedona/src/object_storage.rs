@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
@@ -23,18 +24,33 @@ use datafusion::common::config::{
     ConfigEntry, ConfigExtension, ConfigField, ExtensionOptions, TableOptions, Visit,
 };
 use datafusion::common::{config_err, exec_datafusion_err, exec_err};
+use datafusion::config::ConfigFileType;
+use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionState;
 
 use async_trait::async_trait;
-use aws_config::BehaviorVersion;
-use aws_credential_types::provider::ProvideCredentials;
-use object_store::aws::{AmazonS3Builder, AwsCredential};
-use object_store::gcp::GoogleCloudStorageBuilder;
-use object_store::http::HttpBuilder;
-use object_store::{ClientOptions, CredentialProvider, ObjectStore};
+
+use object_store::{CredentialProvider, ObjectStore};
 use url::Url;
 
+#[cfg(feature = "aws")]
+use aws_config::BehaviorVersion;
+#[cfg(feature = "aws")]
+use aws_credential_types::provider::ProvideCredentials;
+#[cfg(feature = "aws")]
+use object_store::aws::{AmazonS3Builder, AwsCredential};
+#[cfg(feature = "aws")]
+use object_store::gcp::GoogleCloudStorageBuilder;
+
+#[cfg(feature = "http")]
+use object_store::http::HttpBuilder;
+#[cfg(feature = "http")]
+use object_store::ClientOptions;
+
+use crate::context::SedonaContext;
+
+#[cfg(feature = "aws")]
 pub async fn get_s3_object_store_builder(
     url: &Url,
     aws_options: &AwsOptions,
@@ -51,9 +67,7 @@ pub async fn get_s3_object_store_builder(
     let bucket_name = get_bucket_name(url)?;
     let mut builder = AmazonS3Builder::from_env().with_bucket_name(bucket_name);
 
-    if let (Some(access_key_id), Some(secret_access_key)) =
-        (access_key_id, secret_access_key)
-    {
+    if let (Some(access_key_id), Some(secret_access_key)) = (access_key_id, secret_access_key) {
         builder = builder
             .with_access_key_id(access_key_id)
             .with_secret_access_key(secret_access_key);
@@ -108,11 +122,13 @@ pub async fn get_s3_object_store_builder(
     Ok(builder)
 }
 
+#[cfg(feature = "aws")]
 #[derive(Debug)]
 struct S3CredentialProvider {
     credentials: aws_credential_types::provider::SharedCredentialsProvider,
 }
 
+#[cfg(feature = "aws")]
 #[async_trait]
 impl CredentialProvider for S3CredentialProvider {
     type Credential = AwsCredential;
@@ -267,12 +283,7 @@ impl ExtensionOptions for AwsOptions {
         struct Visitor(Vec<ConfigEntry>);
 
         impl Visit for Visitor {
-            fn some<V: Display>(
-                &mut self,
-                key: &str,
-                value: V,
-                description: &'static str,
-            ) {
+            fn some<V: Display>(&mut self, key: &str, value: V, description: &'static str) {
                 self.0.push(ConfigEntry {
                     key: key.to_string(),
                     value: Some(value.to_string()),
@@ -352,12 +363,7 @@ impl ExtensionOptions for GcpOptions {
         struct Visitor(Vec<ConfigEntry>);
 
         impl Visit for Visitor {
-            fn some<V: Display>(
-                &mut self,
-                key: &str,
-                value: V,
-                description: &'static str,
-            ) {
+            fn some<V: Display>(&mut self, key: &str, value: V, description: &'static str) {
                 self.0.push(ConfigEntry {
                     key: key.to_string(),
                     value: Some(value.to_string()),
@@ -379,11 +385,8 @@ impl ExtensionOptions for GcpOptions {
             .visit(&mut v, "service_account_path", "");
         self.service_account_key
             .visit(&mut v, "service_account_key", "");
-        self.application_credentials_path.visit(
-            &mut v,
-            "application_credentials_path",
-            "",
-        );
+        self.application_credentials_path
+            .visit(&mut v, "application_credentials_path", "");
         v.0
     }
 }
@@ -399,42 +402,39 @@ pub(crate) async fn get_object_store(
     table_options: &TableOptions,
 ) -> Result<Arc<dyn ObjectStore>, DataFusionError> {
     let store: Arc<dyn ObjectStore> = match scheme {
+        #[cfg(feature = "aws")]
         "s3" => {
             let Some(options) = table_options.extensions.get::<AwsOptions>() else {
-                return exec_err!(
-                    "Given table options incompatible with the 's3' scheme"
-                );
+                return exec_err!("Given table options are incompatible with the 's3' scheme");
             };
             let builder = get_s3_object_store_builder(url, options).await?;
             Arc::new(builder.build()?)
         }
+        #[cfg(feature = "aws")]
         "oss" => {
             let Some(options) = table_options.extensions.get::<AwsOptions>() else {
-                return exec_err!(
-                    "Given table options incompatible with the 'oss' scheme"
-                );
+                return exec_err!("Given table options incompatible with the 'oss' scheme");
             };
             let builder = get_oss_object_store_builder(url, options)?;
             Arc::new(builder.build()?)
         }
+        #[cfg(feature = "aws")]
         "cos" => {
             let Some(options) = table_options.extensions.get::<AwsOptions>() else {
-                return exec_err!(
-                    "Given table options incompatible with the 'cos' scheme"
-                );
+                return exec_err!("Given table options incompatible with the 'cos' scheme");
             };
             let builder = get_cos_object_store_builder(url, options)?;
             Arc::new(builder.build()?)
         }
+        #[cfg(feature = "gcp")]
         "gs" | "gcs" => {
             let Some(options) = table_options.extensions.get::<GcpOptions>() else {
-                return exec_err!(
-                    "Given table options incompatible with the 'gs'/'gcs' scheme"
-                );
+                return exec_err!("Given table options incompatible with the 'gs'/'gcs' scheme");
             };
             let builder = get_gcs_object_store_builder(url, options)?;
             Arc::new(builder.build()?)
         }
+        #[cfg(feature = "http")]
         "http" | "https" => Arc::new(
             HttpBuilder::new()
                 .with_client_options(ClientOptions::new().with_allow_http(true))
@@ -447,17 +447,69 @@ pub(crate) async fn get_object_store(
                 .runtime_env()
                 .object_store_registry
                 .get_store(url)
-                .map_err(|_| {
-                    exec_datafusion_err!("Unsupported object store scheme: {}", scheme)
-                })?
+                .map_err(|_| exec_datafusion_err!("Unsupported object store scheme: {}", scheme))?
         }
     };
     Ok(store)
 }
 
+pub(crate) fn register_table_options_extension_from_scheme(ctx: &SedonaContext, scheme: &str) {
+    match scheme {
+        #[cfg(feature = "aws")]
+        "s3" | "oss" | "cos" => {
+            // Register AWS specific table options in the session context:
+            ctx.ctx
+                .register_table_options_extension(AwsOptions::default())
+        }
+        // For Google Cloud Storage
+        #[cfg(feature = "gcp")]
+        "gs" | "gcs" => {
+            // Register GCP specific table options in the session context:
+            ctx.ctx
+                .register_table_options_extension(GcpOptions::default())
+        }
+        // For unsupported schemes, do nothing:
+        _ => {}
+    }
+}
+
+pub(crate) async fn register_object_store_and_config_extensions(
+    ctx: &SedonaContext,
+    location: &String,
+    options: &HashMap<String, String>,
+    format: Option<ConfigFileType>,
+) -> Result<()> {
+    // Parse the location URL to extract the scheme and other components
+    let table_path = ListingTableUrl::parse(location)?;
+
+    // Extract the scheme (e.g., "s3", "gcs") from the parsed URL
+    let scheme = table_path.scheme();
+
+    // Obtain a reference to the URL
+    let url = table_path.as_ref();
+
+    // Register the options based on the scheme extracted from the location
+    register_table_options_extension_from_scheme(ctx, scheme);
+
+    // Clone and modify the default table options based on the provided options
+    let mut table_options = ctx.ctx.state().default_table_options();
+    if let Some(format) = format {
+        table_options.set_config_format(format);
+    }
+    table_options.alter_with_string_hash_map(options)?;
+
+    // Retrieve the appropriate object store based on the scheme, URL, and modified table options
+    let store = get_object_store(&ctx.ctx.state(), scheme, url, &table_options).await?;
+
+    // Register the retrieved object store in the session context's runtime environment
+    ctx.ctx.register_object_store(url, store);
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::cli_context::CliSessionContext;
+    use crate::context::SedonaContext;
 
     use super::*;
 
@@ -465,11 +517,12 @@ mod tests {
     use datafusion::{
         datasource::listing::ListingTableUrl,
         logical_expr::{DdlStatement, LogicalPlan},
-        prelude::SessionContext,
     };
 
+    #[cfg(feature = "aws")]
     use object_store::{aws::AmazonS3ConfigKey, gcp::GoogleConfigKey};
 
+    #[cfg(feature = "aws")]
     #[tokio::test]
     async fn s3_object_store_builder() -> Result<()> {
         // "fake" is uppercase to ensure the values are not lowercased when parsed
@@ -492,16 +545,15 @@ mod tests {
             ) LOCATION '{location}'"
         );
 
-        let ctx = SessionContext::new();
-        let mut plan = ctx.state().create_logical_plan(&sql).await?;
+        let ctx = SedonaContext::new();
+        let mut plan = ctx.ctx.state().create_logical_plan(&sql).await?;
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
-            ctx.register_table_options_extension_from_scheme(scheme);
-            let mut table_options = ctx.state().default_table_options();
+            register_table_options_extension_from_scheme(&ctx, scheme);
+            let mut table_options = ctx.ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
             let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
-            let builder =
-                get_s3_object_store_builder(table_url.as_ref(), aws_options).await?;
+            let builder = get_s3_object_store_builder(table_url.as_ref(), aws_options).await?;
             // get the actual configuration information, then assert_eq!
             let config = [
                 (AmazonS3ConfigKey::AccessKeyId, access_key_id),
@@ -537,12 +589,12 @@ mod tests {
             ) LOCATION '{location}'"
         );
 
-        let ctx = SessionContext::new();
-        let mut plan = ctx.state().create_logical_plan(&sql).await?;
+        let ctx = SedonaContext::new();
+        let mut plan = ctx.ctx.state().create_logical_plan(&sql).await?;
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
-            ctx.register_table_options_extension_from_scheme(scheme);
-            let mut table_options = ctx.state().default_table_options();
+            register_table_options_extension_from_scheme(&ctx, scheme);
+            let mut table_options = ctx.ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
             let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
             let err = get_s3_object_store_builder(table_url.as_ref(), aws_options)
@@ -564,11 +616,11 @@ mod tests {
             ) LOCATION '{location}'"
         );
 
-        let mut plan = ctx.state().create_logical_plan(&sql).await?;
+        let mut plan = ctx.ctx.state().create_logical_plan(&sql).await?;
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
-            ctx.register_table_options_extension_from_scheme(scheme);
-            let mut table_options = ctx.state().default_table_options();
+            register_table_options_extension_from_scheme(&ctx, scheme);
+            let mut table_options = ctx.ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
             let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
             // ensure this isn't an error
@@ -591,12 +643,12 @@ mod tests {
         let scheme = table_url.scheme();
         let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('aws.access_key_id' '{access_key_id}', 'aws.secret_access_key' '{secret_access_key}', 'aws.oss.endpoint' '{endpoint}') LOCATION '{location}'");
 
-        let ctx = SessionContext::new();
-        let mut plan = ctx.state().create_logical_plan(&sql).await?;
+        let ctx = SedonaContext::new();
+        let mut plan = ctx.ctx.state().create_logical_plan(&sql).await?;
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
-            ctx.register_table_options_extension_from_scheme(scheme);
-            let mut table_options = ctx.state().default_table_options();
+            register_table_options_extension_from_scheme(&ctx, scheme);
+            let mut table_options = ctx.ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
             let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
             let builder = get_oss_object_store_builder(table_url.as_ref(), aws_options)?;
@@ -628,12 +680,12 @@ mod tests {
         let scheme = table_url.scheme();
         let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('gcp.service_account_path' '{service_account_path}', 'gcp.service_account_key' '{service_account_key}', 'gcp.application_credentials_path' '{application_credentials_path}') LOCATION '{location}'");
 
-        let ctx = SessionContext::new();
-        let mut plan = ctx.state().create_logical_plan(&sql).await?;
+        let ctx = SedonaContext::new();
+        let mut plan = ctx.ctx.state().create_logical_plan(&sql).await?;
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
-            ctx.register_table_options_extension_from_scheme(scheme);
-            let mut table_options = ctx.state().default_table_options();
+            register_table_options_extension_from_scheme(&ctx, scheme);
+            let mut table_options = ctx.ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
             let gcp_options = table_options.extensions.get::<GcpOptions>().unwrap();
             let builder = get_gcs_object_store_builder(table_url.as_ref(), gcp_options)?;
