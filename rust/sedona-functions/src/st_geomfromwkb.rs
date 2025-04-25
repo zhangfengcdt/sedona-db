@@ -5,11 +5,8 @@ use datafusion_common::error::Result;
 use datafusion_expr::{
     scalar_doc_sections::DOC_SECTION_OTHER, ColumnarValue, Documentation, Volatility,
 };
-use sedona_schema::datatypes::{WKB_GEOMETRY, WKB_VIEW_GEOGRAPHY, WKB_VIEW_GEOMETRY};
-use sedona_schema::{
-    datatypes::SedonaType,
-    udf::{ArgMatcher, SedonaScalarKernel, SedonaScalarUDF},
-};
+use sedona_expr::udf::{ArgMatcher, SedonaScalarKernel, SedonaScalarUDF};
+use sedona_schema::datatypes::{SedonaType, WKB_GEOMETRY, WKB_VIEW_GEOGRAPHY, WKB_VIEW_GEOMETRY};
 
 use crate::iter_geo_traits;
 

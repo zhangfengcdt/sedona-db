@@ -1,7 +1,9 @@
 [workspace]
 members = [
     "rust/sedona-adbc",
+    "rust/sedona-expr",
     "rust/sedona-functions",
+    "rust/sedona-geoparquet",
     "rust/sedona-schema",
     "rust/sedona-testing",
     "rust/sedona",
@@ -29,10 +31,16 @@ arrow-array = { version = "54.3.0" }
 arrow-data = { version = "54.3.0" }
 arrow-schema = { version = "54.3.0" }
 async-trait = { version = "0.1.87" }
+bytes = "1.10"
 ctor = "0.2.9"
+chrono = { version = "0.4.38", default-features = false }
 datafusion = { version = "46.0.1", default-features = false }
-datafusion-common = { version = "46.0.1", default-features = false }
-datafusion-expr = { version = "46.0.1", default-features = false }
+datafusion-catalog = { version = "46.0.1" }
+datafusion-common = { version = "46.0.1" }
+datafusion-execution = { version = "46.0.1" }
+datafusion-expr = { version = "46.0.1" }
+datafusion-physical-expr = { version = "46.0.1" }
+datafusion-physical-plan = { version = "46.0.1" }
 env_logger = "0.11"
 futures = { version = "0.3" }
 geo-traits = { version = "0.2.0" }
@@ -46,7 +54,10 @@ parquet = { version = "54.2.1", default-features = false, features = [
 ] }
 regex = "1.8"
 rstest = "0.24.0"
+serde = { version = "1" }
 serde_json = { version = "1" }
+serde_with = { version = "1" }
+tempfile = { version = "3" }
 tokio = { version = "1.44" }
 url = "2.5.4"
 wkb = { version = "0.8.0" }

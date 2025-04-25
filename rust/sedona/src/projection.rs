@@ -1,23 +1,20 @@
 use arrow_schema::SchemaRef;
 use futures::Stream;
 use futures::TryStreamExt;
-use sedona_schema::projection::unwrap_batch;
-use std::any::Any;
-use std::fmt::Debug;
+use sedona_expr::projection::unwrap_batch;
+use sedona_expr::projection::unwrap_expressions;
+use sedona_expr::projection::wrap_expressions;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Context;
 use std::task::Poll;
 
-use arrow_array::{new_null_array, RecordBatch};
-use arrow_schema::DataType;
+use arrow_array::RecordBatch;
 use datafusion::error::Result;
 use datafusion::execution::RecordBatchStream;
 use datafusion::prelude::DataFrame;
-use datafusion::scalar::ScalarValue;
 use datafusion::{common::DFSchema, execution::SendableRecordBatchStream};
-use datafusion_expr::{ColumnarValue, Expr, ScalarUDF, ScalarUDFImpl, Signature};
-use sedona_schema::{extension_type::ExtensionType, projection::unwrap_schema};
+use sedona_schema::projection::unwrap_schema;
 
 /// Possibly project a DataFrame such that the output expresses extension types as data types
 ///
@@ -73,172 +70,13 @@ impl Stream for UnwrapRecordBatchStream {
     }
 }
 
-/// Implementation underlying wrap_df
-///
-/// Returns None if there is no need to wrap the input, or a list of expressions that
-/// either pass along the existing column or a UDF call that applies the wrap.
-pub(crate) fn wrap_expressions(schema: &DFSchema) -> Result<Option<Vec<Expr>>> {
-    let wrap_udf = WrapExtensionUdf::udf();
-    let mut wrap_count = 0;
-
-    let mut exprs = Vec::with_capacity(schema.fields().len());
-    for i in 0..exprs.capacity() {
-        let this_column = Expr::Column(schema.columns()[i].clone());
-        let (this_qualifier, this_field) = schema.qualified_field(i);
-
-        if let Some(ext) = ExtensionType::from_field(schema.field(i)) {
-            let dummy_array = new_null_array(&ext.to_data_type(), 1);
-            let wrap_call = wrap_udf
-                .call(vec![
-                    this_column.clone(),
-                    Expr::Literal(ScalarValue::try_from_array(&dummy_array, 0)?),
-                ])
-                .alias_qualified(this_qualifier.cloned(), this_field.name());
-
-            exprs.push(wrap_call);
-            wrap_count += 1;
-        } else {
-            exprs.push(this_column.alias_qualified(this_qualifier.cloned(), this_field.name()));
-        }
-    }
-
-    if wrap_count > 0 {
-        Ok(Some(exprs))
-    } else {
-        Ok(None)
-    }
-}
-
-/// Implementation underlying unwrap_df
-///
-/// Returns None if there is no need to unwrap the input, or a list of expressions that
-/// either pass along the existing column or a UDF call that applies the unwrap.
-/// Returns a DFSchema because the resulting schema based purely on the expressions would
-/// otherwise not include field metadata.
-pub(crate) fn unwrap_expressions(schema: &DFSchema) -> Result<Option<(DFSchema, Vec<Expr>)>> {
-    let unwrap_udf = UnwrapExtensionUdf::udf();
-    let mut exprs = Vec::with_capacity(schema.fields().len());
-    let mut qualifiers = Vec::with_capacity(exprs.capacity());
-    let mut unwrap_count = 0;
-
-    for i in 0..exprs.capacity() {
-        let this_column = Expr::Column(schema.columns()[i].clone());
-        let (this_qualifier, this_field) = schema.qualified_field(i);
-        qualifiers.push(this_qualifier.cloned());
-
-        if ExtensionType::from_data_type(this_field.data_type()).is_some() {
-            let unwrap_call = unwrap_udf
-                .call(vec![this_column.clone()])
-                .alias_qualified(this_qualifier.cloned(), this_field.name());
-
-            exprs.push(unwrap_call);
-            unwrap_count += 1;
-        } else {
-            exprs.push(this_column.alias_qualified(this_qualifier.cloned(), this_field.name()));
-        }
-    }
-
-    if unwrap_count > 0 {
-        let schema_unwrapped = unwrap_schema(schema.as_arrow());
-        let dfschema_unwrapped = DFSchema::from_field_specific_qualified_schema(
-            qualifiers,
-            &Arc::new(schema_unwrapped),
-        )?;
-
-        Ok(Some((dfschema_unwrapped, exprs)))
-    } else {
-        Ok(None)
-    }
-}
-
-#[derive(Debug)]
-pub struct WrapExtensionUdf {
-    signature: Signature,
-}
-
-impl WrapExtensionUdf {
-    pub fn udf() -> ScalarUDF {
-        let signature = Signature::any(2, datafusion_expr::Volatility::Immutable);
-        ScalarUDF::new_from_impl(Self { signature })
-    }
-}
-
-impl ScalarUDFImpl for WrapExtensionUdf {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn name(&self) -> &str {
-        "wrap_extension_internal"
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-        debug_assert_eq!(args.len(), 2);
-        Ok(args[1].clone())
-    }
-
-    fn invoke_batch(&self, args: &[ColumnarValue], _num_rows: usize) -> Result<ColumnarValue> {
-        if let Some(extension_type) = ExtensionType::from_data_type(&args[1].data_type()) {
-            extension_type.wrap_arg(&args[0])
-        } else {
-            Ok(args[0].clone())
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct UnwrapExtensionUdf {
-    signature: Signature,
-}
-
-impl UnwrapExtensionUdf {
-    pub fn udf() -> ScalarUDF {
-        let signature = Signature::any(1, datafusion_expr::Volatility::Immutable);
-        ScalarUDF::new_from_impl(Self { signature })
-    }
-}
-
-impl ScalarUDFImpl for UnwrapExtensionUdf {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn name(&self) -> &str {
-        "unwrap_extension_internal"
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-        debug_assert_eq!(args.len(), 1);
-        if let Some(extension_type) = ExtensionType::from_data_type(&args[0]) {
-            Ok(extension_type.to_field("", true).data_type().clone())
-        } else {
-            Ok(args[0].clone())
-        }
-    }
-
-    fn invoke_batch(&self, args: &[ColumnarValue], _num_rows: usize) -> Result<ColumnarValue> {
-        if let Some(extension) = ExtensionType::from_data_type(&args[0].data_type()) {
-            extension.unwrap_arg(&args[0])
-        } else {
-            Ok(args[0].clone())
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use arrow_array::{create_array, record_batch, RecordBatch};
     use arrow_schema::{DataType, Field, Schema};
     use datafusion::prelude::SessionContext;
-    use sedona_schema::projection::wrap_batch;
+    use sedona_expr::projection::wrap_batch;
+    use sedona_schema::extension_type::ExtensionType;
 
     use super::*;
 

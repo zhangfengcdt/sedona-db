@@ -6,8 +6,7 @@ use arrow_schema::DataType;
 use datafusion_common::error::Result;
 use datafusion_common::not_impl_err;
 use datafusion_expr::{ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility};
-
-use crate::datatypes::SedonaType;
+use sedona_schema::datatypes::SedonaType;
 
 /// Top-level scalar user-defined function
 ///
@@ -318,7 +317,7 @@ impl ScalarUDFImpl for SedonaScalarUDF {
 mod tests {
     use datafusion_common::scalar::ScalarValue;
 
-    use crate::datatypes::{WKB_GEOGRAPHY, WKB_GEOMETRY};
+    use sedona_schema::datatypes::{WKB_GEOGRAPHY, WKB_GEOMETRY};
 
     use super::*;
 

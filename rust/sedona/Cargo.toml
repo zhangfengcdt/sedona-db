@@ -17,6 +17,7 @@ datafusion-expr = { workspace = true }
 futures = { workspace = true }
 geo-traits = { workspace = true }
 geo-types = { workspace = true }
+sedona-expr = { path = "../sedona-expr" }
 sedona-functions = { path = "../sedona-functions" }
 sedona-schema = { path = "../sedona-schema" }
 tokio = { workspace = true }

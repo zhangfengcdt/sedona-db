@@ -1,0 +1,39 @@
+[package]
+name = "sedona-geoparquet"
+version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description.workspace = true
+readme.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+
+[dev-dependencies]
+url = { workspace = true }
+
+[dependencies]
+async-trait = { workspace = true }
+arrow-schema = { workspace = true }
+arrow-array = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+datafusion = { workspace = true, features = ["parquet"] }
+datafusion-catalog = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-execution = { workspace = true }
+datafusion-expr = { workspace = true }
+datafusion-physical-expr = { workspace = true }
+datafusion-physical-plan = { workspace = true }
+geo-traits = { workspace = true }
+futures = { workspace = true }
+object_store = { workspace = true }
+parquet = { workspace = true }
+sedona-expr = { path = "../sedona-expr" }
+sedona-schema = { path = "../sedona-schema" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_with = { workspace = true }
+tokio = { workspace = true }

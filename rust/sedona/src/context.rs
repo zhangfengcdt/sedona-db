@@ -8,7 +8,7 @@ use datafusion::{
     execution::SendableRecordBatchStream,
     prelude::{DataFrame, SessionContext},
 };
-use sedona_schema::projection::wrap_batch;
+use sedona_expr::projection::wrap_batch;
 
 use crate::projection::{unwrap_df, wrap_df};
 use crate::{functions::register_sedona_scalar_udfs, projection::unwrap_stream};

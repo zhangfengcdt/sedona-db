@@ -8,10 +8,8 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::{
     scalar_doc_sections::DOC_SECTION_OTHER, ColumnarValue, Documentation, Volatility,
 };
-use sedona_schema::{
-    datatypes::SedonaType,
-    udf::{ArgMatcher, SedonaScalarKernel, SedonaScalarUDF},
-};
+use sedona_expr::udf::{ArgMatcher, SedonaScalarKernel, SedonaScalarUDF};
+use sedona_schema::datatypes::SedonaType;
 
 /// ST_AsText() scalar UDF implementation
 ///

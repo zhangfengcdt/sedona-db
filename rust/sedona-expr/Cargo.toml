@@ -1,5 +1,5 @@
 [package]
-name = "sedona-functions"
+name = "sedona-expr"
 version.workspace = true
 homepage.workspace = true
 repository.workspace = true
@@ -8,18 +8,10 @@ readme.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
-[dev-dependencies]
-rstest = { workspace = true }
-sedona-testing = { path = "../sedona-testing" }
-
 [dependencies]
-arrow-schema = { workspace = true }
 arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
-geo-traits = { workspace = true }
-geo-types = { workspace = true }
-sedona-expr = { path = "../sedona-expr" }
+datafusion-physical-expr = { workspace = true }
 sedona-schema = { path = "../sedona-schema" }
-wkb = { workspace = true }
-wkt = { workspace = true }

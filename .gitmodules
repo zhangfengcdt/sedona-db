@@ -1,0 +1,3 @@
+[submodule "submodules/geoarrow-data"]
+	path = submodules/geoarrow-data
+	url = https://github.com/geoarrow/geoarrow-data.git

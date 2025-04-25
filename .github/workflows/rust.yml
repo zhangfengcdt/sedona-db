@@ -30,6 +30,8 @@ jobs:
       CARGO_INCREMENTAL: 0
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: 'true'
       - name: Use stable Rust
         id: rust
         run: |
