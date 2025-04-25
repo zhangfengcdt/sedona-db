@@ -10,21 +10,22 @@ use datafusion::{
             parquet::{ParquetFormat, ParquetFormatFactory},
             FileFormat, FileFormatFactory, FilePushdownSupport,
         },
-        listing::PartitionedFile,
-        physical_plan::{FileScanConfig, FileSinkConfig, FileSource},
+        physical_plan::{FileOpener, FileScanConfig, FileSinkConfig, FileSource},
     },
 };
-use datafusion_catalog::{Session, TableProvider};
-use datafusion_common::{
-    internal_err, not_impl_err, plan_err, DFSchema, GetExt, Result, Statistics,
-};
-use datafusion_execution::object_store::ObjectStoreUrl;
-use datafusion_expr::{utils::conjunction, Expr};
+use datafusion_catalog::Session;
+use datafusion_common::{internal_err, not_impl_err, plan_err, GetExt, Result, Statistics};
+use datafusion_expr::Expr;
 use datafusion_physical_expr::{LexRequirement, PhysicalExpr};
-use datafusion_physical_plan::{projection::ProjectionExec, ExecutionPlan};
-use object_store::{path::Path, ObjectMeta, ObjectStore};
+use datafusion_physical_plan::{
+    metrics::ExecutionPlanMetricsSet, projection::ProjectionExec, ExecutionPlan,
+};
+use object_store::{ObjectMeta, ObjectStore};
 use sedona_expr::projection::wrap_physical_expressions;
-use sedona_schema::{extension_type::ExtensionType, projection::wrap_schema};
+use sedona_schema::{
+    extension_type::ExtensionType,
+    projection::{unwrap_schema, wrap_schema},
+};
 
 use crate::metadata::{GeoParquetColumnEncoding, GeoParquetMetadata};
 
@@ -212,31 +213,22 @@ impl FileFormat for GeoParquetFormat {
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Build the parent Parquet scan, keeping a few references to the initial state
-        let inner_schema = config.file_schema.clone();
-        let storage_schema = self.with_geoarrow_field_metadata(inner_schema.clone())?;
-        let config_projection = config.projection.clone();
+        let wrapped_schema = config.file_schema.clone();
+        let inner_schema = unwrap_schema(&wrapped_schema);
 
+        // Make sure we pass the schema that the underlying implementaion was expecting
+        let mut config = config.clone();
+        config.file_schema = Arc::new(inner_schema);
         let inner_plan = self
             .inner
             .create_physical_plan(state, config, filters)
             .await?;
 
-        // Project the input by wrapping the geometry fields such that our infrastructure
-        // can identify them as geometry types.
-        let projected_storage_fields: Vec<_> = if let Some(projection) = config_projection {
-            projection
-                .iter()
-                .map(|i| Arc::new(storage_schema.field(*i).clone()))
-                .collect()
-        } else {
-            storage_schema.fields().to_vec()
-        };
-
         // Calculate a list of expressions that are either a column reference to the original
         // or a user-defined function call to the function that performs the wrap operation.
         // wrap_physical_expressions() returns None if no columns needed wrapping so that
         // we can omit the new node completely.
-        if let Some(column_exprs) = wrap_physical_expressions(&projected_storage_fields)? {
+        if let Some(column_exprs) = wrap_physical_expressions(inner_plan.schema().fields())? {
             let exec = ProjectionExec::try_new(column_exprs, inner_plan)?;
             Ok(Arc::new(exec))
         } else {
@@ -265,140 +257,71 @@ impl FileFormat for GeoParquetFormat {
     }
 
     fn file_source(&self) -> Arc<dyn FileSource> {
-        self.inner.file_source()
+        Arc::new(GeoParquetFileSource::new(self.inner.file_source()))
     }
 }
 
-/// A [TableProvider] for GeoParquet files
-///
-/// Implements a table provider that can be used to read a GeoParquet file.
-/// a proper implementation using a ListingTable is likely a more performant
-/// solution that will leverage more features of the underlying Parquet format.
-#[derive(Debug)]
-pub struct GeoParquetTableProvider {
-    format: GeoParquetFormat,
-    store: Arc<dyn ObjectStore>,
-    object: ObjectMeta,
-    inner_schema: SchemaRef,
-    schema: SchemaRef,
+struct GeoParquetFileSource {
+    inner: Arc<dyn FileSource>,
 }
 
-impl GeoParquetTableProvider {
-    pub async fn local(state: &dyn Session, path: impl AsRef<std::path::Path>) -> Result<Self> {
-        let store: Arc<dyn ObjectStore> = Arc::new(object_store::local::LocalFileSystem::new());
-        let object = Self::local_file(path);
-        Self::new(state, store, object).await
+impl GeoParquetFileSource {
+    pub fn new(inner: Arc<dyn FileSource>) -> Self {
+        Self { inner }
     }
+}
 
-    pub async fn new(
-        state: &dyn Session,
-        store: Arc<dyn ObjectStore>,
-        object: ObjectMeta,
-    ) -> Result<Self> {
-        let format = GeoParquetFormat::default();
-        let inner_schema = format
-            .inner
-            .infer_schema(state, &store, &[object.clone()])
-            .await?;
-        let schema = wrap_schema(
-            format
-                .with_geoarrow_field_metadata(inner_schema.clone())?
-                .as_ref(),
-        );
-        Ok(Self {
-            format,
-            store,
-            object,
-            inner_schema,
-            schema: Arc::new(schema),
-        })
-    }
-
-    fn local_file(path: impl AsRef<std::path::Path>) -> ObjectMeta {
-        let location = Path::from_filesystem_path(path.as_ref()).unwrap();
-        let metadata = std::fs::metadata(path).expect("Local file metadata");
-        ObjectMeta {
-            location,
-            last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
-            size: metadata.len() as usize,
-            e_tag: None,
-            version: None,
-        }
-    }
-
-    fn inner_filters(
+impl FileSource for GeoParquetFileSource {
+    fn create_file_opener(
         &self,
-        state: &dyn Session,
-        filters: &[Expr],
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        let inner_df_schema = DFSchema::try_from(self.inner_schema.clone())?;
-
-        let predicate = conjunction(filters.to_vec());
-        let predicate = predicate
-            .map(|predicate| state.create_physical_expr(predicate, &inner_df_schema))
-            .transpose()?
-            // if there are no filters, use a literal true to have a predicate
-            // that always evaluates to true we can pass to the index
-            .unwrap_or_else(|| datafusion::physical_expr::expressions::lit(true));
-
-        Ok(predicate)
+        object_store: Arc<dyn ObjectStore>,
+        base_config: &FileScanConfig,
+        partition: usize,
+    ) -> Arc<dyn FileOpener> {
+        let mut inner_config = base_config.clone();
+        inner_config.file_schema = Arc::new(unwrap_schema(&inner_config.file_schema));
+        self.inner
+            .create_file_opener(object_store, base_config, partition)
     }
-}
 
-#[async_trait]
-impl TableProvider for GeoParquetTableProvider {
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
+        Arc::new(Self {
+            inner: self.inner.with_batch_size(batch_size),
+        })
     }
 
-    fn table_type(&self) -> datafusion::logical_expr::TableType {
-        datafusion::logical_expr::TableType::Base
+    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
+        Arc::new(Self {
+            inner: self.inner.with_schema(schema),
+        })
     }
 
-    async fn scan(
-        &self,
-        state: &dyn Session,
-        projection: Option<&Vec<usize>>,
-        filters: &[Expr],
-        limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Build file_groups, config, and physical filters based on the
-        // inner_schema/inner format.
-        let stats = self
-            .format
-            .inner
-            .infer_stats(state, &self.store, self.inner_schema.clone(), &self.object)
-            .await
-            .unwrap()
-            .project(projection);
+    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
+        Arc::new(Self {
+            inner: self.inner.with_projection(config),
+        })
+    }
 
-        let file_groups = vec![vec![PartitionedFile {
-            object_meta: self.object.clone(),
-            partition_values: vec![],
-            range: None,
-            statistics: Some(stats),
-            extensions: None,
-            metadata_size_hint: self.format.inner.metadata_size_hint(),
-        }]];
+    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
+        Arc::new(Self {
+            inner: self.inner.with_statistics(statistics),
+        })
+    }
 
-        let config = FileScanConfig::new(
-            ObjectStoreUrl::local_filesystem(),
-            self.inner_schema.clone(),
-            self.format.file_source(),
-        )
-        .with_file_groups(file_groups)
-        .with_projection(projection.cloned())
-        .with_limit(limit);
+    fn metrics(&self) -> &ExecutionPlanMetricsSet {
+        self.inner.metrics()
+    }
 
-        let inner_physical_filters = self.inner_filters(state, filters)?;
+    fn statistics(&self) -> Result<Statistics> {
+        self.inner.statistics()
+    }
 
-        self.format
-            .create_physical_plan(state, config, Some(&inner_physical_filters))
-            .await
+    fn file_type(&self) -> &str {
+        self.inner.file_type()
     }
 }
 
@@ -408,7 +331,10 @@ mod test {
 
     use arrow_array::RecordBatch;
     use arrow_schema::DataType;
-    use datafusion::prelude::{col, ParquetReadOptions, SessionContext};
+    use datafusion::{
+        execution::SessionStateBuilder,
+        prelude::{col, ParquetReadOptions, SessionContext},
+    };
     use sedona_expr::projection::unwrap_batch;
     use sedona_schema::datatypes::{lnglat, Edges, SedonaType};
 
@@ -419,20 +345,24 @@ mod test {
         format!("{geoarrow_data}/{group}/files/{group}_{name}_geo.parquet")
     }
 
-    #[tokio::test]
-    async fn table_provider() {
-        let ctx = SessionContext::new();
-
-        let example = test_geoparquet("example", "geometry");
-        let table = GeoParquetTableProvider::local(&ctx.state(), &example)
-            .await
+    fn setup_context() -> SessionContext {
+        let mut state = SessionStateBuilder::new().build();
+        state
+            .register_file_format(Arc::new(GeoParquetFormatFactory::new()), true)
             .unwrap();
+        SessionContext::new_with_state(state).enable_url_table()
+    }
+
+    #[tokio::test]
+    async fn format_from_listing_table() {
+        let ctx = setup_context();
+        let example = test_geoparquet("example", "geometry");
+        let df = ctx.table(&example).await.unwrap();
 
         // Check that the logical plan resulting from a read has the correct schema
-        let df = ctx.read_table(Arc::new(table)).unwrap();
         assert_eq!(
-            df.schema().field_names(),
-            ["?table?.wkt", "?table?.geometry"]
+            df.schema().clone().strip_qualifiers().field_names(),
+            ["wkt", "geometry"]
         );
 
         let sedona_types: Result<Vec<_>> = df
@@ -497,53 +427,14 @@ mod test {
     }
 
     #[tokio::test]
-    async fn projection() {
-        let ctx = SessionContext::new();
-
-        let example = test_geoparquet("example", "geometry");
-        let table = GeoParquetTableProvider::local(&ctx.state(), &example)
-            .await
-            .unwrap();
-
-        // Check that the logical plan resulting from a read has the correct schema
-        // even when we explicitly reorder columns
-        let df = ctx
-            .read_table(Arc::new(table))
-            .unwrap()
-            .select(vec![col("geometry"), col("wkt")])
-            .unwrap();
-        assert_eq!(
-            df.schema().field_names(),
-            ["?table?.geometry", "?table?.wkt"]
-        );
-        let sedona_types: Result<Vec<_>> = df
-            .schema()
-            .as_arrow()
-            .fields()
-            .iter()
-            .map(|f| SedonaType::from_data_type(f.data_type()))
-            .collect();
-        let sedona_types = sedona_types.unwrap();
-        assert_eq!(sedona_types.len(), 2);
-        assert_eq!(
-            sedona_types[0],
-            SedonaType::WkbView(Edges::Planar, lnglat())
-        );
-        assert_eq!(sedona_types[1], SedonaType::Arrow(DataType::Utf8View));
-    }
-
-    #[tokio::test]
     async fn projection_without_spatial() {
-        let ctx = SessionContext::new();
-
         let example = test_geoparquet("example", "geometry");
-        let table = GeoParquetTableProvider::local(&ctx.state(), &example)
-            .await
-            .unwrap();
+        let ctx = setup_context();
 
         // Completely deselect all geometry columns
         let df = ctx
-            .read_table(Arc::new(table))
+            .table(&example)
+            .await
             .unwrap()
             .select(vec![col("wkt")])
             .unwrap();
