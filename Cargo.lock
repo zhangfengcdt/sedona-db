@@ -3834,6 +3834,7 @@ dependencies = [
  "sedona-functions",
  "sedona-geoparquet",
  "sedona-schema",
+ "sedona-testing",
  "tokio",
  "url",
 ]

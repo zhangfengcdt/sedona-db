@@ -1,7 +1,8 @@
 pub mod geo_iterator;
-pub mod st_asbinary;
-pub mod st_astext;
-pub mod st_geomfromwkb;
-pub mod st_geomfromwkt;
-pub mod st_point;
-pub mod st_xy;
+pub mod register;
+mod st_asbinary;
+mod st_astext;
+mod st_geomfromwkb;
+mod st_geomfromwkt;
+mod st_point;
+mod st_xy;

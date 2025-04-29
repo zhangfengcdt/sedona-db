@@ -8,16 +8,18 @@ use datafusion_common::not_impl_err;
 use datafusion_expr::{ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility};
 use sedona_schema::datatypes::SedonaType;
 
+pub type ScalarKernelRef = Arc<dyn SedonaScalarKernel + Send + Sync>;
+
 /// Top-level scalar user-defined function
 ///
 /// This struct implements datafusion's ScalarUDF and implements kernel dispatch
 /// and argument wrapping/unwrapping while this is still necessary to support
 /// user-defined types.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SedonaScalarUDF {
     name: String,
     signature: Signature,
-    kernels: Vec<Arc<dyn SedonaScalarKernel + Send + Sync>>,
+    kernels: Vec<ScalarKernelRef>,
     documentation: Option<Documentation>,
 }
 
@@ -211,10 +213,7 @@ impl Debug for SimpleSedonaScalarKernel {
 }
 
 impl SimpleSedonaScalarKernel {
-    pub fn new_ref(
-        arg_matcher: ArgMatcher,
-        fun: SedonaScalarKernelImpl,
-    ) -> Arc<dyn SedonaScalarKernel + Send + Sync> {
+    pub fn new_ref(arg_matcher: ArgMatcher, fun: SedonaScalarKernelImpl) -> ScalarKernelRef {
         Arc::new(Self { arg_matcher, fun })
     }
 }
@@ -236,9 +235,10 @@ impl SedonaScalarKernel for SimpleSedonaScalarKernel {
 }
 
 impl SedonaScalarUDF {
+    /// Create a new SedonaScalarUDF
     pub fn new(
         name: &str,
-        kernels: Vec<Arc<dyn SedonaScalarKernel + Send + Sync>>,
+        kernels: Vec<ScalarKernelRef>,
         volatility: Volatility,
         documentation: Option<Documentation>,
     ) -> SedonaScalarUDF {
@@ -251,6 +251,14 @@ impl SedonaScalarUDF {
         }
     }
 
+    /// Add a new kernel to a Scalar UDF
+    ///
+    /// Because kernels are resolved in reverse order, the new kernel will take
+    /// precedence over any previously added kernels that apply to the same types.
+    pub fn add_kernel(&mut self, kernel: ScalarKernelRef) {
+        self.kernels.push(kernel);
+    }
+
     fn physical_types(args: &[DataType]) -> Result<Vec<SedonaType>> {
         args.iter().map(SedonaType::from_data_type).collect()
     }
@@ -259,7 +267,8 @@ impl SedonaScalarUDF {
         &self,
         args: &[SedonaType],
     ) -> Result<(&dyn SedonaScalarKernel, SedonaType)> {
-        for kernel in &self.kernels {
+        // Resolve kernels in reverse so that more recently added ones are resolved first
+        for kernel in self.kernels.iter().rev() {
             if let Some(return_type) = kernel.return_type(args)? {
                 return Ok((kernel.as_ref(), return_type));
             }
@@ -417,11 +426,25 @@ mod tests {
             panic!("Unexpected batch result");
         }
 
+        // Calling with something where no types match should error
         let batch_err = udf.invoke_batch(&[], 5).unwrap_err();
         assert_eq!(
             batch_err.message(),
             "simple_udf([]): No kernel matching arguments"
         );
+
+        // Adding a new kernel should result in that kernel getting picked first
+        let mut udf = udf.clone();
+        udf.add_kernel(SimpleSedonaScalarKernel::new_ref(
+            ArgMatcher::new(
+                vec![ArgMatcher::is_arrow(DataType::Boolean)],
+                SedonaType::Arrow(DataType::Utf8),
+            ),
+            Arc::new(|_, _, _, _| Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))),
+        ));
+
+        // Now, calling with a Boolean should result in a Utf8
+        assert_eq!(udf.return_type(&[bool_arrow.clone()])?, DataType::Utf8);
 
         Ok(())
     }

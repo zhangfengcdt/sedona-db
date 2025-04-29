@@ -11,16 +11,14 @@ use datafusion::{
     sql::parser::DFParser,
 };
 use datafusion_expr::sqlparser::dialect::dialect_from_str;
-use sedona_expr::projection::wrap_batch;
+use sedona_expr::{function_set::FunctionSet, projection::wrap_batch, scalar_udf::ScalarKernelRef};
 use sedona_geoparquet::format::GeoParquetFormatFactory;
 
 use crate::{
     catalog::DynamicObjectStoreCatalog,
     projection::{unwrap_df, wrap_df},
 };
-use crate::{
-    exec::create_plan_from_sql, functions::register_sedona_scalar_udfs, projection::unwrap_stream,
-};
+use crate::{exec::create_plan_from_sql, projection::unwrap_stream};
 
 /// Sedona SessionContext wrapper
 ///
@@ -30,6 +28,7 @@ use crate::{
 /// interface for configuring the behaviour of
 pub struct SedonaContext {
     pub ctx: SessionContext,
+    functions: FunctionSet,
 }
 
 impl SedonaContext {
@@ -74,8 +73,35 @@ impl SedonaContext {
 
     /// Creates a new context from a previously configured DataFusion context
     pub fn new_from_context(ctx: SessionContext) -> Self {
-        register_sedona_scalar_udfs(&ctx);
-        Self { ctx }
+        let mut out = Self {
+            ctx,
+            functions: FunctionSet::new(),
+        };
+        out.register_function_set(sedona_functions::register::default_function_set());
+        out
+    }
+
+    /// Register all functions in a [FunctionSet] with this context
+    pub fn register_function_set(&mut self, function_set: FunctionSet) {
+        // Merge other functions and re-register with the context
+        self.functions.merge(function_set);
+
+        for scalar_udf in self.functions.scalar_udfs() {
+            self.ctx.register_udf(scalar_udf.clone().into());
+        }
+    }
+
+    /// Register a collection of kernels with this context
+    pub fn register_scalar_kernels<'a>(
+        &mut self,
+        kernels: impl Iterator<Item = (&'a str, ScalarKernelRef)>,
+    ) -> Result<()> {
+        for (name, kernel) in kernels {
+            let udf = self.functions.add_scalar_udf_kernel(name, kernel)?;
+            self.ctx.register_udf(udf.clone().into());
+        }
+
+        Ok(())
     }
 
     /// Creates a [`DataFrame`] from SQL query text that may contain one or more
@@ -187,25 +213,26 @@ mod tests {
     use arrow_array::create_array;
     use arrow_schema::{DataType, Field, Schema};
     use datafusion::assert_batches_eq;
-    use datafusion_expr::{ColumnarValue, ScalarUDF};
     use futures::TryStreamExt;
-    use sedona_functions::st_point::st_point_udf;
     use sedona_schema::datatypes::{lnglat, Edges, SedonaType, WKB_GEOMETRY};
+    use sedona_testing::create::create_array_storage;
 
     use super::*;
 
     fn test_batch() -> Result<RecordBatch> {
-        let st_point: ScalarUDF = st_point_udf().into();
         let schema = Schema::new(vec![
             Field::new("idx", DataType::Int32, true),
             WKB_GEOMETRY.to_storage_field("geometry", true)?,
         ]);
         let idx = create_array!(Int32, [1, 2, 3]);
-        let xs = create_array!(Float64, [1.0, 3.0, 5.0]);
-        let ys = create_array!(Float64, [2.0, 4.0, 6.0]);
-        let wkb_wrapped =
-            st_point.invoke_batch(&[ColumnarValue::Array(xs), ColumnarValue::Array(ys)], 3)?;
-        let wkb_array = WKB_GEOMETRY.unwrap_arg(&wkb_wrapped)?.to_array(3)?;
+        let wkb_array = create_array_storage(
+            &[
+                Some("POINT (1 2)"),
+                Some("POINT (3 4)"),
+                Some("POINT (5 6)"),
+            ],
+            &WKB_GEOMETRY,
+        );
         Ok(RecordBatch::try_new(Arc::new(schema), vec![idx, wkb_array]).unwrap())
     }
 

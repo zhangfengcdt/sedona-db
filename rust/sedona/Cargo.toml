@@ -14,6 +14,9 @@ aws = ["dep:aws-config", "dep:aws-credential-types", "object_store/aws"]
 gcp = ["object_store/gcp"]
 http = ["object_store/http"]
 
+[dev-dependencies]
+sedona-testing = { path = "../sedona-testing" }
+
 [dependencies]
 arrow-schema = { workspace = true }
 arrow-array = { workspace = true }

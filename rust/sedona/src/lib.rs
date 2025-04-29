@@ -1,6 +1,5 @@
-pub mod catalog;
+mod catalog;
 pub mod context;
-pub mod functions;
-pub mod object_storage;
 mod exec;
+mod object_storage;
 mod projection;
