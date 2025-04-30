@@ -117,7 +117,7 @@ mod tests {
         #[values(WKB_GEOMETRY, WKB_GEOGRAPHY, WKB_VIEW_GEOMETRY, WKB_VIEW_GEOGRAPHY)]
         sedona_type: SedonaType,
     ) {
-        let udf: ScalarUDF = st_astext_udf().into();
+        let udf = st_astext_udf();
 
         assert_value_equal(
             &udf.invoke_batch(&[create_scalar_value(Some("POINT (1 2)"), &sedona_type)], 1)

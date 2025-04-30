@@ -5,7 +5,9 @@ use std::{any::Any, fmt::Debug};
 use arrow_schema::DataType;
 use datafusion_common::error::Result;
 use datafusion_common::not_impl_err;
-use datafusion_expr::{ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use sedona_schema::datatypes::{Edges, SedonaType};
 
 pub type ScalarKernelRef = Arc<dyn SedonaScalarKernel + Send + Sync>;
@@ -312,6 +314,21 @@ impl SedonaScalarUDF {
         Self::new(name, vec![stub_kernel], volatility, documentation)
     }
 
+    pub fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        number_rows: usize,
+    ) -> Result<ColumnarValue> {
+        let arg_types: Vec<_> = args.iter().map(|arg| arg.data_type()).collect();
+        let return_type = self.return_type(&arg_types)?;
+        let args = ScalarFunctionArgs {
+            args: args.to_vec(),
+            number_rows,
+            return_type: &return_type,
+        };
+        self.invoke_with_args(args)
+    }
+
     /// Add a new kernel to a Scalar UDF
     ///
     /// Because kernels are resolved in reverse order, the new kernel will take
@@ -366,18 +383,18 @@ impl ScalarUDFImpl for SedonaScalarUDF {
         Ok(arg_types.to_vec())
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
-        let arg_types: Vec<DataType> = args.iter().map(|arg| arg.data_type()).collect();
+    fn invoke_with_args(&self, args: datafusion_expr::ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let arg_types: Vec<DataType> = args.args.iter().map(|arg| arg.data_type()).collect();
         let arg_physical_types = Self::physical_types(&arg_types)?;
         let (kernel, out_type) = self.return_type_impl(&arg_physical_types)?;
-        let args_unwrapped: Result<Vec<ColumnarValue>, _> = zip(&arg_physical_types, args)
+        let args_unwrapped: Result<Vec<ColumnarValue>, _> = zip(&arg_physical_types, &args.args)
             .map(|(a, b)| a.unwrap_arg(b))
             .collect();
         let result = kernel.invoke_batch(
             &arg_physical_types,
             &out_type,
             &args_unwrapped?,
-            number_rows,
+            args.number_rows,
         )?;
         out_type.wrap_arg(&result)
     }

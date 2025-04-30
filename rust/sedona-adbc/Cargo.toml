@@ -9,7 +9,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-adbc_core = { version = "0.17.0" }
+adbc_core = { git = "https://github.com/apache/arrow-adbc", ref = "1ba248290cd299c4969b679463bcd54c217cf2e4"  }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 datafusion = { workspace = true }

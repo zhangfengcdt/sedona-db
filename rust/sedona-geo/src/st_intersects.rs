@@ -97,7 +97,6 @@ fn invoke_scalar(item_a: impl GeometryTraitExt<T = f64>, geom_b: &Geometry) -> R
 mod tests {
     use arrow_array::create_array;
     use datafusion_common::scalar::ScalarValue;
-    use datafusion_expr::ScalarUDF;
     use sedona_functions::register::stubs::st_intersects_udf;
     use sedona_schema::datatypes::WKB_GEOMETRY;
     use sedona_testing::{
@@ -108,9 +107,8 @@ mod tests {
 
     #[test]
     fn scalar_scalar() {
-        let mut sedona_udf = st_intersects_udf();
-        sedona_udf.add_kernel(st_intersects_impl());
-        let udf: ScalarUDF = sedona_udf.into();
+        let mut udf = st_intersects_udf();
+        udf.add_kernel(st_intersects_impl());
 
         let point_scalar = create_scalar_value(Some("POINT (0.25 0.25)"), &WKB_GEOMETRY);
         let point2_scalar = create_scalar_value(Some("POINT (10 10)"), &WKB_GEOMETRY);
@@ -167,9 +165,8 @@ mod tests {
 
     #[test]
     fn scalar_array() {
-        let mut sedona_udf = st_intersects_udf();
-        sedona_udf.add_kernel(st_intersects_impl());
-        let udf: ScalarUDF = sedona_udf.into();
+        let mut udf = st_intersects_udf();
+        udf.add_kernel(st_intersects_impl());
 
         let point_array = create_array_value(
             &[Some("POINT (0.25 0.25)"), Some("POINT (10 10)"), None],

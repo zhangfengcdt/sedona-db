@@ -92,7 +92,7 @@ mod tests {
 
     #[rstest]
     fn udf_geometry_input(#[values(WKB_GEOMETRY, WKB_GEOGRAPHY)] sedona_type: SedonaType) {
-        let udf: ScalarUDF = st_asbinary_udf().into();
+        let udf = st_asbinary_udf();
 
         assert_value_equal(
             &udf.invoke_batch(&[create_scalar_value(Some("POINT (1 2)"), &sedona_type)], 1)
@@ -124,7 +124,7 @@ mod tests {
     fn udf_geometry_view_input(
         #[values(WKB_VIEW_GEOMETRY, WKB_VIEW_GEOGRAPHY)] sedona_type: SedonaType,
     ) {
-        let udf: ScalarUDF = st_asbinary_udf().into();
+        let udf = st_asbinary_udf();
 
         assert_value_equal(
             &udf.invoke_batch(&[create_scalar_value(Some("POINT (1 2)"), &sedona_type)], 1)

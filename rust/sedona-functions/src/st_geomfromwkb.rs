@@ -132,7 +132,7 @@ mod tests {
 
     #[rstest]
     fn udf(#[values(DataType::Binary, DataType::BinaryView)] data_type: DataType) {
-        let udf: ScalarUDF = st_geomfromwkb_udf().into();
+        let udf = st_geomfromwkb_udf();
 
         assert_value_equal(
             &udf.invoke_batch(
@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn invalid_wkb() {
-        let udf: ScalarUDF = st_geomfromwkb_udf().into();
+        let udf = st_geomfromwkb_udf();
 
         let err = udf
             .invoke_batch(&[ScalarValue::Binary(Some(vec![])).into()], 1)
@@ -177,7 +177,7 @@ mod tests {
 
     #[test]
     fn geog() {
-        let udf: ScalarUDF = st_geogfromwkb_udf().into();
+        let udf = st_geogfromwkb_udf();
         let wkb_scalar = ScalarValue::Binary(Some(POINT12.to_vec()));
 
         assert_value_equal(

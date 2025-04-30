@@ -183,8 +183,8 @@ mod tests {
 
     #[test]
     fn udf_invoke() {
-        let udf_x: ScalarUDF = st_x_udf().into();
-        let udf_y: ScalarUDF = st_y_udf().into();
+        let udf_x = st_x_udf();
+        let udf_y = st_y_udf();
 
         assert_value_equal(
             &udf_x
@@ -235,7 +235,7 @@ mod tests {
 
     #[test]
     fn udf_empties() {
-        let udf_x: ScalarUDF = st_x_udf().into();
+        let udf_x = st_x_udf();
 
         assert_value_equal(
             &udf_x
@@ -274,7 +274,7 @@ mod tests {
         )]
         bad_wkt: &str,
     ) {
-        let udf_x: ScalarUDF = st_x_udf().into();
+        let udf_x = st_x_udf();
         let err = udf_x
             .invoke_batch(&[create_scalar_value(Some(bad_wkt), &WKB_GEOMETRY)], 1)
             .unwrap_err();
@@ -283,7 +283,7 @@ mod tests {
 
     #[test]
     fn multipoint_with_empty_child() {
-        let udf_x: ScalarUDF = st_x_udf().into();
+        let udf_x = st_x_udf();
         let value = WKB_GEOMETRY
             .wrap_arg(&ScalarValue::Binary(Some(MULTIPOINT_WITH_EMPTY_CHILD_WKB.to_vec())).into())
             .unwrap();

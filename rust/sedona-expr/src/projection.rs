@@ -8,7 +8,9 @@ use std::sync::Arc;
 use arrow_array::{new_null_array, RecordBatch, StructArray};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DFSchema, Result};
-use datafusion_expr::{ColumnarValue, Expr, ScalarUDF, ScalarUDFImpl, Signature};
+use datafusion_expr::{
+    ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+};
 use sedona_schema::{extension_type::ExtensionType, projection::unwrap_schema};
 
 /// Implementation underlying wrap_df
@@ -214,11 +216,11 @@ impl ScalarUDFImpl for WrapExtensionUdf {
         Ok(args[1].clone())
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], _num_rows: usize) -> Result<ColumnarValue> {
-        if let Some(extension_type) = ExtensionType::from_data_type(&args[1].data_type()) {
-            extension_type.wrap_arg(&args[0])
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if let Some(extension_type) = ExtensionType::from_data_type(&args.args[1].data_type()) {
+            extension_type.wrap_arg(&args.args[0])
         } else {
-            Ok(args[0].clone())
+            Ok(args.args[0].clone())
         }
     }
 }
@@ -257,11 +259,11 @@ impl ScalarUDFImpl for UnwrapExtensionUdf {
         }
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], _num_rows: usize) -> Result<ColumnarValue> {
-        if let Some(extension) = ExtensionType::from_data_type(&args[0].data_type()) {
-            extension.unwrap_arg(&args[0])
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if let Some(extension) = ExtensionType::from_data_type(&args.args[0].data_type()) {
+            extension.unwrap_arg(&args.args[0])
         } else {
-            Ok(args[0].clone())
+            Ok(args.args[0].clone())
         }
     }
 }

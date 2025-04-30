@@ -27,23 +27,24 @@ edition = "2021"
 rust-version = "1.82"
 
 [workspace.dependencies]
-arrow = { version = "54.3.0", features = ["prettyprint", "ffi", "chrono-tz"] }
-arrow-array = { version = "54.3.0" }
-arrow-data = { version = "54.3.0" }
-arrow-schema = { version = "54.3.0" }
+arrow = { version = "55.0.0", features = ["prettyprint", "ffi", "chrono-tz"] }
+arrow-array = { version = "55.0.0" }
+arrow-data = { version = "55.0.0" }
+arrow-schema = { version = "55.0.0" }
 async-trait = { version = "0.1.87" }
 bytes = "1.10"
 chrono = { version = "0.4.38", default-features = false }
-datafusion = { version = "46.0.1", default-features = false }
-datafusion-catalog = { version = "46.0.1" }
-datafusion-common = { version = "46.0.1", default-features = false }
-datafusion-execution = { version = "46.0.1", default-features = false }
-datafusion-expr = { version = "46.0.1" }
-datafusion-physical-expr = { version = "46.0.1" }
-datafusion-physical-plan = { version = "46.0.1" }
+datafusion = { version = "47.0.0", default-features = false }
+datafusion-catalog = { version = "47.0.0" }
+datafusion-common = { version = "47.0.0", default-features = false }
+datafusion-execution = { version = "47.0.0", default-features = false }
+datafusion-expr = { version = "47.0.0" }
+datafusion-physical-expr = { version = "47.0.0" }
+datafusion-physical-plan = { version = "47.0.0" }
 dirs = "6.0.0"
 env_logger = "0.11"
 futures = { version = "0.3" }
+object_store = { version = "0.12.0", default-features = false }
 
 # Use our own fork of georust/geo, which implements generic computational geometry algorithms for geo-traits
 geo-generic-alg = { git = "https://github.com/wherobots/geo.git", branch = "generic-alg", package = "geo-generic-alg" }
@@ -54,9 +55,8 @@ geo-traits-ext = "0.1.0"
 wkb = "0.8.0"
 wkt = "0.13.0"
 
-object_store = { version = "0.11.0", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "54.2.1", default-features = false, features = [
+parquet = { version = "55.0.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",

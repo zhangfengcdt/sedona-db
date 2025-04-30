@@ -157,7 +157,7 @@ mod tests {
     #[case(DataType::Float64, DataType::Float32)]
     #[case(DataType::Float32, DataType::Float32)]
     fn udf_invoke(#[case] lhs_type: DataType, #[case] rhs_type: DataType) {
-        let udf: ScalarUDF = st_point_udf().into();
+        let udf = st_point_udf();
 
         let lhs_scalar_null = ScalarValue::Float64(None).cast_to(&lhs_type).unwrap();
         let lhs_scalar = ScalarValue::Float64(Some(1.0)).cast_to(&lhs_type).unwrap();
@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn geog() {
-        let udf: ScalarUDF = st_geogpoint_udf().into();
+        let udf = st_geogpoint_udf();
 
         assert_value_equal(
             &udf.invoke_batch(

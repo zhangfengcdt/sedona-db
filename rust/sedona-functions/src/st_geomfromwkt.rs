@@ -157,7 +157,7 @@ mod tests {
 
     #[rstest]
     fn udf(#[values(DataType::Utf8, DataType::Utf8View)] data_type: DataType) {
-        let udf: ScalarUDF = st_geomfromwkt_udf().into();
+        let udf = st_geomfromwkt_udf();
 
         assert_value_equal(
             &udf.invoke_batch(
@@ -193,7 +193,7 @@ mod tests {
 
     #[test]
     fn invalid_wkt() {
-        let udf: ScalarUDF = st_geomfromwkt_udf().into();
+        let udf = st_geomfromwkt_udf();
 
         let err = udf
             .invoke_batch(
@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn geog() {
-        let udf: ScalarUDF = st_geogfromwkt_udf().into();
+        let udf = st_geogfromwkt_udf();
 
         assert_value_equal(
             &udf.invoke_batch(
