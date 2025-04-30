@@ -21,7 +21,7 @@ macro_rules! iter_geo_traits {
     ( $arg_type:expr, $arg:expr, $lambda:expr ) => {{
         match $arg {
             ColumnarValue::Scalar(scalar) => {
-                let geo_item = $crate::geo_iterator::parse_wkb_scalar(scalar);
+                let geo_item = $crate::iter_geo_traits::parse_wkb_scalar(scalar);
                 ($lambda)(0, geo_item)?;
             }
             ColumnarValue::Array(array) => match $arg_type {
@@ -30,7 +30,7 @@ macro_rules! iter_geo_traits {
                     let mut func = $lambda;
                     let concrete_array = datafusion_common::cast::as_binary_array(array)?;
                     for (i, maybe_item) in
-                        $crate::geo_iterator::iter_wkb_binary(concrete_array).enumerate()
+                        $crate::iter_geo_traits::iter_wkb_binary(concrete_array).enumerate()
                     {
                         func(i, maybe_item)?
                     }
@@ -40,7 +40,7 @@ macro_rules! iter_geo_traits {
                     let mut func = $lambda;
                     let concrete_array = datafusion_common::cast::as_binary_view_array(array)?;
                     for (i, maybe_item) in
-                        $crate::geo_iterator::iter_wkb_binary_view(concrete_array).enumerate()
+                        $crate::iter_geo_traits::iter_wkb_binary_view(concrete_array).enumerate()
                     {
                         func(i, maybe_item)?
                     }

@@ -6,7 +6,7 @@ use arrow_schema::DataType;
 use datafusion_common::error::Result;
 use datafusion_common::not_impl_err;
 use datafusion_expr::{ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility};
-use sedona_schema::datatypes::SedonaType;
+use sedona_schema::datatypes::{Edges, SedonaType};
 
 pub type ScalarKernelRef = Arc<dyn SedonaScalarKernel + Send + Sync>;
 
@@ -110,6 +110,16 @@ impl ArgMatcher {
         Arc::new(IsGeometryOrGeography {})
     }
 
+    /// Matches any geometry argument without considering Crs
+    pub fn is_geometry() -> Arc<dyn TypeMatcher + Send + Sync> {
+        Arc::new(IsGeometry {})
+    }
+
+    /// Matches any geography argument without considering Crs
+    pub fn is_geography() -> Arc<dyn TypeMatcher + Send + Sync> {
+        Arc::new(IsGeography {})
+    }
+
     /// Matches any numeric argument
     pub fn is_numeric() -> Arc<dyn TypeMatcher + Send + Sync> {
         Arc::new(IsNumeric {})
@@ -147,6 +157,34 @@ struct IsGeometryOrGeography {}
 impl TypeMatcher for IsGeometryOrGeography {
     fn match_type(&self, arg: &SedonaType) -> bool {
         matches!(arg, SedonaType::Wkb(_, _) | SedonaType::WkbView(_, _))
+    }
+}
+
+#[derive(Debug)]
+struct IsGeometry {}
+
+impl TypeMatcher for IsGeometry {
+    fn match_type(&self, arg: &SedonaType) -> bool {
+        match arg {
+            SedonaType::Wkb(edges, _) | SedonaType::WkbView(edges, _) => {
+                matches!(edges, Edges::Planar)
+            }
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct IsGeography {}
+
+impl TypeMatcher for IsGeography {
+    fn match_type(&self, arg: &SedonaType) -> bool {
+        match arg {
+            SedonaType::Wkb(edges, _) | SedonaType::WkbView(edges, _) => {
+                matches!(edges, Edges::Spherical)
+            }
+            _ => false,
+        }
     }
 }
 
@@ -251,6 +289,29 @@ impl SedonaScalarUDF {
         }
     }
 
+    /// Create a new stub function
+    ///
+    /// Creates a new function that calculates a return type but fails when invoked with
+    /// arguments. This is useful to create stub functions when it is expected that the
+    /// actual functionality will be registered from one or more independent crates
+    /// (e.g., ST_Intersects(), which may be implemented in sedona-geo or sedona-geography).
+    pub fn new_stub(
+        name: &str,
+        arg_matcher: ArgMatcher,
+        volatility: Volatility,
+        documentation: Option<Documentation>,
+    ) -> Self {
+        let name_string = name.to_string();
+        let stub_kernel = SimpleSedonaScalarKernel::new_ref(
+            arg_matcher,
+            Arc::new(move |arg_types, _, _, _| {
+                not_impl_err!("Implementation for {name_string}({arg_types:?}) was not registered")
+            }),
+        );
+
+        Self::new(name, vec![stub_kernel], volatility, documentation)
+    }
+
     /// Add a new kernel to a Scalar UDF
     ///
     /// Because kernels are resolved in reverse order, the new kernel will take
@@ -336,13 +397,26 @@ mod tests {
 
         assert!(ArgMatcher::is_geometry_or_geography().match_type(&WKB_GEOMETRY));
         assert!(ArgMatcher::is_geometry_or_geography().match_type(&WKB_GEOGRAPHY));
+        assert!(!ArgMatcher::is_geometry_or_geography()
+            .match_type(&SedonaType::Arrow(DataType::Binary)));
+
+        assert!(ArgMatcher::is_geometry().match_type(&WKB_GEOMETRY));
+        assert!(!ArgMatcher::is_geometry().match_type(&WKB_GEOGRAPHY));
+
+        assert!(ArgMatcher::is_geography().match_type(&WKB_GEOGRAPHY));
+        assert!(!ArgMatcher::is_geography().match_type(&WKB_GEOMETRY));
+
         assert!(ArgMatcher::is_numeric().match_type(&SedonaType::Arrow(DataType::Int32)));
         assert!(ArgMatcher::is_numeric().match_type(&SedonaType::Arrow(DataType::Float64)));
+
         assert!(ArgMatcher::is_string().match_type(&SedonaType::Arrow(DataType::Utf8)));
         assert!(ArgMatcher::is_string().match_type(&SedonaType::Arrow(DataType::Utf8View)));
         assert!(ArgMatcher::is_string().match_type(&SedonaType::Arrow(DataType::LargeUtf8)));
+        assert!(!ArgMatcher::is_string().match_type(&SedonaType::Arrow(DataType::Binary)));
+
         assert!(ArgMatcher::is_binary().match_type(&SedonaType::Arrow(DataType::Binary)));
         assert!(ArgMatcher::is_binary().match_type(&SedonaType::Arrow(DataType::BinaryView)));
+        assert!(!ArgMatcher::is_binary().match_type(&SedonaType::Arrow(DataType::Utf8)));
     }
 
     #[test]
@@ -447,5 +521,22 @@ mod tests {
         assert_eq!(udf.return_type(&[bool_arrow.clone()])?, DataType::Utf8);
 
         Ok(())
+    }
+
+    #[test]
+    fn stub() {
+        let stub = SedonaScalarUDF::new_stub(
+            "stubby",
+            ArgMatcher::new(vec![], SedonaType::Arrow(DataType::Boolean)),
+            Volatility::Immutable,
+            None,
+        );
+
+        assert_eq!(stub.return_type(&[]).unwrap(), DataType::Boolean);
+        let err = stub.invoke_batch(&[], 1).unwrap_err();
+        assert_eq!(
+            err.message(),
+            "Implementation for stubby([]) was not registered"
+        );
     }
 }

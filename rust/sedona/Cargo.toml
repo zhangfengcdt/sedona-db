@@ -9,9 +9,10 @@ edition.workspace = true
 rust-version.workspace = true
 
 [features]
-default = ["aws", "gcp", "http"]
+default = ["aws", "gcp", "http", "geo"]
 aws = ["dep:aws-config", "dep:aws-credential-types", "object_store/aws"]
 gcp = ["object_store/gcp"]
+geo = ["dep:sedona-geo"]
 http = ["object_store/http"]
 
 [dev-dependencies]
@@ -33,6 +34,7 @@ object_store = { workspace = true }
 parking_lot = { workspace = true }
 sedona-expr = { path = "../sedona-expr" }
 sedona-functions = { path = "../sedona-functions" }
+sedona-geo = { path = "../sedona-geo", optional = true }
 sedona-geoparquet = { path = "../sedona-geoparquet" }
 sedona-schema = { path = "../sedona-schema" }
 tokio = { workspace = true }

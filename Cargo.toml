@@ -3,6 +3,7 @@ members = [
     "rust/sedona-adbc",
     "rust/sedona-expr",
     "rust/sedona-functions",
+    "rust/sedona-geo",
     "rust/sedona-geoparquet",
     "rust/sedona-schema",
     "rust/sedona-testing",

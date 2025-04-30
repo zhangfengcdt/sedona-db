@@ -1,0 +1,26 @@
+[package]
+name = "sedona-geo"
+version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description.workspace = true
+readme.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dev-dependencies]
+rstest = { workspace = true }
+sedona-testing = { path = "../sedona-testing" }
+wkt = { workspace = true }
+
+[dependencies]
+arrow-schema = { workspace = true }
+arrow-array = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
+geo = { version = "0.30.0" }
+geo-traits = { workspace = true, features = ["geo-types"] }
+geo-types = { workspace = true }
+sedona-expr = { path = "../sedona-expr" }
+sedona-functions = { path = "../sedona-functions" }
+sedona-schema = { path = "../sedona-schema" }

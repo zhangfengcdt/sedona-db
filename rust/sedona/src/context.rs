@@ -34,7 +34,9 @@ pub struct SedonaContext {
 impl SedonaContext {
     /// Creates a new context with default options
     pub fn new() -> Self {
-        Self::new_from_context(SessionContext::new())
+        // This will panic only if the default build settings are
+        // incorrect which we test!
+        Self::new_from_context(SessionContext::new()).unwrap()
     }
 
     /// Creates a new context with default interactive options
@@ -68,17 +70,24 @@ impl SedonaContext {
             ctx.state_weak_ref(),
         )));
 
-        Ok(Self::new_from_context(ctx))
+        Self::new_from_context(ctx)
     }
 
     /// Creates a new context from a previously configured DataFusion context
-    pub fn new_from_context(ctx: SessionContext) -> Self {
+    pub fn new_from_context(ctx: SessionContext) -> Result<Self> {
         let mut out = Self {
             ctx,
             functions: FunctionSet::new(),
         };
+
+        // Always register default function set
         out.register_function_set(sedona_functions::register::default_function_set());
-        out
+
+        // Register geo kernels if built with geo support
+        #[cfg(feature = "geo")]
+        out.register_scalar_kernels(sedona_geo::register::scalar_kernels().into_iter())?;
+
+        Ok(out)
     }
 
     /// Register all functions in a [FunctionSet] with this context
