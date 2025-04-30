@@ -1,6 +1,5 @@
 use datafusion_common::{error::Result, not_impl_err};
 use datafusion_expr::ColumnarValue;
-use geo::Geometry;
 use geo_traits::{
     to_geo::{
         ToGeoLineString, ToGeoMultiLineString, ToGeoMultiPoint, ToGeoMultiPolygon, ToGeoPoint,
@@ -9,6 +8,7 @@ use geo_traits::{
     GeometryTrait,
     GeometryType::*,
 };
+use geo_types::Geometry;
 use sedona_functions::iter_geo_traits;
 use sedona_schema::datatypes::SedonaType;
 

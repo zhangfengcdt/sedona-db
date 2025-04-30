@@ -4,13 +4,13 @@ use arrow_array::builder::BooleanBuilder;
 use arrow_schema::DataType;
 use datafusion_common::{error::Result, not_impl_err, ScalarValue};
 use datafusion_expr::ColumnarValue;
-use geo::{Geometry, Intersects};
-use geo_traits::GeometryTrait;
+use geo_generic_alg::{Geometry, Intersects};
+use geo_traits_ext::GeometryTraitExt;
 use sedona_expr::scalar_udf::{ArgMatcher, ScalarKernelRef, SedonaScalarKernel};
 use sedona_functions::iter_geo_traits;
 use sedona_schema::datatypes::SedonaType;
 
-use crate::to_geo::{item_to_geometry, scalar_arg_to_geometry};
+use crate::to_geo::scalar_arg_to_geometry;
 
 /// ST_Intersects() implementation using [Intersects]
 pub fn st_intersects_impl() -> ScalarKernelRef {
@@ -89,9 +89,8 @@ impl SedonaScalarKernel for STIntersects {
     }
 }
 
-fn invoke_scalar(item_a: impl GeometryTrait<T = f64>, geom_b: &Geometry) -> Result<bool> {
-    let geom_a = item_to_geometry(item_a)?;
-    Ok(geom_a.intersects(geom_b))
+fn invoke_scalar(item_a: impl GeometryTraitExt<T = f64>, geom_b: &Geometry) -> Result<bool> {
+    Ok(item_a.intersects(geom_b))
 }
 
 #[cfg(test)]

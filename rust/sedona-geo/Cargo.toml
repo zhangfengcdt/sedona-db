@@ -18,8 +18,9 @@ arrow-schema = { workspace = true }
 arrow-array = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
-geo = { version = "0.30.0" }
+geo-generic-alg = { workspace = true }
 geo-traits = { workspace = true, features = ["geo-types"] }
+geo-traits-ext = { workspace = true }
 geo-types = { workspace = true }
 sedona-expr = { path = "../sedona-expr" }
 sedona-functions = { path = "../sedona-functions" }

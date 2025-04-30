@@ -2126,13 +2126,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "geo"
-version = "0.30.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4416397671d8997e9a3e7ad99714f4f00a22e9eaa9b966a5985d2194fc9e02e1"
+name = "geo-generic-alg"
+version = "0.1.0"
+source = "git+https://github.com/wherobots/geo.git?branch=generic-alg#2f791c7236a131ec523ec36f13822fccaf91e3b5"
 dependencies = [
  "earcutr",
  "float_next_after",
+ "geo-traits",
+ "geo-traits-ext",
  "geo-types",
  "geographiclib-rs",
  "i_overlay",
@@ -2146,17 +2147,27 @@ dependencies = [
 [[package]]
 name = "geo-traits"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b018fc19fa58202b03f1c809aebe654f7d70fd3887dace34c3d05c11aeb474b5"
+source = "git+https://github.com/wherobots/geo.git?branch=generic-alg#a49e9e0c48cec7ecd8328c7671efbaa71533f53a"
 dependencies = [
  "geo-types",
 ]
 
 [[package]]
+name = "geo-traits-ext"
+version = "0.1.0"
+source = "git+https://github.com/wherobots/geo.git?branch=generic-alg#bfc5ebd260560e32e56dc0a10a0d52bcc7b35b20"
+dependencies = [
+ "approx",
+ "geo-traits",
+ "geo-types",
+ "num-traits",
+ "serde",
+]
+
+[[package]]
 name = "geo-types"
 version = "0.7.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62ddb1950450d67efee2bbc5e429c68d052a822de3aad010d28b351fbb705224"
+source = "git+https://github.com/wherobots/geo.git?branch=generic-alg#a49e9e0c48cec7ecd8328c7671efbaa71533f53a"
 dependencies = [
  "approx",
  "num-traits",
@@ -4074,7 +4085,9 @@ dependencies = [
  "arrow-schema",
  "datafusion-common",
  "datafusion-expr",
+ "geo-generic-alg",
  "geo-traits",
+ "geo-traits-ext",
  "geo-types",
  "rstest",
  "sedona-expr",
@@ -4092,8 +4105,9 @@ dependencies = [
  "arrow-schema",
  "datafusion-common",
  "datafusion-expr",
- "geo",
+ "geo-generic-alg",
  "geo-traits",
+ "geo-traits-ext",
  "geo-types",
  "rstest",
  "sedona-expr",
@@ -5224,20 +5238,20 @@ dependencies = [
 [[package]]
 name = "wkb"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1e2c084338d6407d24c5a43208aca32128a5d62107eab5ca18314395c4aa3f0"
+source = "git+https://github.com/wherobots/wkb.git?branch=generic-alg#f0ad14f29ff2e2f069da3a5cc540f19766f48933"
 dependencies = [
  "byteorder",
  "geo-traits",
+ "geo-traits-ext",
+ "geo-types",
  "num_enum",
  "thiserror 1.0.69",
 ]
 
 [[package]]
 name = "wkt"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1c591649bd1c9d4e28459758bbb5fb5c0edc7a67060b52422f4761c94ffe961"
+version = "0.13.0"
+source = "git+https://github.com/wherobots/wkt.git?branch=generic-alg#ec44269a416b88821a5bf43d17b53def24c68f65"
 dependencies = [
  "geo-traits",
  "geo-types",

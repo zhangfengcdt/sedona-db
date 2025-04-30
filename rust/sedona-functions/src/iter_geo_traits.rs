@@ -1,7 +1,7 @@
 use arrow_array::{BinaryArray, BinaryViewArray};
 use datafusion_common::error::Result;
 use datafusion_common::{internal_err, DataFusionError, ScalarValue};
-use geo_traits::GeometryTrait;
+use geo_traits_ext::GeometryTraitExt as GeometryTrait;
 
 /// Iterate over an array whose items can be viewed as a [`GeometryTrait`]
 ///
