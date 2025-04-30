@@ -38,6 +38,9 @@ jobs:
           rustup toolchain install stable --no-self-update
           rustup default stable
       - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        run: |
+          cargo fmt --all -- --check
       - name: Clippy
         run: |
           pushd rust

@@ -1,4 +1,3 @@
-
 /// A well-known binary blob of MULTIPOINT (EMPTY)
 ///
 /// The wkt crate's parser rejects this; however, it's a corner case that may show

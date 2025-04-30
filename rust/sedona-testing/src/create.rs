@@ -9,10 +9,7 @@ use wkt::Wkt;
 /// Create a [`ColumnarValue`] array from a sequence of WKT literals
 ///
 /// Panics on invalid WKT or unsupported data type.
-pub fn create_array_value(
-    wkt_values: &[Option<&str>],
-    data_type: &SedonaType,
-) -> ColumnarValue {
+pub fn create_array_value(wkt_values: &[Option<&str>], data_type: &SedonaType) -> ColumnarValue {
     data_type
         .wrap_arg(&ColumnarValue::Array(create_array_storage(
             wkt_values, data_type,
@@ -23,10 +20,7 @@ pub fn create_array_value(
 /// Create a [`ColumnarValue`] scalar from a WKT literal
 ///
 /// Panics on invalid WKT or unsupported data type.
-pub fn create_scalar_value(
-    wkt_value: Option<&str>,
-    data_type: &SedonaType,
-) -> ColumnarValue {
+pub fn create_scalar_value(wkt_value: Option<&str>, data_type: &SedonaType) -> ColumnarValue {
     data_type
         .wrap_arg(&ColumnarValue::Scalar(create_scalar_storage(
             wkt_value, data_type,
@@ -55,15 +49,10 @@ pub fn create_array(wkt_values: &[Option<&str>], data_type: &SedonaType) -> Arra
 /// Create the storage [`ArrayRef`] from a sequence of WKT literals
 ///
 /// Panics on invalid WKT or unsupported data type.
-pub fn create_array_storage(
-    wkt_values: &[Option<&str>],
-    data_type: &SedonaType,
-) -> ArrayRef {
+pub fn create_array_storage(wkt_values: &[Option<&str>], data_type: &SedonaType) -> ArrayRef {
     match data_type {
         SedonaType::Wkb(_, _) => Arc::new(make_wkb_array::<BinaryArray>(wkt_values)),
-        SedonaType::WkbView(_, _) => {
-            Arc::new(make_wkb_array::<BinaryViewArray>(wkt_values))
-        }
+        SedonaType::WkbView(_, _) => Arc::new(make_wkb_array::<BinaryViewArray>(wkt_values)),
         _ => panic!("create_array_storage not implemented for {:?}", data_type),
     }
 }
@@ -71,10 +60,7 @@ pub fn create_array_storage(
 /// Create the storage [`ScalarValue`] from a WKT literal
 ///
 /// Panics on invalid WKT or unsupported data type.
-pub fn create_scalar_storage(
-    wkt_value: Option<&str>,
-    data_type: &SedonaType,
-) -> ScalarValue {
+pub fn create_scalar_storage(wkt_value: Option<&str>, data_type: &SedonaType) -> ScalarValue {
     match data_type {
         SedonaType::Wkb(_, _) => ScalarValue::Binary(wkt_value.map(make_wkb)),
         SedonaType::WkbView(_, _) => ScalarValue::BinaryView(wkt_value.map(make_wkb)),
@@ -124,10 +110,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "create_scalar_storage not implemented")]
     fn scalar_storage_invalid() {
-        create_scalar_storage(
-            Some("POINT (0 1)"),
-            &SedonaType::Arrow(DataType::Null),
-        );
+        create_scalar_storage(Some("POINT (0 1)"), &SedonaType::Arrow(DataType::Null));
     }
 
     #[test]
@@ -157,9 +140,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "create_array_storage not implemented")]
     fn array_storage_invalid() {
-        create_array_storage(
-            &[Some("POINT (0 1)")],
-            &SedonaType::Arrow(DataType::Null),
-        );
+        create_array_storage(&[Some("POINT (0 1)")], &SedonaType::Arrow(DataType::Null));
     }
 }
