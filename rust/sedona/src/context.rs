@@ -224,7 +224,7 @@ mod tests {
     use datafusion::assert_batches_eq;
     use futures::TryStreamExt;
     use sedona_schema::datatypes::{lnglat, Edges, SedonaType, WKB_GEOMETRY};
-    use sedona_testing::create::create_array_storage;
+    use sedona_testing::{create::create_array_storage, data::test_geoparquet};
 
     use super::*;
 
@@ -343,17 +343,12 @@ mod tests {
         Ok(())
     }
 
-    fn test_geoparquet(group: &str, name: &str) -> String {
-        let geoarrow_data = "../../submodules/geoarrow-data";
-        format!("{geoarrow_data}/{group}/files/{group}_{name}_geo.parquet")
-    }
-
     #[tokio::test]
     async fn geoparquet_format() {
         // Make sure that our context can be set up to identify and read
         // GeoParquet files
         let ctx = SedonaContext::new_local_interactive().await.unwrap();
-        let example = test_geoparquet("example", "geometry");
+        let example = test_geoparquet("example", "geometry").unwrap();
         let df = ctx.ctx.table(example).await.unwrap();
         let sedona_types: Result<Vec<_>> = df
             .schema()

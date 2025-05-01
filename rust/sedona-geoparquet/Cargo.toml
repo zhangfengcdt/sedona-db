@@ -12,6 +12,7 @@ rust-version.workspace = true
 default = []
 
 [dev-dependencies]
+sedona-testing = { path = "../sedona-testing" }
 url = { workspace = true }
 
 [dependencies]

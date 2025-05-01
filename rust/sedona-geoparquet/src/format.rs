@@ -337,13 +337,9 @@ mod test {
     };
     use sedona_expr::projection::unwrap_batch;
     use sedona_schema::datatypes::{lnglat, Edges, SedonaType};
+    use sedona_testing::data::test_geoparquet;
 
     use super::*;
-
-    fn test_geoparquet(group: &str, name: &str) -> String {
-        let geoarrow_data = "../../submodules/geoarrow-data";
-        format!("{geoarrow_data}/{group}/files/{group}_{name}_geo.parquet")
-    }
 
     fn setup_context() -> SessionContext {
         let mut state = SessionStateBuilder::new().build();
@@ -356,7 +352,7 @@ mod test {
     #[tokio::test]
     async fn format_from_listing_table() {
         let ctx = setup_context();
-        let example = test_geoparquet("example", "geometry");
+        let example = test_geoparquet("example", "geometry").unwrap();
         let df = ctx.table(&example).await.unwrap();
 
         // Check that the logical plan resulting from a read has the correct schema
@@ -428,7 +424,7 @@ mod test {
 
     #[tokio::test]
     async fn projection_without_spatial() {
-        let example = test_geoparquet("example", "geometry");
+        let example = test_geoparquet("example", "geometry").unwrap();
         let ctx = setup_context();
 
         // Completely deselect all geometry columns

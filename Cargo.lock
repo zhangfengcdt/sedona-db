@@ -4280,6 +4280,7 @@ dependencies = [
  "parquet",
  "sedona-expr",
  "sedona-schema",
+ "sedona-testing",
  "serde",
  "serde_json",
  "serde_with",
