@@ -36,7 +36,7 @@ pub trait SedonaScalarKernel: Debug {
     ///
     /// Returns Some(physical_type) if this kernel applies to the input types or
     /// None otherwise. This struct acts as a version of the Signature that can
-    /// better accomodate the types we need to support (and might be able to be
+    /// better accommodate the types we need to support (and might be able to be
     /// removed when there is better support for matching user-defined types/
     /// types with metadata in DataFusion).
     ///
@@ -233,7 +233,7 @@ impl TypeMatcher for IsBinary {
     }
 }
 
-/// Type defenition for a Scalar kernel implementation function
+/// Type definition for a Scalar kernel implementation function
 pub type SedonaScalarKernelImpl = Arc<
     dyn Fn(&[SedonaType], &SedonaType, &[ColumnarValue], usize) -> Result<ColumnarValue>
         + Send

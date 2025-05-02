@@ -39,7 +39,7 @@ jobs:
           rustup default stable
       - uses: Swatinem/rust-cache@v2
         with:
-          # Update this key to force a new cache. When doing large depenency changes
+          # Update this key to force a new cache. When doing large dependency changes
           # (e.g., updating DataFusion), the old cache is not very useful and may result
           # in out-of-disk ("no space left on device")
           prefix-key: "v1"

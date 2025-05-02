@@ -23,7 +23,7 @@ pub fn test_geoparquet(group: &str, name: &str) -> Result<String> {
     )
 }
 
-/// Find the most likley path to the geoarrow-data testing directory if it exists
+/// Find the most likely path to the geoarrow-data testing directory if it exists
 ///
 /// This looks for a geoarrow-data checkout using the value of SEDONA_GEOARROW_DATA_DIR,
 /// the directory that would be valid if running cargo run from the repository root,

@@ -216,7 +216,7 @@ impl FileFormat for GeoParquetFormat {
         let wrapped_schema = config.file_schema.clone();
         let inner_schema = unwrap_schema(&wrapped_schema);
 
-        // Make sure we pass the schema that the underlying implementaion was expecting
+        // Make sure we pass the schema that the underlying implementation was expecting
         let mut config = config.clone();
         config.file_schema = Arc::new(inner_schema);
         let inner_plan = self

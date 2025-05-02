@@ -107,7 +107,7 @@ impl SedonaScalarKernel for STXy {
 
 // Extracts the 0th or 1st dimension from any point-like or EMPTY GeometryTrait
 //
-// Note that PostGIS will fail for anything that is not POINT (whereas we succed for any
+// Note that PostGIS will fail for anything that is not POINT (whereas we succeed for any
 // EMPTY).
 fn invoke_scalar(item: impl GeometryTrait<T = f64>, dim_index: usize) -> Result<Option<f64>> {
     match item.as_type() {
