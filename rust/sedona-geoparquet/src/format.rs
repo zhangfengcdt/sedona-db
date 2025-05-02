@@ -28,6 +28,8 @@ use sedona_schema::{
 };
 
 use crate::metadata::{GeoParquetColumnEncoding, GeoParquetMetadata};
+use datafusion::datasource::physical_plan::ParquetSource;
+use datafusion::datasource::schema_adapter::SchemaAdapterFactory;
 
 /// GeoParquet FormatFactory
 ///
@@ -261,13 +263,60 @@ impl FileFormat for GeoParquetFormat {
     }
 }
 
-struct GeoParquetFileSource {
+pub struct GeoParquetFileSource {
     inner: Arc<dyn FileSource>,
 }
 
 impl GeoParquetFileSource {
     pub fn new(inner: Arc<dyn FileSource>) -> Self {
         Self { inner }
+    }
+
+    /// Apply a predicate to the inner parquet file source if supported
+    pub fn with_predicate(
+        &self,
+        file_schema: Arc<Schema>,
+        predicate: Arc<dyn PhysicalExpr>,
+    ) -> Self {
+        // Get a reference to the inner source
+        let inner_any = self.inner.as_any();
+
+        // Try to downcast to ParquetSource
+        if let Some(parquet_source) = inner_any.downcast_ref::<ParquetSource>() {
+            // Call with_predicate with both the file_schema and predicate
+            let new_inner = parquet_source.with_predicate(file_schema, predicate);
+            // Wrap the ParquetSource in an Arc<dyn FileSource>
+            Self {
+                inner: Arc::new(new_inner),
+            }
+        } else {
+            // If downcast failed, panic as this is unexpected
+            unreachable!("GeoParquetFileSource constructed with non ParquetSource inner")
+        }
+    }
+
+    /// Apply a schema adapter factory to the inner parquet file source if supported
+    pub fn with_schema_adapter_factory(
+        &self,
+        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Self {
+        // Get a reference to the inner source
+        let inner_any = self.inner.as_any();
+
+        // Try to downcast to ParquetSource
+        if let Some(parquet_source) = inner_any.downcast_ref::<ParquetSource>() {
+            // Call with_schema_adapter_factory on the parquet source
+            let new_inner = parquet_source
+                .clone()
+                .with_schema_adapter_factory(schema_adapter_factory);
+            // Wrap the ParquetSource in an Arc<dyn FileSource>
+            Self {
+                inner: Arc::new(new_inner),
+            }
+        } else {
+            // If downcast failed, panic as this is unexpected
+            unreachable!("GeoParquetFileSource constructed with non ParquetSource inner")
+        }
     }
 }
 
@@ -327,14 +376,21 @@ impl FileSource for GeoParquetFileSource {
 
 #[cfg(test)]
 mod test {
+    use std::fmt::Debug;
     use std::ops::Deref;
 
     use arrow_array::RecordBatch;
     use arrow_schema::DataType;
+    use datafusion::datasource::physical_plan::ParquetSource;
+    use datafusion::datasource::schema_adapter::{SchemaAdapter, SchemaAdapterFactory};
     use datafusion::{
         execution::SessionStateBuilder,
         prelude::{col, ParquetReadOptions, SessionContext},
     };
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
+    use datafusion_physical_expr::PhysicalExpr;
     use sedona_expr::projection::unwrap_batch;
     use sedona_schema::datatypes::{lnglat, Edges, SedonaType};
     use sedona_testing::data::test_geoparquet;
@@ -458,5 +514,64 @@ mod test {
             .as_any()
             .downcast_ref::<GeoParquetFormat>()
             .is_some());
+    }
+
+    #[tokio::test]
+    async fn test_with_predicate() {
+        // Create a parquet source with the correct constructor signature
+        let schema = Arc::new(Schema::empty());
+        let parquet_source = ParquetSource::new(TableParquetOptions::default());
+
+        // Create a simple predicate (column > 0)
+        let column = Arc::new(Column::new("test", 0));
+        let value = Arc::new(Literal::new(ScalarValue::Int32(Some(0))));
+        let predicate: Arc<dyn PhysicalExpr> =
+            Arc::new(BinaryExpr::new(column, Operator::Gt, value));
+
+        // Create GeoParquetFileSource and apply predicate
+        let geo_source = GeoParquetFileSource::new(Arc::new(parquet_source));
+        let geo_source_with_predicate = geo_source.with_predicate(schema.clone(), predicate);
+
+        // Check that inner has been modified - the resulting inner source should be different
+        assert!(!Arc::ptr_eq(
+            &geo_source.inner,
+            &geo_source_with_predicate.inner
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_with_schema_adapter_factory() {
+        // Create a parquet source with the correct constructor signature
+        let parquet_source = ParquetSource::new(TableParquetOptions::default());
+
+        // Create a simple schema adapter factory
+        #[derive(Debug)]
+        struct MockSchemaAdapterFactory;
+
+        impl SchemaAdapterFactory for MockSchemaAdapterFactory {
+            fn create(
+                &self,
+                _projected_table_schema: SchemaRef,
+                _table_schema: SchemaRef,
+            ) -> Box<dyn SchemaAdapter> {
+                // Since we never use the result, we can return unimplemented
+                // We only want to test that the method chains properly
+                unimplemented!()
+            }
+        }
+
+        let schema_adapter_factory: Arc<dyn SchemaAdapterFactory> =
+            Arc::new(MockSchemaAdapterFactory);
+
+        // Create GeoParquetFileSource and apply schema adapter factory
+        let geo_source = GeoParquetFileSource::new(Arc::new(parquet_source));
+        let geo_source_with_adapter =
+            geo_source.with_schema_adapter_factory(schema_adapter_factory);
+
+        // Check that inner has been modified
+        assert!(!Arc::ptr_eq(
+            &geo_source.inner,
+            &geo_source_with_adapter.inner
+        ));
     }
 }
