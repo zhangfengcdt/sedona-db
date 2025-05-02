@@ -29,11 +29,13 @@ rust-version = "1.82"
 [workspace.dependencies]
 arrow = { version = "55.0.0", features = ["prettyprint", "ffi", "chrono-tz"] }
 arrow-array = { version = "55.0.0" }
+arrow-cast = { version = "55.0.0" }
 arrow-data = { version = "55.0.0" }
 arrow-schema = { version = "55.0.0" }
 async-trait = { version = "0.1.87" }
 bytes = "1.10"
 chrono = { version = "0.4.38", default-features = false }
+criterion = { version = "0.5", features = ["html_reports"] }
 datafusion = { version = "47.0.0", default-features = false }
 datafusion-catalog = { version = "47.0.0" }
 datafusion-common = { version = "47.0.0", default-features = false }

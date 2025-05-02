@@ -9,6 +9,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dev-dependencies]
+criterion = { workspace = true }
 rstest = { workspace = true }
 sedona-testing = { path = "../sedona-testing" }
 wkt = { workspace = true }
@@ -25,3 +26,7 @@ geo-types = { workspace = true }
 sedona-expr = { path = "../sedona-expr" }
 sedona-functions = { path = "../sedona-functions" }
 sedona-schema = { path = "../sedona-schema" }
+
+[[bench]]
+harness = false
+name = "geo-predicates"
