@@ -7,7 +7,7 @@ use datafusion::{
     datasource::{
         file_format::{
             file_compression_type::FileCompressionType,
-            parquet::{ParquetFormat, ParquetFormatFactory},
+            parquet::{fetch_parquet_metadata, ParquetFormat, ParquetFormatFactory},
             FileFormat, FileFormatFactory, FilePushdownSupport,
         },
         physical_plan::{FileOpener, FileScanConfig, FileSinkConfig, FileSource},
@@ -20,6 +20,7 @@ use datafusion_physical_expr::{LexRequirement, PhysicalExpr};
 use datafusion_physical_plan::{
     metrics::ExecutionPlanMetricsSet, projection::ProjectionExec, ExecutionPlan,
 };
+use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectMeta, ObjectStore};
 use sedona_expr::projection::wrap_physical_expressions;
 use sedona_schema::{
@@ -97,19 +98,24 @@ impl GetExt for GeoParquetFormatFactory {
 /// not all of the features of the underlying Parquet reader.
 #[derive(Debug)]
 pub struct GeoParquetFormat {
-    inner: ParquetFormat,
+    inner_with_metadata: ParquetFormat,
+    inner_without_metadata: ParquetFormat,
 }
 
 impl GeoParquetFormat {
     /// Create a new instance of the file format
     pub fn new(inner: &ParquetFormat) -> Self {
         // For GeoParquet we currently inspect metadata at the Arrow level,
-        // so we need this to be exposed by the underlying reader. At some point
-        // we may want to keep track of this and apply the same default as
-        // DataFusion.
-        let inner_clone = ParquetFormat::new().with_options(inner.options().clone());
+        // so we need this to be exposed by the underlying reader. Depending on
+        // what exactly we're doing, we might need the underlying metadata or might
+        // need it to be omitted.
         Self {
-            inner: inner_clone.with_skip_metadata(false),
+            inner_with_metadata: ParquetFormat::new()
+                .with_options(inner.options().clone())
+                .with_skip_metadata(false),
+            inner_without_metadata: ParquetFormat::new()
+                .with_options(inner.options().clone())
+                .with_skip_metadata(true),
         }
     }
 
@@ -169,14 +175,15 @@ impl FileFormat for GeoParquetFormat {
     }
 
     fn get_ext(&self) -> String {
-        self.inner.get_ext()
+        self.inner_with_metadata.get_ext()
     }
 
     fn get_ext_with_compression(
         &self,
         file_compression_type: &FileCompressionType,
     ) -> Result<String> {
-        self.inner.get_ext_with_compression(file_compression_type)
+        self.inner_with_metadata
+            .get_ext_with_compression(file_compression_type)
     }
 
     async fn infer_schema(
@@ -185,15 +192,82 @@ impl FileFormat for GeoParquetFormat {
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
-        // Combining schemas is tricky because for GeoParquet the bboxes will result
-        // in the schemas being rejected for inequality.
-        if objects.len() != 1 {
-            return plan_err!("GeoParquet infer_schema() for >1 file not supported");
+        // First, try the underlying format without schema metadata. This should work
+        // for regular Parquet reads and will at least ensure that the underlying schemas
+        // are compatible.
+        let inner_schema_without_metadata = self
+            .inner_without_metadata
+            .infer_schema(state, store, objects)
+            .await?;
+
+        // Collect metadata separately. We can in theory do our own schema
+        // inference too to save an extra server request, but then we have to
+        // copy more ParqeutFormat code. It may be that caching at the object
+        // store level is the way to go here.
+        let metadatas: Vec<_> = futures::stream::iter(objects)
+            .map(|object| {
+                fetch_parquet_metadata(
+                    store.as_ref(),
+                    object,
+                    self.inner_without_metadata.metadata_size_hint(),
+                )
+            })
+            .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
+            .buffered(state.config_options().execution.meta_fetch_concurrency)
+            .try_collect()
+            .await?;
+
+        let mut geoparquet_metadata: Option<GeoParquetMetadata> = None;
+        for metadata in &metadatas {
+            if let Some(kv) = metadata.file_metadata().key_value_metadata() {
+                for item in kv {
+                    if item.key == "geo" && item.value.is_some() {
+                        let this_geoparquet_metadata =
+                            GeoParquetMetadata::new(item.value.as_ref().unwrap())?;
+
+                        match geoparquet_metadata.as_mut() {
+                            Some(existing) => {
+                                existing.try_update(&this_geoparquet_metadata)?;
+                            }
+                            None => geoparquet_metadata = Some(this_geoparquet_metadata),
+                        }
+                    }
+                }
+            }
         }
 
-        let inner_schema = self.inner.infer_schema(state, store, objects).await?;
-        let storage_schema = self.with_geoarrow_field_metadata(inner_schema)?;
-        Ok(Arc::new(wrap_schema(&storage_schema)))
+        if let Some(geo_metadata) = geoparquet_metadata {
+            let new_fields: Result<Vec<_>> = inner_schema_without_metadata
+                .fields()
+                .iter()
+                .map(|field| {
+                    if let Some(geo_column) = geo_metadata.columns.get(field.name()) {
+                        match geo_column.encoding {
+                            GeoParquetColumnEncoding::WKB => {
+                                let extension = ExtensionType::new(
+                                    "geoarrow.wkb",
+                                    field.data_type().clone(),
+                                    Some(geo_column.to_geoarrow_metadata()?),
+                                );
+                                Ok(Arc::new(
+                                    extension.to_field(field.name(), field.is_nullable()),
+                                ))
+                            }
+                            _ => plan_err!(
+                                "Unsupported GeoParquet encoding: {}",
+                                geo_column.encoding
+                            ),
+                        }
+                    } else {
+                        Ok(field.clone())
+                    }
+                })
+                .collect();
+
+            Ok(Arc::new(wrap_schema(&Schema::new(new_fields?))))
+        } else {
+            Ok(inner_schema_without_metadata)
+        }
     }
 
     async fn infer_stats(
@@ -203,7 +277,7 @@ impl FileFormat for GeoParquetFormat {
         table_schema: SchemaRef,
         object: &ObjectMeta,
     ) -> Result<Statistics> {
-        self.inner
+        self.inner_with_metadata
             .infer_stats(state, store, table_schema, object)
             .await
     }
@@ -222,7 +296,7 @@ impl FileFormat for GeoParquetFormat {
         let mut config = config.clone();
         config.file_schema = Arc::new(inner_schema);
         let inner_plan = self
-            .inner
+            .inner_with_metadata
             .create_physical_plan(state, config, filters)
             .await?;
 
@@ -254,12 +328,14 @@ impl FileFormat for GeoParquetFormat {
         table_schema: &Schema,
         filters: &[&Expr],
     ) -> Result<FilePushdownSupport> {
-        self.inner
+        self.inner_with_metadata
             .supports_filters_pushdown(file_schema, table_schema, filters)
     }
 
     fn file_source(&self) -> Arc<dyn FileSource> {
-        Arc::new(GeoParquetFileSource::new(self.inner.file_source()))
+        Arc::new(GeoParquetFileSource::new(
+            self.inner_with_metadata.file_source(),
+        ))
     }
 }
 
@@ -393,7 +469,7 @@ mod test {
     use datafusion_physical_expr::PhysicalExpr;
     use sedona_expr::projection::unwrap_batch;
     use sedona_schema::datatypes::{lnglat, Edges, SedonaType};
-    use sedona_testing::data::test_geoparquet;
+    use sedona_testing::data::{geoarrow_data_dir, test_geoparquet};
 
     use super::*;
 
@@ -501,6 +577,39 @@ mod test {
         let sedona_types = sedona_types.unwrap();
         assert_eq!(sedona_types.len(), 1);
         assert_eq!(sedona_types[0], SedonaType::Arrow(DataType::Utf8View));
+    }
+
+    #[tokio::test]
+    async fn multiple_files() {
+        let ctx = setup_context();
+        let data_dir = geoarrow_data_dir().unwrap();
+        let df = ctx
+            .table(format!("{data_dir}/example/files/*_geo.parquet"))
+            .await
+            .unwrap();
+
+        let sedona_types: Result<Vec<_>> = df
+            .schema()
+            .as_arrow()
+            .fields()
+            .iter()
+            .map(|f| SedonaType::from_data_type(f.data_type()))
+            .collect();
+        let sedona_types = sedona_types.unwrap();
+        assert_eq!(sedona_types.len(), 2);
+        assert_eq!(sedona_types[0], SedonaType::Arrow(DataType::Utf8View));
+        assert_eq!(
+            sedona_types[1],
+            SedonaType::WkbView(Edges::Planar, lnglat())
+        );
+
+        // Make sure all the rows show up!
+        let batches = df.collect().await.unwrap();
+        let mut total_size = 0;
+        for batch in batches {
+            total_size += batch.num_rows();
+        }
+        assert_eq!(total_size, 244);
     }
 
     #[tokio::test]
