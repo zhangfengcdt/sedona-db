@@ -8,7 +8,7 @@ use datafusion_expr::{
 use sedona_expr::scalar_udf::{ArgMatcher, SedonaScalarKernel, SedonaScalarUDF};
 use sedona_schema::datatypes::{SedonaType, WKB_GEOMETRY, WKB_VIEW_GEOGRAPHY, WKB_VIEW_GEOMETRY};
 
-use crate::iter_geo_traits;
+use crate::executor::GenericExecutor;
 
 /// ST_GeomFromWKB() scalar UDF implementation
 ///
@@ -88,13 +88,9 @@ impl SedonaScalarKernel for STGeomFromWKB {
                 }
             };
 
-            iter_geo_traits!(iter_type, &args[0], |_i, maybe_item| -> Result<()> {
-                if let Some(item) = maybe_item {
-                    item?;
-                }
-
-                Ok(())
-            });
+            let temp_args = [iter_type];
+            let executor = GenericExecutor::new(&temp_args, args);
+            executor.execute_wkb_void(|_i, _maybe_item| Ok(()))?;
         }
 
         args[0].cast_to(out_type.storage_type(), None)

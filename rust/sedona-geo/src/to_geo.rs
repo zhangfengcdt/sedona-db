@@ -9,7 +9,7 @@ use geo_traits::{
     GeometryType::*,
 };
 use geo_types::Geometry;
-use sedona_functions::iter_geo_traits;
+use sedona_functions::executor::IterGeo;
 use sedona_schema::datatypes::SedonaType;
 
 pub fn scalar_arg_to_geometry(
@@ -17,10 +17,10 @@ pub fn scalar_arg_to_geometry(
     arg: &ColumnarValue,
 ) -> Result<Option<Geometry>> {
     let mut out: Option<Geometry> = None;
-    iter_geo_traits!(arg_type, arg, |_i, maybe_item| -> Result<()> {
+    arg.iter_as_wkb(arg_type, 1, |_i, maybe_item| -> Result<()> {
         match maybe_item {
             Some(item) => {
-                out = Some(item_to_geometry(item?)?);
+                out = Some(item_to_geometry(item)?);
             }
             None => {
                 out = None;
@@ -28,7 +28,7 @@ pub fn scalar_arg_to_geometry(
         }
 
         Ok(())
-    });
+    })?;
 
     Ok(out)
 }

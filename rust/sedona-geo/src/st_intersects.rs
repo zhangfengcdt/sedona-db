@@ -2,15 +2,13 @@ use std::sync::Arc;
 
 use arrow_array::builder::BooleanBuilder;
 use arrow_schema::DataType;
-use datafusion_common::{error::Result, not_impl_err, ScalarValue};
+use datafusion_common::error::Result;
 use datafusion_expr::ColumnarValue;
-use geo_generic_alg::{Geometry, Intersects};
-use geo_traits_ext::GeometryTraitExt;
+use geo_generic_alg::Intersects;
 use sedona_expr::scalar_udf::{ArgMatcher, ScalarKernelRef, SedonaScalarKernel};
-use sedona_functions::iter_geo_traits;
+use sedona_functions::executor::GenericExecutor;
 use sedona_schema::datatypes::SedonaType;
-
-use crate::to_geo::scalar_arg_to_geometry;
+use wkb::reader::Wkb;
 
 /// ST_Intersects() implementation using [Intersects]
 pub fn st_intersects_impl() -> ScalarKernelRef {
@@ -35,62 +33,27 @@ impl SedonaScalarKernel for STIntersects {
         arg_types: &[SedonaType],
         _: &SedonaType,
         args: &[ColumnarValue],
-        num_rows: usize,
+        _num_rows: usize,
     ) -> Result<ColumnarValue> {
-        let (arg_type, arg, maybe_geometry) = match (&args[0], &args[1]) {
-            (ColumnarValue::Array(_), ColumnarValue::Scalar(_)) => (
-                &arg_types[0],
-                &args[0],
-                scalar_arg_to_geometry(&arg_types[1], &args[1])?,
-            ),
-            (ColumnarValue::Scalar(_), ColumnarValue::Array(_)) => (
-                &arg_types[1],
-                &args[1],
-                scalar_arg_to_geometry(&arg_types[0], &args[0])?,
-            ),
-            (ColumnarValue::Scalar(_), ColumnarValue::Scalar(_)) => (
-                &arg_types[0],
-                &args[0],
-                scalar_arg_to_geometry(&arg_types[1], &args[1])?,
-            ),
-            _ => {
-                return not_impl_err!("geo::ST_Intersects(Array, Array) not yet implemented");
-            }
-        };
-
-        if let Some(geometry) = maybe_geometry {
-            // Initialize an output builder of the appropriate type
-            let mut builder = BooleanBuilder::with_capacity(num_rows);
-
-            // Use iter_geo_traits to handle looping over the most appropriate GeometryTrait
-            iter_geo_traits!(arg_type, arg, |_i, maybe_item| -> Result<()> {
-                match maybe_item {
-                    Some(item) => {
-                        builder.append_value(invoke_scalar(item?, &geometry)?);
-                    }
-                    None => builder.append_null(),
+        let executor = GenericExecutor::new(arg_types, args);
+        let mut builder = BooleanBuilder::with_capacity(executor.num_iterations());
+        executor.execute_wkb_wkb_void(|_i, maybe_wkb0, maybe_wkb1| {
+            match (maybe_wkb0, maybe_wkb1) {
+                (Some(wkb0), Some(wkb1)) => {
+                    builder.append_value(invoke_scalar(wkb0, wkb1)?);
                 }
-
-                Ok(())
-            });
-
-            // Create the output array
-            let new_array = builder.finish();
-
-            // Ensure that scalar input maps to scalar output
-            match arg {
-                ColumnarValue::Array(_) => Ok(ColumnarValue::Array(Arc::new(new_array))),
-                ColumnarValue::Scalar(_) => Ok(ScalarValue::try_from_array(&new_array, 0)?.into()),
+                _ => builder.append_null(),
             }
-        } else {
-            // We have an intersection with a null scalar, so return a null scalar
-            Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)))
-        }
+
+            Ok(())
+        })?;
+
+        executor.finish(Arc::new(builder.finish()))
     }
 }
 
-fn invoke_scalar(item_a: impl GeometryTraitExt<T = f64>, geom_b: &Geometry) -> Result<bool> {
-    Ok(item_a.intersects(geom_b))
+fn invoke_scalar(item_a: &Wkb, geom_b: &Wkb) -> Result<bool> {
+    Ok(item_a.intersects(&geom_b))
 }
 
 #[cfg(test)]
@@ -174,7 +137,6 @@ mod tests {
         );
         let polygon_scalar =
             create_scalar_value(Some("POLYGON ((0 0, 1 0, 0 1, 0 0))"), &WKB_GEOMETRY);
-        let null_scalar = create_scalar_value(None, &WKB_GEOMETRY);
 
         // Array, Scalar -> Array
         assert_value_equal(
@@ -189,19 +151,39 @@ mod tests {
                 .unwrap(),
             &ColumnarValue::Array(create_array!(Boolean, [Some(true), Some(false), None])),
         );
+    }
 
-        // Null Scalar, Array -> Null Scalar
-        assert_value_equal(
-            &udf.invoke_batch(&[point_array.clone(), null_scalar.clone()], 1)
-                .unwrap(),
-            &ScalarValue::Boolean(None).into(),
+    #[test]
+    fn array_array() {
+        let mut udf = st_intersects_udf();
+        udf.add_kernel(st_intersects_impl());
+
+        let point_array = create_array_value(
+            &[
+                Some("POINT (0.25 0.25)"),
+                Some("POINT (10 10)"),
+                None,
+                Some("POINT (0.25 0.25)"),
+            ],
+            &WKB_GEOMETRY,
+        );
+        let polygon_array = create_array_value(
+            &[
+                Some("POLYGON ((0 0, 1 0, 0 1, 0 0))"),
+                Some("POLYGON ((0 0, 1 0, 0 1, 0 0))"),
+                Some("POLYGON ((0 0, 1 0, 0 1, 0 0))"),
+                None,
+            ],
+            &WKB_GEOMETRY,
         );
 
-        // Array, Null Scalar -> Null Scalar
+        // Array, Array -> Array
         assert_value_equal(
-            &udf.invoke_batch(&[null_scalar.clone(), point_array.clone()], 1)
-                .unwrap(),
-            &ScalarValue::Boolean(None).into(),
+            &udf.invoke_batch(&[point_array, polygon_array], 1).unwrap(),
+            &ColumnarValue::Array(create_array!(
+                Boolean,
+                [Some(true), Some(false), None, None]
+            )),
         );
     }
 }

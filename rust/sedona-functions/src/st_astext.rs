@@ -1,10 +1,9 @@
 use std::{sync::Arc, vec};
 
-use crate::iter_geo_traits;
+use crate::executor::GenericExecutor;
 use arrow_array::builder::StringBuilder;
 use arrow_schema::DataType;
 use datafusion_common::error::{DataFusionError, Result};
-use datafusion_common::ScalarValue;
 use datafusion_expr::{
     scalar_doc_sections::DOC_SECTION_OTHER, ColumnarValue, Documentation, Volatility,
 };
@@ -52,41 +51,34 @@ impl SedonaScalarKernel for STAsText {
         arg_types: &[SedonaType],
         _: &SedonaType,
         args: &[ColumnarValue],
-        num_rows: usize,
+        _num_rows: usize,
     ) -> Result<ColumnarValue> {
+        let executor = GenericExecutor::new(arg_types, args);
+
         // Estimate the minimum probable memory requirement of the output.
         // Here, the shortest full precision non-empty/non-null value would be
         // POINT (<16 digits> <16 digits>), or ~25 bytes.
-        let min_probable_wkt_size = match &args[0] {
-            ColumnarValue::Array(array) => 25 * array.len(),
-            ColumnarValue::Scalar(_) => 25,
-        };
+        let min_probable_wkt_size = executor.num_iterations() * 25;
 
         // Initialize an output builder of the appropriate type
-        let mut builder = StringBuilder::with_capacity(num_rows, min_probable_wkt_size);
+        let mut builder =
+            StringBuilder::with_capacity(executor.num_iterations(), min_probable_wkt_size);
 
-        // Use iter_geo_traits to handle looping over the most appropriate GeometryTrait
-        iter_geo_traits!(arg_types[0], &args[0], |_i, maybe_item| -> Result<()> {
+        executor.execute_wkb_void(|_i, maybe_item| {
             match maybe_item {
                 Some(item) => {
-                    wkt::to_wkt::write_geometry(&mut builder, &item?)
+                    wkt::to_wkt::write_geometry(&mut builder, &item)
                         .map_err(|err| DataFusionError::External(Box::new(err)))?;
                     builder.append_value("");
                 }
                 None => builder.append_null(),
-            }
+            };
 
             Ok(())
-        });
+        })?;
 
         // Create the output array
-        let new_array = builder.finish();
-
-        // Ensure that scalar input maps to scalar output
-        match &args[0] {
-            ColumnarValue::Array(_) => Ok(ColumnarValue::Array(Arc::new(new_array))),
-            ColumnarValue::Scalar(_) => Ok(ScalarValue::try_from_array(&new_array, 0)?.into()),
-        }
+        executor.finish(Arc::new(builder.finish()))
     }
 }
 

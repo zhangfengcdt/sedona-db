@@ -26,6 +26,7 @@ geo-types = { workspace = true }
 sedona-expr = { path = "../sedona-expr" }
 sedona-functions = { path = "../sedona-functions" }
 sedona-schema = { path = "../sedona-schema" }
+wkb = { workspace = true }
 
 [[bench]]
 harness = false

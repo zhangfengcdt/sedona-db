@@ -1,10 +1,9 @@
 use std::{sync::Arc, vec};
 
-use crate::iter_geo_traits;
+use crate::executor::GenericExecutor;
 use arrow_array::builder::Float64Builder;
 use arrow_schema::DataType;
 use datafusion_common::error::{DataFusionError, Result};
-use datafusion_common::ScalarValue;
 use datafusion_expr::{
     scalar_doc_sections::DOC_SECTION_OTHER, ColumnarValue, Documentation, Volatility,
 };
@@ -14,6 +13,7 @@ use geo_traits::{
 };
 use sedona_expr::scalar_udf::{ArgMatcher, SedonaScalarKernel, SedonaScalarUDF};
 use sedona_schema::datatypes::SedonaType;
+use wkb::reader::Wkb;
 
 /// ST_X() scalar UDF implementation
 ///
@@ -72,7 +72,7 @@ impl SedonaScalarKernel for STXy {
         arg_types: &[SedonaType],
         _: &SedonaType,
         args: &[ColumnarValue],
-        num_rows: usize,
+        _num_rows: usize,
     ) -> Result<ColumnarValue> {
         let dim_index = match self.dim {
             "x" => 0,
@@ -80,28 +80,23 @@ impl SedonaScalarKernel for STXy {
             _ => unreachable!(),
         };
 
-        let mut builder = Float64Builder::with_capacity(num_rows);
+        let executor = GenericExecutor::new(arg_types, args);
+        let mut builder = Float64Builder::with_capacity(executor.num_iterations());
 
         // We can do quite a lot better than this with some vectorized WKB processing,
         // but for now we just do a slow iteration
-        iter_geo_traits!(&arg_types[0], &args[0], |_i, maybe_item| -> Result<()> {
+        executor.execute_wkb_void(|_i, maybe_item| {
             match maybe_item {
                 Some(item) => {
-                    builder.append_option(invoke_scalar(item?, dim_index)?);
+                    builder.append_option(invoke_scalar(item, dim_index)?);
                 }
                 None => builder.append_null(),
             }
             Ok(())
-        });
+        })?;
 
         // Create the output array
-        let new_array = builder.finish();
-
-        // Ensure that scalar input maps to scalar output
-        match &args[0] {
-            ColumnarValue::Array(_) => Ok(ColumnarValue::Array(Arc::new(new_array))),
-            ColumnarValue::Scalar(_) => Ok(ScalarValue::try_from_array(&new_array, 0)?.into()),
-        }
+        executor.finish(Arc::new(builder.finish()))
     }
 }
 
@@ -109,7 +104,7 @@ impl SedonaScalarKernel for STXy {
 //
 // Note that PostGIS will fail for anything that is not POINT (whereas we succeed for any
 // EMPTY).
-fn invoke_scalar(item: impl GeometryTrait<T = f64>, dim_index: usize) -> Result<Option<f64>> {
+fn invoke_scalar(item: &Wkb, dim_index: usize) -> Result<Option<f64>> {
     match item.as_type() {
         geo_traits::GeometryType::Point(point) => {
             return Ok(PointTrait::coord(point).map(|c| c.nth_or_panic(dim_index)))
@@ -161,6 +156,7 @@ fn invoke_scalar(item: impl GeometryTrait<T = f64>, dim_index: usize) -> Result<
 mod tests {
     use super::*;
     use arrow_array::create_array;
+    use datafusion_common::ScalarValue;
     use datafusion_expr::ScalarUDF;
     use rstest::rstest;
     use sedona_schema::datatypes::WKB_GEOMETRY;

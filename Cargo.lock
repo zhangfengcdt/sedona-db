@@ -4392,6 +4392,7 @@ dependencies = [
  "sedona-functions",
  "sedona-schema",
  "sedona-testing",
+ "wkb",
  "wkt",
 ]
 
