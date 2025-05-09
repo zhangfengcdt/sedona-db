@@ -584,9 +584,7 @@ impl GeoParquetColumnMetadata {
         write!(out, r#"{{"crs": {geoarrow_crs}"#)?;
 
         if let Some(edges) = &self.edges {
-            write!(out, r#""{edges}""#)?;
-        } else {
-            write!(out, r#""#)?;
+            write!(out, r#", "edges": "{edges}""#)?;
         }
 
         write!(out, "}}")?;
