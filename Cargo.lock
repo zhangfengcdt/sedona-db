@@ -4397,6 +4397,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "sedona-geometry"
+version = "0.0.1"
+dependencies = [
+ "criterion",
+ "geo-traits",
+ "rstest",
+ "sedona-testing",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "thiserror 2.0.12",
+ "wkt",
+]
+
+[[package]]
 name = "sedona-geoparquet"
 version = "0.0.1"
 dependencies = [
