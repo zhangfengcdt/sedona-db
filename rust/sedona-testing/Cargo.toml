@@ -16,7 +16,7 @@ datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 geo-traits = { workspace = true }
 geo-types = { workspace = true }
-parquet = { workspace = true, features = ["arrow", "snap"] }
+parquet = { workspace = true, features = ["arrow", "snap", "zstd"] }
 sedona-schema = { path = "../sedona-schema" }
 wkb = { workspace = true }
 wkt = { workspace = true }

@@ -85,18 +85,19 @@ impl SedonaContext {
 
         // Register geo kernels if built with geo support
         #[cfg(feature = "geo")]
-        out.register_scalar_kernels(sedona_geo::register::scalar_kernels().into_iter())?;
+        {
+            out.register_scalar_kernels(sedona_geo::register::scalar_kernels().into_iter())?;
+            out.register_function_set(sedona_geo::register::geo_function_set());
+        }
 
         Ok(out)
     }
 
     /// Register all functions in a [FunctionSet] with this context
     pub fn register_function_set(&mut self, function_set: FunctionSet) {
-        // Merge other functions and re-register with the context
-        self.functions.merge(function_set);
-
-        for scalar_udf in self.functions.scalar_udfs() {
-            self.ctx.register_udf(scalar_udf.clone().into());
+        for udf in function_set.scalar_udfs() {
+            self.functions.insert_scalar_udf(udf.clone());
+            self.ctx.register_udf(udf.clone().into());
         }
     }
 

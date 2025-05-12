@@ -31,3 +31,7 @@ wkb = { workspace = true }
 [[bench]]
 harness = false
 name = "geo-predicates"
+
+[[bench]]
+name = "geo-functions"
+harness = false
