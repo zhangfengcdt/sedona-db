@@ -85,10 +85,7 @@ impl SedonaContext {
 
         // Register geo kernels if built with geo support
         #[cfg(feature = "geo")]
-        {
-            out.register_scalar_kernels(sedona_geo::register::scalar_kernels().into_iter())?;
-            out.register_function_set(sedona_geo::register::geo_function_set());
-        }
+        out.register_scalar_kernels(sedona_geo::register::scalar_kernels().into_iter())?;
 
         Ok(out)
     }

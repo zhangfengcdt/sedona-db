@@ -41,7 +41,9 @@ fn criterion_benchmark(c: &mut Criterion) {
     }
 
     let mut functions = sedona_functions::register::default_function_set();
-    functions.merge(sedona_geo::register::geo_function_set());
+    for (name, kernel) in sedona_geo::register::scalar_kernels() {
+        functions.add_scalar_udf_kernel(name, kernel).unwrap();
+    }
 
     benchmark_st_area(c, &functions);
 }

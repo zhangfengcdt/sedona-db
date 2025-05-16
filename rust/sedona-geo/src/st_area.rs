@@ -3,33 +3,16 @@ use std::sync::Arc;
 use arrow_array::builder::Float64Builder;
 use arrow_schema::DataType;
 use datafusion_common::error::Result;
-use datafusion_expr::{
-    scalar_doc_sections::DOC_SECTION_OTHER, ColumnarValue, Documentation, Volatility,
-};
+use datafusion_expr::ColumnarValue;
 use geo_generic_alg::Area;
-use sedona_expr::scalar_udf::{ArgMatcher, SedonaScalarKernel, SedonaScalarUDF};
+use sedona_expr::scalar_udf::{ArgMatcher, ScalarKernelRef, SedonaScalarKernel};
 use sedona_functions::executor::GenericExecutor;
 use sedona_schema::datatypes::SedonaType;
 use wkb::reader::Wkb;
 
-/// ST_Area() scalar UDF implementation
-pub fn st_area_udf() -> SedonaScalarUDF {
-    SedonaScalarUDF::new(
-        "st_area",
-        vec![Arc::new(STArea {})],
-        Volatility::Immutable,
-        Some(st_area_doc()),
-    )
-}
-
-fn st_area_doc() -> Documentation {
-    Documentation::builder(
-        DOC_SECTION_OTHER,
-        "Return the area of a geometry",
-        "SELECT ST_Area(ST_GeomFromWKT('POLYGON ((0 0, 1 0, 0 1, 0 0))'))",
-    )
-    .with_argument("geom", "geometry: Input geometry")
-    .build()
+/// ST_Area() implementation using [Area]
+pub fn st_area_impl() -> ScalarKernelRef {
+    Arc::new(STArea {})
 }
 
 #[derive(Debug)]
@@ -87,7 +70,10 @@ mod tests {
 
     #[rstest]
     fn udf(#[values(WKB_GEOMETRY, WKB_VIEW_GEOMETRY)] sedona_type: SedonaType) {
-        let udf = st_area_udf();
+        use sedona_functions::register::stubs::st_area_udf;
+
+        let mut udf = st_area_udf();
+        udf.add_kernel(st_area_impl());
 
         assert_value_equal(
             &udf.invoke_batch(

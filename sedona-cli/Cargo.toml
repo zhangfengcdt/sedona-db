@@ -27,6 +27,9 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[lints.clippy]
+result_large_err = "allow"
+
 [package.metadata.docs.rs]
 all-features = true
 

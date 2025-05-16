@@ -1,5 +1,6 @@
 pub mod executor;
 pub mod register;
+mod st_area;
 mod st_asbinary;
 mod st_astext;
 mod st_geomfromwkb;

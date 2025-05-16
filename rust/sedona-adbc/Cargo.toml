@@ -8,6 +8,9 @@ readme.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[lints.clippy]
+result_large_err = "allow"
+
 [dependencies]
 adbc_core = { git = "https://github.com/apache/arrow-adbc", rev = "1ba248290cd299c4969b679463bcd54c217cf2e4" }
 arrow-array = { workspace = true }
