@@ -1,4 +1,4 @@
-name: Rust
+name: rust
 
 on:
   pull_request:
@@ -24,7 +24,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-    name: "Rust ${{ matrix.os }}"
+    name: "rust ${{ matrix.os }}"
     runs-on: ${{ matrix.os }}
     env:
       CARGO_INCREMENTAL: 0

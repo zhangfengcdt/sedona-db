@@ -19,12 +19,13 @@ use adbc_core::{
 
 use crate::{
     err_not_implemented, err_unrecognized_option, reader::SedonaStreamReader,
-    statement::SedonaStatement, utils::from_datafusion_error,
+    statement::SedonaStatement, utils::from_datafusion_error, utils::OptionValueExt,
 };
 
 pub struct SedonaConnection {
     runtime: Arc<Runtime>,
     ctx: Arc<SedonaContext>,
+    autocommit_on: bool,
 }
 
 impl SedonaConnection {
@@ -50,6 +51,7 @@ impl SedonaConnection {
         let mut connection = Self {
             runtime: Arc::new(runtime),
             ctx: Arc::new(ctx),
+            autocommit_on: true,
         };
 
         for (key, value) in opts {
@@ -63,12 +65,25 @@ impl SedonaConnection {
 impl Optionable for SedonaConnection {
     type Option = OptionConnection;
 
-    fn set_option(&mut self, key: Self::Option, _value: OptionValue) -> Result<()> {
-        err_unrecognized_option!(key)
+    fn set_option(&mut self, key: Self::Option, value: OptionValue) -> Result<()> {
+        match &key {
+            OptionConnection::AutoCommit => {
+                self.autocommit_on = value.as_bool()?;
+                Ok(())
+            }
+            _ => err_unrecognized_option!(key),
+        }
     }
 
     fn get_option_string(&self, key: Self::Option) -> Result<String> {
-        err_unrecognized_option!(key)
+        match &key {
+            OptionConnection::AutoCommit => Ok(if self.autocommit_on {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }),
+            _ => err_unrecognized_option!(key),
+        }
     }
 
     fn get_option_bytes(&self, key: Self::Option) -> Result<Vec<u8>> {
@@ -151,5 +166,61 @@ impl Connection for SedonaConnection {
 
     fn read_partition(&self, _partition: impl AsRef<[u8]>) -> Result<SedonaStreamReader> {
         err_not_implemented!()
+    }
+}
+
+#[cfg(test)]
+mod test {
+
+    use adbc_core::{Database, Driver};
+
+    use crate::driver::SedonaDriver;
+
+    use super::*;
+
+    #[test]
+    fn autocommit() {
+        let mut connection = SedonaDriver::default()
+            .new_database()
+            .unwrap()
+            .new_connection()
+            .unwrap();
+
+        // Turn autocommit on
+        connection
+            .set_option(
+                OptionConnection::AutoCommit,
+                OptionValue::String("true".to_string()),
+            )
+            .unwrap();
+        assert_eq!(
+            connection
+                .get_option_string(OptionConnection::AutoCommit)
+                .unwrap(),
+            "true"
+        );
+
+        // Turn autocommit off
+        connection
+            .set_option(
+                OptionConnection::AutoCommit,
+                OptionValue::String("false".to_string()),
+            )
+            .unwrap();
+        assert_eq!(
+            connection
+                .get_option_string(OptionConnection::AutoCommit)
+                .unwrap(),
+            "false"
+        );
+
+        // Try to set autocommit with an in appropriate value
+        let err = connection
+            .set_option(OptionConnection::AutoCommit, OptionValue::Bytes(vec![]))
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "InvalidArguments: Expected boolean option (sqlstate: [0, 0, 0, 0, 0], vendor_code: 0)"
+        );
     }
 }

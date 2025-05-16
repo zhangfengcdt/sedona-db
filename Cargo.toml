@@ -9,6 +9,7 @@ members = [
     "rust/sedona-schema",
     "rust/sedona-testing",
     "rust/sedona",
+    "python/sedona-rs",
     "sedona-cli"
 ]
 resolver = "2"

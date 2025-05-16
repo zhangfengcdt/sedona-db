@@ -1,4 +1,7 @@
-use adbc_core::error::{Error, Status};
+use adbc_core::{
+    error::{Error, Result, Status},
+    options::OptionValue,
+};
 use datafusion::error::DataFusionError;
 
 pub(crate) fn from_datafusion_error(value: DataFusionError) -> Error {
@@ -32,4 +35,21 @@ macro_rules! err_unrecognized_option {
             Status::NotFound,
         ))
     };
+}
+
+pub(crate) trait OptionValueExt {
+    fn as_bool(&self) -> Result<bool>;
+}
+
+impl OptionValueExt for OptionValue {
+    fn as_bool(&self) -> Result<bool> {
+        match self {
+            OptionValue::Int(value) => Ok(*value != 0),
+            OptionValue::String(value) => Ok(value == "true"),
+            _ => Err(Error::with_message_and_status(
+                "Expected boolean option".to_string(),
+                Status::InvalidArguments,
+            )),
+        }
+    }
 }
