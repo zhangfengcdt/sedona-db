@@ -52,9 +52,7 @@ pub trait SedonaScalarKernel: Debug {
     fn invoke_batch(
         &self,
         arg_types: &[SedonaType],
-        out_type: &SedonaType,
         args: &[ColumnarValue],
-        num_rows: usize,
     ) -> Result<ColumnarValue>;
 }
 
@@ -234,11 +232,8 @@ impl TypeMatcher for IsBinary {
 }
 
 /// Type definition for a Scalar kernel implementation function
-pub type SedonaScalarKernelImpl = Arc<
-    dyn Fn(&[SedonaType], &SedonaType, &[ColumnarValue], usize) -> Result<ColumnarValue>
-        + Send
-        + Sync,
->;
+pub type SedonaScalarKernelImpl =
+    Arc<dyn Fn(&[SedonaType], &[ColumnarValue]) -> Result<ColumnarValue> + Send + Sync>;
 
 /// Scalar kernel based on a function for testing
 pub struct SimpleSedonaScalarKernel {
@@ -266,11 +261,9 @@ impl SedonaScalarKernel for SimpleSedonaScalarKernel {
     fn invoke_batch(
         &self,
         arg_types: &[SedonaType],
-        out_type: &SedonaType,
         args: &[ColumnarValue],
-        num_rows: usize,
     ) -> Result<ColumnarValue> {
-        (self.fun)(arg_types, out_type, args, num_rows)
+        (self.fun)(arg_types, args)
     }
 }
 
@@ -306,7 +299,7 @@ impl SedonaScalarUDF {
         let name_string = name.to_string();
         let stub_kernel = SimpleSedonaScalarKernel::new_ref(
             arg_matcher,
-            Arc::new(move |arg_types, _, _, _| {
+            Arc::new(move |arg_types, _| {
                 not_impl_err!("Implementation for {name_string}({arg_types:?}) was not registered")
             }),
         );
@@ -390,12 +383,7 @@ impl ScalarUDFImpl for SedonaScalarUDF {
         let args_unwrapped: Result<Vec<ColumnarValue>, _> = zip(&arg_physical_types, &args.args)
             .map(|(a, b)| a.unwrap_arg(b))
             .collect();
-        let result = kernel.invoke_batch(
-            &arg_physical_types,
-            &out_type,
-            &args_unwrapped?,
-            args.number_rows,
-        )?;
+        let result = kernel.invoke_batch(&arg_physical_types, &args_unwrapped?)?;
         out_type.wrap_arg(&result)
     }
 }
@@ -464,7 +452,7 @@ mod tests {
                 vec![ArgMatcher::is_geometry_or_geography()],
                 SedonaType::Arrow(DataType::Null),
             ),
-            Arc::new(|_, _, _, _| Ok(ColumnarValue::Scalar(ScalarValue::Null))),
+            Arc::new(|_, _| Ok(ColumnarValue::Scalar(ScalarValue::Null))),
         );
 
         let kernel_arrow = SimpleSedonaScalarKernel::new_ref(
@@ -472,7 +460,7 @@ mod tests {
                 vec![ArgMatcher::is_arrow(DataType::Boolean)],
                 SedonaType::Arrow(DataType::Boolean),
             ),
-            Arc::new(|_, _, _, _| Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)))),
+            Arc::new(|_, _| Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)))),
         );
 
         let udf = SedonaScalarUDF::new(
@@ -531,7 +519,7 @@ mod tests {
                 vec![ArgMatcher::is_arrow(DataType::Boolean)],
                 SedonaType::Arrow(DataType::Utf8),
             ),
-            Arc::new(|_, _, _, _| Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))),
+            Arc::new(|_, _| Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))),
         ));
 
         // Now, calling with a Boolean should result in a Utf8

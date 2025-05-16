@@ -98,7 +98,7 @@ mod tests {
                 vec![ArgMatcher::is_arrow(DataType::Boolean)],
                 SedonaType::Arrow(DataType::Boolean),
             ),
-            Arc::new(|_, _, _, _| Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)))),
+            Arc::new(|_, _| Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)))),
         );
 
         let udf = SedonaScalarUDF::new(
@@ -132,7 +132,7 @@ mod tests {
                 vec![ArgMatcher::is_arrow(DataType::Utf8)],
                 SedonaType::Arrow(DataType::Utf8),
             ),
-            Arc::new(|_, _, _, _| Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))),
+            Arc::new(|_, _| Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))),
         );
 
         let udf2 = SedonaScalarUDF::new("simple_udf2", vec![kernel2], Volatility::Immutable, None);

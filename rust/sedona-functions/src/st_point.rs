@@ -11,6 +11,8 @@ use datafusion_expr::{
 use sedona_expr::scalar_udf::{ArgMatcher, SedonaScalarKernel, SedonaScalarUDF};
 use sedona_schema::datatypes::{SedonaType, WKB_GEOGRAPHY, WKB_GEOMETRY};
 
+use crate::executor::GenericExecutor;
+
 /// ST_Point() scalar UDF implementation
 ///
 /// Native implementation to create geometries from coordinates.
@@ -71,11 +73,11 @@ impl SedonaScalarKernel for STGeoFromPoint {
 
     fn invoke_batch(
         &self,
-        _: &[SedonaType],
-        _: &SedonaType,
+        arg_types: &[SedonaType],
         args: &[ColumnarValue],
-        num_rows: usize,
     ) -> Result<ColumnarValue> {
+        let executor = GenericExecutor::new(arg_types, args);
+
         let x = &args[0].cast_to(&DataType::Float64, None)?;
         let y = &args[1].cast_to(&DataType::Float64, None)?;
 
@@ -98,12 +100,15 @@ impl SedonaScalarKernel for STGeoFromPoint {
         }
 
         // Ensure both sides are arrays before iterating
-        let x_array = x.to_array(num_rows)?;
-        let y_array = y.to_array(num_rows)?;
+        let x_array = x.to_array(executor.num_iterations())?;
+        let y_array = y.to_array(executor.num_iterations())?;
         let x_f64 = as_float64_array(&x_array)?;
         let y_f64 = as_float64_array(&y_array)?;
 
-        let mut builder = BinaryBuilder::with_capacity(num_rows, item.len() * num_rows);
+        let mut builder = BinaryBuilder::with_capacity(
+            executor.num_iterations(),
+            item.len() * executor.num_iterations(),
+        );
 
         for (x_elem, y_elem) in zip(x_f64, y_f64) {
             match (x_elem, y_elem) {

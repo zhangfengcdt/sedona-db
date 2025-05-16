@@ -70,9 +70,7 @@ impl SedonaScalarKernel for STXy {
     fn invoke_batch(
         &self,
         arg_types: &[SedonaType],
-        _: &SedonaType,
         args: &[ColumnarValue],
-        _num_rows: usize,
     ) -> Result<ColumnarValue> {
         let dim_index = match self.dim {
             "x" => 0,

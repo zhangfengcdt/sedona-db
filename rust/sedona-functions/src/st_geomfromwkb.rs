@@ -72,9 +72,7 @@ impl SedonaScalarKernel for STGeomFromWKB {
     fn invoke_batch(
         &self,
         arg_types: &[SedonaType],
-        out_type: &SedonaType,
         args: &[ColumnarValue],
-        _num_rows: usize,
     ) -> Result<ColumnarValue> {
         if self.validate {
             let iter_type = match &arg_types[0] {
@@ -93,7 +91,7 @@ impl SedonaScalarKernel for STGeomFromWKB {
             executor.execute_wkb_void(|_i, _maybe_item| Ok(()))?;
         }
 
-        args[0].cast_to(out_type.storage_type(), None)
+        args[0].cast_to(self.out_type.storage_type(), None)
     }
 }
 

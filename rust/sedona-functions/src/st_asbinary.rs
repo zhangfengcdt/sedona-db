@@ -50,13 +50,7 @@ impl SedonaScalarKernel for STAsBinary {
         matcher.match_args(args)
     }
 
-    fn invoke_batch(
-        &self,
-        _: &[SedonaType],
-        _: &SedonaType,
-        args: &[ColumnarValue],
-        _: usize,
-    ) -> Result<ColumnarValue> {
+    fn invoke_batch(&self, _: &[SedonaType], args: &[ColumnarValue]) -> Result<ColumnarValue> {
         // This currently works because our return_type() ensure we didn't need a cast
         Ok(args[0].clone())
     }

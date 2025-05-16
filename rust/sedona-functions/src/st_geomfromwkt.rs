@@ -13,6 +13,8 @@ use sedona_schema::datatypes::{SedonaType, WKB_GEOGRAPHY, WKB_GEOMETRY};
 use wkb::writer::write_geometry;
 use wkt::Wkt;
 
+use crate::executor::GenericExecutor;
+
 /// ST_GeomFromWKT() UDF implementation
 ///
 /// An implementation of WKT reading using GeoRust's wkt crate.
@@ -73,17 +75,17 @@ impl SedonaScalarKernel for STGeoFromWKT {
 
     fn invoke_batch(
         &self,
-        _: &[SedonaType],
-        _: &SedonaType,
+        arg_types: &[SedonaType],
         args: &[ColumnarValue],
-        num_rows: usize,
     ) -> Result<ColumnarValue> {
+        let executor = GenericExecutor::new(arg_types, args);
+
         match args[0].cast_to(&DataType::Utf8View, None)? {
             ColumnarValue::Scalar(scalar) => match scalar {
                 ScalarValue::Utf8(maybe_wkt) | ScalarValue::Utf8View(maybe_wkt) => {
                     match maybe_wkt {
                         Some(wkt) => {
-                            let mut builder = BinaryBuilder::with_capacity(num_rows, 21);
+                            let mut builder = BinaryBuilder::with_capacity(1, 21);
                             invoke_scalar(&wkt, &mut builder)?;
                             builder.append_value(vec![]);
                             let array = builder.finish();
@@ -95,7 +97,10 @@ impl SedonaScalarKernel for STGeoFromWKT {
                 _ => unreachable!(),
             },
             ColumnarValue::Array(array) => {
-                let mut builder = BinaryBuilder::with_capacity(num_rows, 21 * num_rows);
+                let mut builder = BinaryBuilder::with_capacity(
+                    executor.num_iterations(),
+                    21 * executor.num_iterations(),
+                );
                 let utf8_array = as_string_view_array(&array)?;
                 let string_view_iter = as_string_view_array(utf8_array)?;
                 invoke_iter(string_view_iter, &mut builder)?;

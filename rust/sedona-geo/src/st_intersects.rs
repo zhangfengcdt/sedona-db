@@ -31,9 +31,7 @@ impl SedonaScalarKernel for STIntersects {
     fn invoke_batch(
         &self,
         arg_types: &[SedonaType],
-        _: &SedonaType,
         args: &[ColumnarValue],
-        _num_rows: usize,
     ) -> Result<ColumnarValue> {
         let executor = GenericExecutor::new(arg_types, args);
         let mut builder = BooleanBuilder::with_capacity(executor.num_iterations());
