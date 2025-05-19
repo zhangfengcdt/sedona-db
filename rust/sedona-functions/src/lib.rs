@@ -6,5 +6,6 @@ mod st_astext;
 mod st_geomfromwkb;
 mod st_geomfromwkt;
 mod st_intersects;
+mod st_length;
 mod st_point;
 mod st_xy;
