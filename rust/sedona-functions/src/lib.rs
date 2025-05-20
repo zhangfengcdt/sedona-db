@@ -8,4 +8,5 @@ mod st_geomfromwkt;
 mod st_intersects;
 mod st_length;
 mod st_point;
+mod st_within;
 mod st_xy;
