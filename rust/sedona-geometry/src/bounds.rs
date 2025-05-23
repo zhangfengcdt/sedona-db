@@ -9,7 +9,10 @@ use crate::{
     interval::{Interval, IntervalTrait},
 };
 
-/// Calculate the Cartesian bounds of a well-known binary geometry blob
+/// Calculate the Cartesian XY bounds of a well-known binary geometry blob
+///
+/// Note that this bounder ignores Z or M coordinates that may or may not be present
+/// for applications where only the XY bounding box is needed.
 pub fn wkb_bounds_xy(wkb_value: &[u8]) -> Result<BoundingBox, SedonaGeometryError> {
     let wkb =
         wkb::reader::read_wkb(wkb_value).map_err(|e| SedonaGeometryError::External(Box::new(e)))?;
@@ -143,6 +146,25 @@ mod test {
         assert_eq!(
             wkt_bounds_xy("GEOMETRYCOLLECTION (POINT (0 1), POINT (2 3))").unwrap(),
             BoundingBox::xy((0, 2), (1, 3))
+        );
+    }
+
+    #[test]
+    fn test_wkt_bounds_xy_with_zm_input() {
+        // Ensure Z/M/ZM values don't cause an error and are ignored
+        assert_eq!(
+            wkt_bounds_xy("LINESTRING Z (0 1 2, 3 4 5)").unwrap(),
+            BoundingBox::xy((0, 3), (1, 4))
+        );
+
+        assert_eq!(
+            wkt_bounds_xy("LINESTRING M (0 1 2, 3 4 5)").unwrap(),
+            BoundingBox::xy((0, 3), (1, 4))
+        );
+
+        assert_eq!(
+            wkt_bounds_xy("LINESTRING ZM (0 1 2 3, 4 5 6 7)").unwrap(),
+            BoundingBox::xy((0, 4), (1, 5))
         );
     }
 
