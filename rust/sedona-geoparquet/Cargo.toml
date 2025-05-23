@@ -36,6 +36,7 @@ futures = { workspace = true }
 object_store = { workspace = true }
 parquet = { workspace = true }
 sedona-expr = { path = "../sedona-expr" }
+sedona-geometry = { path = "../sedona-geometry" }
 sedona-schema = { path = "../sedona-schema" }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -5,16 +5,14 @@
 /// This should be synchronized with that crate when possible.
 /// https://github.com/geoarrow/geoarrow-rs/blob/ad2d29ef90050c5cfcfa7dfc0b4a3e5d12e51bbe/rust/geoarrow-geoparquet/src/metadata.rs
 use datafusion_common::Result;
+use sedona_geometry::types::GeometryTypeAndDimensions;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::fmt::Write;
-use std::str::FromStr;
 
 use datafusion_common::DataFusionError;
-use geo_traits::Dimensions;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 /// The actual encoding of the geometry in the Parquet file.
 ///
@@ -57,141 +55,6 @@ impl Display for GeoParquetColumnEncoding {
             MultiLineString => write!(f, "multilinestring"),
             MultiPolygon => write!(f, "multipolygon"),
         }
-    }
-}
-
-/// Geometry types that are valid to write to GeoParquet 1.1
-///
-/// Note that this only defines the geometry type, not the dimension. The dimension is tracked
-/// separately, and stored together in [`GeoParquetGeometryTypeAndDimension`]. On that type the
-/// serde serialize and deserialize traits are implemented.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub enum GeoParquetGeometryType {
-    /// Point geometry type
-    Point,
-    /// LineString geometry type
-    LineString,
-    /// Polygon geometry type
-    Polygon,
-    /// MultiPoint geometry type
-    MultiPoint,
-    /// MultiLineString geometry type
-    MultiLineString,
-    /// MultiPolygon geometry type
-    MultiPolygon,
-    /// GeometryCollection geometry type
-    GeometryCollection,
-}
-
-impl FromStr for GeoParquetGeometryType {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        let out = match s {
-            "Point" => Self::Point,
-            "LineString" => Self::LineString,
-            "Polygon" => Self::Polygon,
-            "MultiPoint" => Self::MultiPoint,
-            "MultiLineString" => Self::MultiLineString,
-            "MultiPolygon" => Self::MultiPolygon,
-            "GeometryCollection" => Self::GeometryCollection,
-            other => {
-                return Err(DataFusionError::Plan(format!(
-                    "Unknown value for geometry_type: {other}"
-                )));
-            }
-        };
-        Ok(out)
-    }
-}
-
-impl Display for GeoParquetGeometryType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
-impl GeoParquetGeometryType {
-    fn as_str(&self) -> &'static str {
-        match self {
-            Self::Point => "Point",
-            Self::LineString => "LineString",
-            Self::Polygon => "Polygon",
-            Self::MultiPoint => "MultiPoint",
-            Self::MultiLineString => "MultiLineString",
-            Self::MultiPolygon => "MultiPolygon",
-            Self::GeometryCollection => "GeometryCollection",
-        }
-    }
-}
-
-/// Geometry type and dimension
-///
-/// Note: we use [`SerializeDisplay`] and [`DeserializeFromStr`] for serde because the GeoParquet
-/// spec says this concept is a single string with the dimension stored as a suffix.
-/// https://docs.rs/serde_with/3.12.0/serde_with/struct.DisplayFromStr.html
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, SerializeDisplay, DeserializeFromStr)]
-pub struct GeoParquetGeometryTypeAndDimension {
-    geometry_type: GeoParquetGeometryType,
-    dimension: Dimensions,
-}
-
-impl GeoParquetGeometryTypeAndDimension {
-    /// Create a new `GeoParquetGeometryTypeAndDimension`
-    pub fn new(geometry_type: GeoParquetGeometryType, dimension: Dimensions) -> Self {
-        Self {
-            geometry_type,
-            dimension,
-        }
-    }
-
-    /// Get the geometry type
-    pub fn geometry_type(&self) -> GeoParquetGeometryType {
-        self.geometry_type
-    }
-
-    /// Get the dimension
-    pub fn dimension(&self) -> Dimensions {
-        self.dimension
-    }
-}
-
-impl FromStr for GeoParquetGeometryTypeAndDimension {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        let (geometry_type, dimension) = if let Some((geom_type_str, dim_str)) = s.split_once(' ') {
-            let dimension = match dim_str {
-                "Z" => Dimensions::Xy,
-                "M" => Dimensions::Xym,
-                "ZM" => Dimensions::Xyzm,
-                _ => {
-                    return Err(DataFusionError::Plan(format!(
-                        "Unknown dimension suffix: {dim_str}"
-                    )));
-                }
-            };
-            (GeoParquetGeometryType::from_str(geom_type_str)?, dimension)
-        } else {
-            (GeoParquetGeometryType::from_str(s)?, Dimensions::Xy)
-        };
-        Ok(Self {
-            geometry_type,
-            dimension,
-        })
-    }
-}
-
-impl Display for GeoParquetGeometryTypeAndDimension {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let dimension_suffix = match self.dimension {
-            Dimensions::Xy => "",
-            Dimensions::Xyz => " Z",
-            Dimensions::Xym => " M",
-            Dimensions::Xyzm => " ZM",
-            _ => " UNKNOWN",
-        };
-        write!(f, "{}{}", self.geometry_type, dimension_suffix,)
     }
 }
 
@@ -419,7 +282,7 @@ pub struct GeoParquetColumnMetadata {
     /// and multipolygons, it is not sufficient to specify `["MultiPolygon"]`, but it is expected
     /// to specify `["Polygon", "MultiPolygon"]`. Or if having 3D points, it is not sufficient to
     /// specify `["Point"]`, but it is expected to list `["Point Z"]`.
-    pub geometry_types: HashSet<GeoParquetGeometryTypeAndDimension>,
+    pub geometry_types: HashSet<GeometryTypeAndDimensions>,
 
     /// [PROJJSON](https://proj.org/specifications/projjson.html) object representing the
     /// Coordinate Reference System (CRS) of the geometry. If the field is not provided, the
@@ -646,6 +509,9 @@ fn merge_bboxes(lhs: Option<&[f64]>, rhs: Option<&[f64]>) -> Option<Vec<f64>> {
 
 #[cfg(test)]
 mod test {
+    use geo_traits::Dimensions;
+    use sedona_geometry::types::{GeometryTypeAndDimensions, GeometryTypeId};
+
     use super::*;
 
     // We want to ensure that extra keys in future GeoParquet versions do not break
@@ -661,7 +527,7 @@ mod test {
         assert_eq!(meta.encoding, GeoParquetColumnEncoding::WKB);
         assert_eq!(
             meta.geometry_types.iter().next().unwrap(),
-            &GeoParquetGeometryTypeAndDimension::new(GeoParquetGeometryType::Point, Dimensions::Xy)
+            &GeometryTypeAndDimensions::new(GeometryTypeId::Point, Dimensions::Xy)
         );
     }
 }

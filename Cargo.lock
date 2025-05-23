@@ -4550,6 +4550,7 @@ dependencies = [
  "object_store",
  "parquet",
  "sedona-expr",
+ "sedona-geometry",
  "sedona-schema",
  "sedona-testing",
  "serde",
