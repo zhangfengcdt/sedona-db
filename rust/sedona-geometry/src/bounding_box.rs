@@ -72,12 +72,12 @@ impl BoundingBox {
         &self.m
     }
 
-    /// Calculate potential intersection with another BoundingBox
+    /// Calculate intersection with another BoundingBox
     ///
     /// Returns true if this bounding box may intersect other or false otherwise. This
     /// method will consider Z and M dimension if and only if those dimensions are present
     /// in both bounding boxes.
-    pub fn may_intersect_box(&self, other: &Self) -> bool {
+    pub fn intersects(&self, other: &Self) -> bool {
         let intersects_xy =
             self.x.intersects_interval(&other.x) && self.y.intersects_interval(&other.y);
         let may_intersect_z = match (self.z, other.z) {
@@ -133,10 +133,10 @@ mod test {
         assert_eq!(xyzm.m(), &Some(Interval::new(70.0, 80.0)));
 
         // Should intersect a box without z or m information
-        assert!(xyzm.may_intersect_box(&BoundingBox::xy((14, 16), (34, 36))));
+        assert!(xyzm.intersects(&BoundingBox::xy((14, 16), (34, 36))));
 
         // Should intersect without z information but with intersecting m
-        assert!(xyzm.may_intersect_box(&BoundingBox::xyzm(
+        assert!(xyzm.intersects(&BoundingBox::xyzm(
             (14, 16),
             (34, 36),
             None,
@@ -144,7 +144,7 @@ mod test {
         )));
 
         // Should intersect without z information but with intersecting m
-        assert!(xyzm.may_intersect_box(&BoundingBox::xyzm(
+        assert!(xyzm.intersects(&BoundingBox::xyzm(
             (14, 16),
             (34, 36),
             Some((54, 56).into()),
@@ -152,11 +152,11 @@ mod test {
         )));
 
         // Should *not* intersect if x or y is disjoint
-        assert!(!xyzm.may_intersect_box(&BoundingBox::xy((4, 6), (34, 36))));
-        assert!(!xyzm.may_intersect_box(&BoundingBox::xy((14, 16), (24, 26))));
+        assert!(!xyzm.intersects(&BoundingBox::xy((4, 6), (34, 36))));
+        assert!(!xyzm.intersects(&BoundingBox::xy((14, 16), (24, 26))));
 
         // Should *not* intersect if z is provided but is disjoint
-        assert!(!xyzm.may_intersect_box(&BoundingBox::xyzm(
+        assert!(!xyzm.intersects(&BoundingBox::xyzm(
             (14, 16),
             (34, 36),
             Some((44, 46).into()),
@@ -164,7 +164,7 @@ mod test {
         )));
 
         // Should *not* intersect if m is provided but is disjoint
-        assert!(!xyzm.may_intersect_box(&BoundingBox::xyzm(
+        assert!(!xyzm.intersects(&BoundingBox::xyzm(
             (14, 16),
             (34, 36),
             None,

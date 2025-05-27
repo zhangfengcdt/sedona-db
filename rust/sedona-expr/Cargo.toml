@@ -11,10 +11,17 @@ rust-version.workspace = true
 [lints.clippy]
 result_large_err = "allow"
 
+[dev-dependencies]
+sedona-testing = { path = "../sedona-testing" }
+
 [dependencies]
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-expr = { workspace = true }
+geo-traits = { workspace = true }
+sedona-geometry = { path = "../sedona-geometry" }
 sedona-schema = { path = "../sedona-schema" }
+serde = { workspace = true }
+serde_json = { workspace = true }

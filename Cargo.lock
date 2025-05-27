@@ -4467,7 +4467,12 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "datafusion-physical-expr",
+ "geo-traits",
+ "sedona-geometry",
  "sedona-schema",
+ "sedona-testing",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
