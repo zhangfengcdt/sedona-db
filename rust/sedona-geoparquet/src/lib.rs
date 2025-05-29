@@ -1,2 +1,3 @@
+mod file_opener;
 pub mod format;
-pub mod metadata;
+mod metadata;

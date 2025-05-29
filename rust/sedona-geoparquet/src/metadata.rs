@@ -5,6 +5,10 @@
 /// This should be synchronized with that crate when possible.
 /// https://github.com/geoarrow/geoarrow-rs/blob/ad2d29ef90050c5cfcfa7dfc0b4a3e5d12e51bbe/rust/geoarrow-geoparquet/src/metadata.rs
 use datafusion_common::Result;
+use parquet::file::metadata::ParquetMetaData;
+use sedona_expr::statistics::GeoStatistics;
+use sedona_geometry::bounding_box::BoundingBox;
+use sedona_geometry::interval::{Interval, IntervalTrait};
 use sedona_geometry::types::GeometryTypeAndDimensions;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
@@ -325,8 +329,21 @@ pub struct GeoParquetColumnMetadata {
 
 impl GeoParquetMetadata {
     /// Construct a [`GeoParquetMetadata`] from a JSON string
-    pub fn new(metadata: &str) -> Result<Self> {
+    pub fn try_new(metadata: &str) -> Result<Self> {
         serde_json::from_str(metadata).map_err(|e| DataFusionError::Plan(e.to_string()))
+    }
+
+    /// Construct a [`GeoParquetMetadata`] from a [`ParquetMetaData`]
+    pub fn try_from_parquet_metadata(metadata: &ParquetMetaData) -> Result<Option<Self>> {
+        if let Some(kv) = metadata.file_metadata().key_value_metadata() {
+            for item in kv {
+                if item.key == "geo" && item.value.is_some() {
+                    return Ok(Some(Self::try_new(item.value.as_ref().unwrap())?));
+                }
+            }
+        }
+
+        Ok(None)
     }
 
     /// Update a GeoParquetMetadata from another file's metadata
@@ -337,10 +354,17 @@ impl GeoParquetMetadata {
         self.try_compatible_with(other)?;
         for (column_name, column_meta) in self.columns.iter_mut() {
             let other_column_meta = other.columns.get(column_name.as_str()).unwrap();
-            column_meta.bbox = merge_bboxes(
-                column_meta.bbox.as_deref(),
-                other_column_meta.bbox.as_deref(),
-            );
+
+            column_meta.bbox = match (column_meta.bounding_box(), other_column_meta.bounding_box())
+            {
+                (Some(this_bbox), Some(other_bbox)) => {
+                    let mut out = this_bbox.clone();
+                    out.update_box(&other_bbox);
+                    // For the purposes of this merging, we don't propagate Z bounds
+                    Some(vec![out.x().lo(), out.x().hi(), out.y().lo(), out.y().hi()])
+                }
+                _ => None,
+            };
 
             if column_meta.geometry_types.is_empty() || other_column_meta.geometry_types.is_empty()
             {
@@ -352,12 +376,6 @@ impl GeoParquetMetadata {
             }
         }
         Ok(())
-    }
-
-    /// Check if this metadata is compatible with another metadata instance, swallowing the error
-    /// message if not compatible.
-    pub fn is_compatible_with(&self, other: &GeoParquetMetadata) -> bool {
-        self.try_compatible_with(other).is_ok()
     }
 
     /// Assert that this metadata is compatible with another metadata instance, erroring if not
@@ -449,68 +467,44 @@ impl GeoParquetColumnMetadata {
         if let Some(edges) = &self.edges {
             write!(out, r#", "edges": "{edges}""#)?;
         }
+        // If `edges` is None, omit the field entirely.
 
         write!(out, "}}")?;
         Ok(out)
     }
-}
 
-// Eventually we need a proper GeoStatistics that can do a better job merging
-fn merge_bboxes(lhs: Option<&[f64]>, rhs: Option<&[f64]>) -> Option<Vec<f64>> {
-    match (lhs, rhs) {
-        (Some(bbox), Some(other_bbox)) => {
-            // We can eventually support this, but for now just drop
-            // stats if the bbox dimensions don't match
-            if bbox.len() != other_bbox.len() {
-                return None;
-            }
-
-            let mut bbox = bbox.to_vec();
-
-            if bbox.len() == 4 {
-                if other_bbox[0] < bbox[0] {
-                    bbox[0] = other_bbox[0];
-                }
-                if other_bbox[1] < bbox[1] {
-                    bbox[1] = other_bbox[1];
-                }
-                if other_bbox[2] > bbox[2] {
-                    bbox[2] = other_bbox[2];
-                }
-                if other_bbox[3] > bbox[3] {
-                    bbox[3] = other_bbox[3];
-                }
-            } else if bbox.len() == 6 {
-                if other_bbox[0] < bbox[0] {
-                    bbox[0] = other_bbox[0];
-                }
-                if other_bbox[1] < bbox[1] {
-                    bbox[1] = other_bbox[1];
-                }
-                if other_bbox[2] < bbox[2] {
-                    bbox[2] = other_bbox[2];
-                }
-                if other_bbox[3] > bbox[3] {
-                    bbox[3] = other_bbox[3];
-                }
-                if other_bbox[4] > bbox[4] {
-                    bbox[4] = other_bbox[4];
-                }
-                if other_bbox[5] > bbox[5] {
-                    bbox[5] = other_bbox[5];
-                }
-            }
-
-            Some(bbox)
+    pub fn to_geo_statistics(&self) -> GeoStatistics {
+        let stats = GeoStatistics::unspecified().with_bbox(self.bounding_box());
+        if self.geometry_types.is_empty() {
+            stats
+        } else {
+            let geometry_types = self.geometry_types.iter().cloned().collect::<Vec<_>>();
+            stats.with_geometry_types(Some(&geometry_types))
         }
-        _ => None,
+    }
+
+    pub fn bounding_box(&self) -> Option<BoundingBox> {
+        if let Some(bbox) = &self.bbox {
+            match bbox.len() {
+                4 => Some(BoundingBox::xy((bbox[0], bbox[2]), (bbox[1], bbox[3]))),
+                6 => Some(BoundingBox::xyzm(
+                    (bbox[0], bbox[3]),
+                    (bbox[1], bbox[4]),
+                    Some(Interval::new(bbox[2], bbox[5])),
+                    None,
+                )),
+                _ => None,
+            }
+        } else {
+            None
+        }
     }
 }
 
 #[cfg(test)]
 mod test {
     use geo_traits::Dimensions;
-    use sedona_geometry::types::{GeometryTypeAndDimensions, GeometryTypeId};
+    use sedona_geometry::types::GeometryTypeId;
 
     use super::*;
 

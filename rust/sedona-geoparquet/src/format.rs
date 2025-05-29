@@ -10,10 +10,12 @@ use datafusion::{
             parquet::{fetch_parquet_metadata, ParquetFormat, ParquetFormatFactory},
             FileFormat, FileFormatFactory, FilePushdownSupport,
         },
-        physical_plan::{FileOpener, FileScanConfig, FileSinkConfig, FileSource},
+        physical_plan::{
+            FileOpener, FileScanConfig, FileScanConfigBuilder, FileSinkConfig, FileSource,
+        },
     },
 };
-use datafusion_catalog::Session;
+use datafusion_catalog::{memory::DataSourceExec, Session};
 use datafusion_common::{internal_err, not_impl_err, plan_err, GetExt, Result, Statistics};
 use datafusion_expr::Expr;
 use datafusion_physical_expr::{LexRequirement, PhysicalExpr};
@@ -22,13 +24,18 @@ use datafusion_physical_plan::{
 };
 use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectMeta, ObjectStore};
+
 use sedona_expr::projection::wrap_physical_expressions;
+
 use sedona_schema::{
     extension_type::ExtensionType,
     projection::{unwrap_schema, wrap_schema},
 };
 
-use crate::metadata::{GeoParquetColumnEncoding, GeoParquetMetadata};
+use crate::{
+    file_opener::{storage_schema_contains_geo, GeoParquetFileOpener},
+    metadata::{GeoParquetColumnEncoding, GeoParquetMetadata},
+};
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::schema_adapter::SchemaAdapterFactory;
 
@@ -98,8 +105,7 @@ impl GetExt for GeoParquetFormatFactory {
 /// not all of the features of the underlying Parquet reader.
 #[derive(Debug)]
 pub struct GeoParquetFormat {
-    inner_with_metadata: ParquetFormat,
-    inner_without_metadata: ParquetFormat,
+    inner: ParquetFormat,
 }
 
 impl GeoParquetFormat {
@@ -110,54 +116,7 @@ impl GeoParquetFormat {
         // what exactly we're doing, we might need the underlying metadata or might
         // need it to be omitted.
         Self {
-            inner_with_metadata: ParquetFormat::new()
-                .with_options(inner.options().clone())
-                .with_skip_metadata(false),
-            inner_without_metadata: ParquetFormat::new()
-                .with_options(inner.options().clone())
-                .with_skip_metadata(true),
-        }
-    }
-
-    /// Apply GeoArrow field metadata to the schema given to us by the underlying format
-    ///
-    /// This uses the "geo" metadata at the top level of the file to add extension type
-    /// metadata to the underlying fields. At the scan level we then apply wrapping to
-    /// ensure the geometry type is understood by other components of Sedona.
-    pub fn with_geoarrow_field_metadata(&self, inner_schema: SchemaRef) -> Result<SchemaRef> {
-        if let Some(geo_metadata_json) = inner_schema.metadata().get("geo") {
-            let geo_metadata = GeoParquetMetadata::new(geo_metadata_json)?;
-
-            let new_fields: Result<Vec<_>> = inner_schema
-                .fields()
-                .iter()
-                .map(|field| {
-                    if let Some(geo_column) = geo_metadata.columns.get(field.name()) {
-                        match geo_column.encoding {
-                            GeoParquetColumnEncoding::WKB => {
-                                let extension = ExtensionType::new(
-                                    "geoarrow.wkb",
-                                    field.data_type().clone(),
-                                    Some(geo_column.to_geoarrow_metadata()?),
-                                );
-                                Ok(Arc::new(
-                                    extension.to_field(field.name(), field.is_nullable()),
-                                ))
-                            }
-                            _ => plan_err!(
-                                "Unsupported GeoParquet encoding: {}",
-                                geo_column.encoding
-                            ),
-                        }
-                    } else {
-                        Ok(field.clone())
-                    }
-                })
-                .collect();
-
-            Ok(Arc::new(Schema::new(new_fields?)))
-        } else {
-            Ok(inner_schema)
+            inner: ParquetFormat::new().with_options(inner.options().clone()),
         }
     }
 }
@@ -175,15 +134,14 @@ impl FileFormat for GeoParquetFormat {
     }
 
     fn get_ext(&self) -> String {
-        self.inner_with_metadata.get_ext()
+        self.inner.get_ext()
     }
 
     fn get_ext_with_compression(
         &self,
         file_compression_type: &FileCompressionType,
     ) -> Result<String> {
-        self.inner_with_metadata
-            .get_ext_with_compression(file_compression_type)
+        self.inner.get_ext_with_compression(file_compression_type)
     }
 
     async fn infer_schema(
@@ -195,22 +153,15 @@ impl FileFormat for GeoParquetFormat {
         // First, try the underlying format without schema metadata. This should work
         // for regular Parquet reads and will at least ensure that the underlying schemas
         // are compatible.
-        let inner_schema_without_metadata = self
-            .inner_without_metadata
-            .infer_schema(state, store, objects)
-            .await?;
+        let inner_schema_without_metadata = self.inner.infer_schema(state, store, objects).await?;
 
         // Collect metadata separately. We can in theory do our own schema
         // inference too to save an extra server request, but then we have to
-        // copy more ParqeutFormat code. It may be that caching at the object
+        // copy more ParquetFormat code. It may be that caching at the object
         // store level is the way to go here.
         let metadatas: Vec<_> = futures::stream::iter(objects)
             .map(|object| {
-                fetch_parquet_metadata(
-                    store.as_ref(),
-                    object,
-                    self.inner_without_metadata.metadata_size_hint(),
-                )
+                fetch_parquet_metadata(store.as_ref(), object, self.inner.metadata_size_hint())
             })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
             .buffered(state.config_options().execution.meta_fetch_concurrency)
@@ -223,7 +174,7 @@ impl FileFormat for GeoParquetFormat {
                 for item in kv {
                     if item.key == "geo" && item.value.is_some() {
                         let this_geoparquet_metadata =
-                            GeoParquetMetadata::new(item.value.as_ref().unwrap())?;
+                            GeoParquetMetadata::try_new(item.value.as_ref().unwrap())?;
 
                         match geoparquet_metadata.as_mut() {
                             Some(existing) => {
@@ -277,28 +228,58 @@ impl FileFormat for GeoParquetFormat {
         table_schema: SchemaRef,
         object: &ObjectMeta,
     ) -> Result<Statistics> {
-        self.inner_with_metadata
-            .infer_stats(state, store, table_schema, object)
-            .await
+        // We don't do anything special here to insert GeoStatistics because pruning
+        // happens elsewhere. These might be useful for a future optimizer or analyzer
+        // pass that can insert optimizations based on geometry type.
+        let unwrapped_table_schema = Arc::new(unwrap_schema(&table_schema));
+        let inner_stats = self
+            .inner
+            .infer_stats(state, store, unwrapped_table_schema.clone(), object)
+            .await?;
+
+        Ok(inner_stats)
     }
 
     async fn create_physical_plan(
         &self,
-        state: &dyn Session,
+        _state: &dyn Session,
         config: FileScanConfig,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Build the parent Parquet scan, keeping a few references to the initial state
-        let wrapped_schema = config.file_schema.clone();
-        let inner_schema = unwrap_schema(&wrapped_schema);
+        // A copy of ParquetSource::create_physical_plan() that ensures the underlying
+        // DataSourceExec is backed by a GeoParquetFileSource instead of a ParquetFileSource
+        let mut predicate = None;
+        let mut metadata_size_hint = None;
 
-        // Make sure we pass the schema that the underlying implementation was expecting
-        let mut config = config.clone();
-        config.file_schema = Arc::new(inner_schema);
-        let inner_plan = self
-            .inner_with_metadata
-            .create_physical_plan(state, config, filters)
-            .await?;
+        // If enable pruning then combine the filters to build the predicate.
+        // If disable pruning then set the predicate to None, thus readers
+        // will not prune data based on the statistics.
+        if self.inner.enable_pruning() {
+            if let Some(pred) = filters.cloned() {
+                predicate = Some(pred);
+            }
+        }
+        if let Some(metadata) = self.inner.metadata_size_hint() {
+            metadata_size_hint = Some(metadata);
+        }
+
+        let mut source = GeoParquetFileSource::new(self.inner.options().clone());
+
+        if let Some(predicate) = predicate {
+            source = source.with_predicate(Arc::clone(&config.file_schema), predicate);
+        }
+        if let Some(metadata_size_hint) = metadata_size_hint {
+            source = source.with_metadata_size_hint(metadata_size_hint)
+        }
+
+        let conf = FileScanConfigBuilder::from(config)
+            .with_source(Arc::new(source))
+            .build();
+
+        // Build the inner plan
+        let mut inner_config = conf.clone();
+        inner_config.file_schema = Arc::new(unwrap_schema(&conf.file_schema));
+        let inner_plan = DataSourceExec::from_data_source(inner_config);
 
         // Calculate a list of expressions that are either a column reference to the original
         // or a user-defined function call to the function that performs the wrap operation.
@@ -328,70 +309,117 @@ impl FileFormat for GeoParquetFormat {
         table_schema: &Schema,
         filters: &[&Expr],
     ) -> Result<FilePushdownSupport> {
-        self.inner_with_metadata
+        // The Parquet pushdown checker only returns false if there's a column name
+        // in the expression that would prevent the filter from being evaluated. The
+        // evaluation that occurs here is the same type of evaluation that would occur
+        // in normal execution except it occurs sooner when the appropriate option is
+        // enabled in the DataFusion configuration.
+        self.inner
             .supports_filters_pushdown(file_schema, table_schema, filters)
     }
 
     fn file_source(&self) -> Arc<dyn FileSource> {
-        Arc::new(GeoParquetFileSource::new(
-            self.inner_with_metadata.file_source(),
-        ))
+        Arc::new(
+            GeoParquetFileSource::try_from_file_source(self.inner.file_source(), None, None)
+                .unwrap(),
+        )
     }
 }
 
+/// Geo aware wrapper around a [ParquetSource]
+///
+/// The primary reason for this is to (1) ensure that the schema we pass
+/// to the Parquet file opener is the raw/unwrapped schema and (2) provide a
+/// custom [FileOpener] that implements pruning based on a predicate and
+/// column statistics. We have to keep a copy of `metadata_size_hint` and
+/// `predicate` because the [ParquetSource] marks these fields as private
+/// and we need them for our custom file opener.
+#[derive(Debug, Clone)]
 pub struct GeoParquetFileSource {
-    inner: Arc<dyn FileSource>,
+    inner: ParquetSource,
+    metadata_size_hint: Option<usize>,
+    predicate: Option<Arc<dyn PhysicalExpr>>,
 }
 
 impl GeoParquetFileSource {
-    pub fn new(inner: Arc<dyn FileSource>) -> Self {
-        Self { inner }
+    /// Create a new file source based on [TableParquetOptions]
+    pub fn new(options: TableParquetOptions) -> Self {
+        Self {
+            inner: ParquetSource::new(options),
+            metadata_size_hint: None,
+            predicate: None,
+        }
     }
 
-    /// Apply a predicate to the inner parquet file source if supported
+    /// Create a new file source based on an arbitrary file source
+    ///
+    /// Panics if the provided [FileSource] is not a [ParquetSource].
+    /// This is needed because some functions from which this needs to be
+    /// called do not return errors.
+    pub fn from_file_source(
+        inner: Arc<dyn FileSource>,
+        metadata_size_hint: Option<usize>,
+        predicate: Option<Arc<dyn PhysicalExpr>>,
+    ) -> Self {
+        Self::try_from_file_source(inner, metadata_size_hint, predicate).unwrap()
+    }
+
+    /// Create a new file source based on an arbitrary file source
+    ///
+    /// Returns an error if the provided [FileSource] is not a [ParquetSource].
+    pub fn try_from_file_source(
+        inner: Arc<dyn FileSource>,
+        metadata_size_hint: Option<usize>,
+        predicate: Option<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Self> {
+        if let Some(parquet_source) = inner.as_any().downcast_ref::<ParquetSource>() {
+            Ok(Self {
+                inner: parquet_source.clone(),
+                metadata_size_hint,
+                predicate,
+            })
+        } else {
+            internal_err!("GeoParquetFileSource constructed from non-ParquetSource")
+        }
+    }
+
+    /// Apply a predicate to the [FileSource]
     pub fn with_predicate(
         &self,
         file_schema: Arc<Schema>,
         predicate: Arc<dyn PhysicalExpr>,
     ) -> Self {
-        // Get a reference to the inner source
-        let inner_any = self.inner.as_any();
-
-        // Try to downcast to ParquetSource
-        if let Some(parquet_source) = inner_any.downcast_ref::<ParquetSource>() {
-            // Call with_predicate with both the file_schema and predicate
-            let new_inner = parquet_source.with_predicate(file_schema, predicate);
-            // Wrap the ParquetSource in an Arc<dyn FileSource>
-            Self {
-                inner: Arc::new(new_inner),
-            }
-        } else {
-            // If downcast failed, panic as this is unexpected
-            unreachable!("GeoParquetFileSource constructed with non ParquetSource inner")
+        Self {
+            inner: self.inner.with_predicate(
+                Arc::new(unwrap_schema(file_schema.as_ref())),
+                predicate.clone(),
+            ),
+            metadata_size_hint: self.metadata_size_hint,
+            predicate: Some(predicate),
         }
     }
 
-    /// Apply a schema adapter factory to the inner parquet file source if supported
+    /// Apply a [SchemaAdapterFactory] to the inner [ParquetSource]
     pub fn with_schema_adapter_factory(
         &self,
         schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
     ) -> Self {
-        // Get a reference to the inner source
-        let inner_any = self.inner.as_any();
-
-        // Try to downcast to ParquetSource
-        if let Some(parquet_source) = inner_any.downcast_ref::<ParquetSource>() {
-            // Call with_schema_adapter_factory on the parquet source
-            let new_inner = parquet_source
+        Self {
+            inner: self
+                .inner
                 .clone()
-                .with_schema_adapter_factory(schema_adapter_factory);
-            // Wrap the ParquetSource in an Arc<dyn FileSource>
-            Self {
-                inner: Arc::new(new_inner),
-            }
-        } else {
-            // If downcast failed, panic as this is unexpected
-            unreachable!("GeoParquetFileSource constructed with non ParquetSource inner")
+                .with_schema_adapter_factory(schema_adapter_factory),
+            metadata_size_hint: self.metadata_size_hint,
+            predicate: self.predicate.clone(),
+        }
+    }
+
+    /// Apply a metadata size hint to the inner [ParquetSource]
+    pub fn with_metadata_size_hint(&self, hint: usize) -> Self {
+        Self {
+            inner: self.inner.clone().with_metadata_size_hint(hint),
+            metadata_size_hint: Some(hint),
+            predicate: self.predicate.clone(),
         }
     }
 }
@@ -405,8 +433,22 @@ impl FileSource for GeoParquetFileSource {
     ) -> Arc<dyn FileOpener> {
         let mut inner_config = base_config.clone();
         inner_config.file_schema = Arc::new(unwrap_schema(&inner_config.file_schema));
-        self.inner
-            .create_file_opener(object_store, base_config, partition)
+        let inner_opener =
+            self.inner
+                .create_file_opener(object_store.clone(), &inner_config, partition);
+
+        // If there are no geo columns or no pruning predicate, just return the inner opener
+        if self.predicate.is_none() || !storage_schema_contains_geo(&base_config.file_schema) {
+            return inner_opener;
+        }
+
+        Arc::new(GeoParquetFileOpener::new(
+            inner_opener,
+            object_store,
+            self.metadata_size_hint,
+            self.predicate.clone().unwrap(),
+            base_config.file_schema.clone(),
+        ))
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -414,30 +456,41 @@ impl FileSource for GeoParquetFileSource {
     }
 
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
-        Arc::new(Self {
-            inner: self.inner.with_batch_size(batch_size),
-        })
+        Arc::new(Self::from_file_source(
+            self.inner.with_batch_size(batch_size),
+            self.metadata_size_hint,
+            self.predicate.clone(),
+        ))
     }
 
     fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
-        Arc::new(Self {
-            inner: self.inner.with_schema(schema),
-        })
+        Arc::new(Self::from_file_source(
+            self.inner.with_schema(schema),
+            self.metadata_size_hint,
+            self.predicate.clone(),
+        ))
     }
 
     fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
-        Arc::new(Self {
-            inner: self.inner.with_projection(config),
-        })
+        Arc::new(Self::from_file_source(
+            self.inner.with_projection(config),
+            self.metadata_size_hint,
+            self.predicate.clone(),
+        ))
     }
 
     fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
-        Arc::new(Self {
-            inner: self.inner.with_statistics(statistics),
-        })
+        Arc::new(Self::from_file_source(
+            self.inner.with_statistics(statistics),
+            self.metadata_size_hint,
+            self.predicate.clone(),
+        ))
     }
 
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
+        // We can and probably should insert some of our own metrics here for easier
+        // debugging (e.g., time spent fetching our metadata and number of files/
+        // row groups pruned).
         self.inner.metrics()
     }
 
@@ -464,11 +517,12 @@ mod test {
         prelude::{col, ParquetReadOptions, SessionContext},
     };
     use datafusion_common::ScalarValue;
-    use datafusion_expr::Operator;
+    use datafusion_expr::{lit, Operator, ScalarUDF, Signature, SimpleScalarUDF, Volatility};
     use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
     use datafusion_physical_expr::PhysicalExpr;
     use sedona_expr::projection::unwrap_batch;
-    use sedona_schema::datatypes::{lnglat, Edges, SedonaType};
+    use sedona_schema::datatypes::{lnglat, Edges, SedonaType, WKB_GEOMETRY};
+    use sedona_testing::create::create_scalar;
     use sedona_testing::data::{geoarrow_data_dir, test_geoparquet};
 
     use super::*;
@@ -613,6 +667,47 @@ mod test {
     }
 
     #[tokio::test]
+    async fn pruning_geoparquet_metadata() {
+        let data_dir = geoarrow_data_dir().unwrap();
+        let ctx = setup_context();
+
+        let udf: ScalarUDF = SimpleScalarUDF::new_with_signature(
+            "st_intersects",
+            Signature::any(2, Volatility::Immutable),
+            DataType::Boolean,
+            Arc::new(|_args| Ok(ScalarValue::Boolean(Some(true)).into())),
+        )
+        .into();
+
+        let definitely_non_intersecting_scalar =
+            create_scalar(Some("POINT (100 200)"), &WKB_GEOMETRY);
+
+        let df = ctx
+            .table(format!("{data_dir}/example/files/*_geo.parquet"))
+            .await
+            .unwrap()
+            .filter(udf.call(vec![
+                col("geometry"),
+                lit(definitely_non_intersecting_scalar),
+            ]))
+            .unwrap();
+
+        let batches_out = df.collect().await.unwrap();
+        assert!(batches_out.is_empty());
+
+        let definitely_intersecting_scalar = create_scalar(Some("POINT (30 10)"), &WKB_GEOMETRY);
+        let df = ctx
+            .table(format!("{data_dir}/example/files/*_geo.parquet"))
+            .await
+            .unwrap()
+            .filter(udf.call(vec![col("geometry"), lit(definitely_intersecting_scalar)]))
+            .unwrap();
+
+        let batches_out = df.collect().await.unwrap();
+        assert!(!batches_out.is_empty());
+    }
+
+    #[tokio::test]
     async fn geoparquet_format_factory() {
         let ctx = SessionContext::new();
         let format_factory = Arc::new(GeoParquetFormatFactory::new());
@@ -638,14 +733,11 @@ mod test {
             Arc::new(BinaryExpr::new(column, Operator::Gt, value));
 
         // Create GeoParquetFileSource and apply predicate
-        let geo_source = GeoParquetFileSource::new(Arc::new(parquet_source));
+        let geo_source =
+            GeoParquetFileSource::try_from_file_source(Arc::new(parquet_source), None, None)
+                .unwrap();
         let geo_source_with_predicate = geo_source.with_predicate(schema.clone(), predicate);
-
-        // Check that inner has been modified - the resulting inner source should be different
-        assert!(!Arc::ptr_eq(
-            &geo_source.inner,
-            &geo_source_with_predicate.inner
-        ));
+        assert!(geo_source_with_predicate.inner.predicate().is_some());
     }
 
     #[tokio::test]
@@ -673,14 +765,14 @@ mod test {
             Arc::new(MockSchemaAdapterFactory);
 
         // Create GeoParquetFileSource and apply schema adapter factory
-        let geo_source = GeoParquetFileSource::new(Arc::new(parquet_source));
+        let geo_source =
+            GeoParquetFileSource::try_from_file_source(Arc::new(parquet_source), None, None)
+                .unwrap();
         let geo_source_with_adapter =
             geo_source.with_schema_adapter_factory(schema_adapter_factory);
-
-        // Check that inner has been modified
-        assert!(!Arc::ptr_eq(
-            &geo_source.inner,
-            &geo_source_with_adapter.inner
-        ));
+        assert!(geo_source_with_adapter
+            .inner
+            .schema_adapter_factory()
+            .is_some());
     }
 }
