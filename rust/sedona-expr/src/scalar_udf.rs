@@ -2,7 +2,7 @@ use std::iter::zip;
 use std::sync::Arc;
 use std::{any::Any, fmt::Debug};
 
-use arrow_schema::DataType;
+use arrow_schema::{DataType, Field};
 use datafusion_common::error::Result;
 use datafusion_common::not_impl_err;
 use datafusion_expr::{
@@ -314,11 +314,18 @@ impl SedonaScalarUDF {
     ) -> Result<ColumnarValue> {
         let arg_types: Vec<_> = args.iter().map(|arg| arg.data_type()).collect();
         let return_type = self.return_type(&arg_types)?;
+        let arg_fields: Vec<_> = arg_types
+            .into_iter()
+            .map(|data_type| Arc::new(Field::new("", data_type, true)))
+            .collect();
+
         let args = ScalarFunctionArgs {
             args: args.to_vec(),
+            arg_fields,
             number_rows,
-            return_type: &return_type,
+            return_field: Arc::new(Field::new("", return_type, true)),
         };
+
         self.invoke_with_args(args)
     }
 

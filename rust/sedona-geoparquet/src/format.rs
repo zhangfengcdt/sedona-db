@@ -3,12 +3,12 @@ use std::{any::Any, collections::HashMap, sync::Arc};
 use arrow_schema::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion::{
-    config::TableParquetOptions,
+    config::{ConfigOptions, TableParquetOptions},
     datasource::{
         file_format::{
             file_compression_type::FileCompressionType,
             parquet::{fetch_parquet_metadata, ParquetFormat, ParquetFormatFactory},
-            FileFormat, FileFormatFactory, FilePushdownSupport,
+            FileFormat, FileFormatFactory,
         },
         physical_plan::{
             FileOpener, FileScanConfig, FileScanConfigBuilder, FileSinkConfig, FileSource,
@@ -17,10 +17,10 @@ use datafusion::{
 };
 use datafusion_catalog::{memory::DataSourceExec, Session};
 use datafusion_common::{internal_err, not_impl_err, plan_err, GetExt, Result, Statistics};
-use datafusion_expr::Expr;
 use datafusion_physical_expr::{LexRequirement, PhysicalExpr};
 use datafusion_physical_plan::{
-    metrics::ExecutionPlanMetricsSet, projection::ProjectionExec, ExecutionPlan,
+    filter_pushdown::FilterPushdownPropagation, metrics::ExecutionPlanMetricsSet,
+    projection::ProjectionExec, ExecutionPlan,
 };
 use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectMeta, ObjectStore};
@@ -35,6 +35,7 @@ use sedona_schema::{
 use crate::{
     file_opener::{storage_schema_contains_geo, GeoParquetFileOpener},
     metadata::{GeoParquetColumnEncoding, GeoParquetMetadata},
+    wrap::WrapExec,
 };
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::schema_adapter::SchemaAdapterFactory;
@@ -244,30 +245,17 @@ impl FileFormat for GeoParquetFormat {
         &self,
         _state: &dyn Session,
         config: FileScanConfig,
-        filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // A copy of ParquetSource::create_physical_plan() that ensures the underlying
         // DataSourceExec is backed by a GeoParquetFileSource instead of a ParquetFileSource
-        let mut predicate = None;
         let mut metadata_size_hint = None;
 
-        // If enable pruning then combine the filters to build the predicate.
-        // If disable pruning then set the predicate to None, thus readers
-        // will not prune data based on the statistics.
-        if self.inner.enable_pruning() {
-            if let Some(pred) = filters.cloned() {
-                predicate = Some(pred);
-            }
-        }
         if let Some(metadata) = self.inner.metadata_size_hint() {
             metadata_size_hint = Some(metadata);
         }
 
         let mut source = GeoParquetFileSource::new(self.inner.options().clone());
 
-        if let Some(predicate) = predicate {
-            source = source.with_predicate(Arc::clone(&config.file_schema), predicate);
-        }
         if let Some(metadata_size_hint) = metadata_size_hint {
             source = source.with_metadata_size_hint(metadata_size_hint)
         }
@@ -286,7 +274,9 @@ impl FileFormat for GeoParquetFormat {
         // wrap_physical_expressions() returns None if no columns needed wrapping so that
         // we can omit the new node completely.
         if let Some(column_exprs) = wrap_physical_expressions(inner_plan.schema().fields())? {
-            let exec = ProjectionExec::try_new(column_exprs, inner_plan)?;
+            let exec = WrapExec {
+                inner: ProjectionExec::try_new(column_exprs, inner_plan)?,
+            };
             Ok(Arc::new(exec))
         } else {
             Ok(inner_plan)
@@ -301,21 +291,6 @@ impl FileFormat for GeoParquetFormat {
         _order_requirements: Option<LexRequirement>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("GeoParquet writer not implemented")
-    }
-
-    fn supports_filters_pushdown(
-        &self,
-        file_schema: &Schema,
-        table_schema: &Schema,
-        filters: &[&Expr],
-    ) -> Result<FilePushdownSupport> {
-        // The Parquet pushdown checker only returns false if there's a column name
-        // in the expression that would prevent the filter from being evaluated. The
-        // evaluation that occurs here is the same type of evaluation that would occur
-        // in normal execution except it occurs sooner when the appropriate option is
-        // enabled in the DataFusion configuration.
-        self.inner
-            .supports_filters_pushdown(file_schema, table_schema, filters)
     }
 
     fn file_source(&self) -> Arc<dyn FileSource> {
@@ -373,10 +348,23 @@ impl GeoParquetFileSource {
         predicate: Option<Arc<dyn PhysicalExpr>>,
     ) -> Result<Self> {
         if let Some(parquet_source) = inner.as_any().downcast_ref::<ParquetSource>() {
+            let mut parquet_source = parquet_source.clone();
+
+            // Extract the precicate from the existing source if it exists so we can keep a copy of it
+            let new_predicate = match (parquet_source.predicate().cloned(), predicate) {
+                (None, None) => None,
+                (None, Some(specified_predicate)) => Some(specified_predicate),
+                (Some(inner_predicate), None) => Some(inner_predicate),
+                (Some(_), Some(specified_predicate)) => {
+                    parquet_source = parquet_source.with_predicate(specified_predicate.clone());
+                    Some(specified_predicate)
+                }
+            };
+
             Ok(Self {
                 inner: parquet_source.clone(),
                 metadata_size_hint,
-                predicate,
+                predicate: new_predicate,
             })
         } else {
             internal_err!("GeoParquetFileSource constructed from non-ParquetSource")
@@ -384,16 +372,9 @@ impl GeoParquetFileSource {
     }
 
     /// Apply a predicate to the [FileSource]
-    pub fn with_predicate(
-        &self,
-        file_schema: Arc<Schema>,
-        predicate: Arc<dyn PhysicalExpr>,
-    ) -> Self {
+    pub fn with_predicate(&self, predicate: Arc<dyn PhysicalExpr>) -> Self {
         Self {
-            inner: self.inner.with_predicate(
-                Arc::new(unwrap_schema(file_schema.as_ref())),
-                predicate.clone(),
-            ),
+            inner: self.inner.with_predicate(predicate.clone()),
             metadata_size_hint: self.metadata_size_hint,
             predicate: Some(predicate),
         }
@@ -451,6 +432,25 @@ impl FileSource for GeoParquetFileSource {
         ))
     }
 
+    fn try_pushdown_filters(
+        &self,
+        filters: Vec<Arc<dyn PhysicalExpr>>,
+        config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
+        let inner_result = self.inner.try_pushdown_filters(filters.clone(), config)?;
+        match &inner_result.updated_node {
+            Some(updated_node) => {
+                let updated_inner = Self::try_from_file_source(
+                    updated_node.clone(),
+                    self.metadata_size_hint,
+                    None,
+                )?;
+                Ok(inner_result.with_updated_node(Arc::new(updated_inner)))
+            }
+            None => Ok(inner_result),
+        }
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -465,7 +465,8 @@ impl FileSource for GeoParquetFileSource {
 
     fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
         Arc::new(Self::from_file_source(
-            self.inner.with_schema(schema),
+            self.inner
+                .with_schema(Arc::new(unwrap_schema(schema.as_ref()))),
             self.metadata_size_hint,
             self.predicate.clone(),
         ))
@@ -723,7 +724,6 @@ mod test {
     #[tokio::test]
     async fn test_with_predicate() {
         // Create a parquet source with the correct constructor signature
-        let schema = Arc::new(Schema::empty());
         let parquet_source = ParquetSource::new(TableParquetOptions::default());
 
         // Create a simple predicate (column > 0)
@@ -736,7 +736,7 @@ mod test {
         let geo_source =
             GeoParquetFileSource::try_from_file_source(Arc::new(parquet_source), None, None)
                 .unwrap();
-        let geo_source_with_predicate = geo_source.with_predicate(schema.clone(), predicate);
+        let geo_source_with_predicate = geo_source.with_predicate(predicate);
         assert!(geo_source_with_predicate.inner.predicate().is_some());
     }
 

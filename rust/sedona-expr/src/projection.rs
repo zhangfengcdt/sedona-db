@@ -1,4 +1,4 @@
-use arrow_schema::{DataType, FieldRef};
+use arrow_schema::{DataType, Field, FieldRef};
 use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use sedona_schema::projection::wrap_schema;
@@ -116,7 +116,7 @@ pub fn wrap_physical_expressions(
                         &wrap_udf_name,
                         wrap_udf.clone(),
                         vec![column, dummy_literal],
-                        ext.to_data_type(),
+                        Arc::new(Field::new("", ext.to_data_type(), f.is_nullable())),
                     )),
                     f.name().to_string(),
                 ))

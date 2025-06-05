@@ -211,7 +211,7 @@ fn parse_args(args: &[Arc<dyn PhysicalExpr>]) -> Vec<ArgRef<'_>> {
 #[cfg(test)]
 mod test {
 
-    use arrow_schema::DataType;
+    use arrow_schema::{DataType, Field};
     use datafusion_expr::{ScalarUDF, Signature, SimpleScalarUDF, Volatility};
     use sedona_geometry::{bounding_box::BoundingBox, interval::Interval};
     use sedona_schema::datatypes::WKB_GEOMETRY;
@@ -373,7 +373,7 @@ mod test {
             "intersects",
             Arc::new(unrelated),
             vec![],
-            DataType::Boolean,
+            Arc::new(Field::new("", DataType::Boolean, true)),
         ));
         assert!(matches!(
             SpatialFilter::try_from_expr(&expr_no_args).unwrap(),
@@ -394,7 +394,7 @@ mod test {
             "intersects",
             Arc::new(st_intersects.clone()),
             vec![column.clone(), literal.clone()],
-            DataType::Boolean,
+            Arc::new(Field::new("", DataType::Boolean, true)),
         ));
         let predicate = SpatialFilter::try_from_expr(&expr).unwrap();
         assert!(matches!(predicate, SpatialFilter::Intersects(_, _)));
@@ -403,7 +403,7 @@ mod test {
             "intersects",
             Arc::new(st_intersects.clone()),
             vec![literal.clone(), column.clone()],
-            DataType::Boolean,
+            Arc::new(Field::new("", DataType::Boolean, true)),
         ));
         let predicate = SpatialFilter::try_from_expr(&expr).unwrap();
         assert!(matches!(predicate, SpatialFilter::Intersects(_, _)))
@@ -419,7 +419,7 @@ mod test {
             "intersects",
             Arc::new(st_intersects.clone()),
             vec![],
-            DataType::Boolean,
+            Arc::new(Field::new("", DataType::Boolean, true)),
         ));
         assert!(SpatialFilter::try_from_expr(&expr_no_args)
             .unwrap_err()
@@ -431,7 +431,7 @@ mod test {
             "intersects",
             Arc::new(st_intersects.clone()),
             vec![literal.clone(), literal.clone()],
-            DataType::Boolean,
+            Arc::new(Field::new("", DataType::Boolean, true)),
         ));
         assert!(matches!(
             SpatialFilter::try_from_expr(&expr_wrong_types).unwrap(),
@@ -448,7 +448,7 @@ mod test {
             "has_z",
             Arc::new(has_z.clone()),
             vec![column.clone()],
-            DataType::Boolean,
+            Arc::new(Field::new("", DataType::Boolean, true)),
         ));
         let predicate = SpatialFilter::try_from_expr(&expr).unwrap();
         assert!(matches!(predicate, SpatialFilter::HasZ(_)));
@@ -463,7 +463,7 @@ mod test {
             "has_z",
             Arc::new(has_z.clone()),
             vec![],
-            DataType::Boolean,
+            Arc::new(Field::new("", DataType::Boolean, true)),
         ));
         assert!(SpatialFilter::try_from_expr(&expr_no_args)
             .unwrap_err()
@@ -475,7 +475,7 @@ mod test {
             "intersects",
             Arc::new(has_z.clone()),
             vec![literal.clone()],
-            DataType::Boolean,
+            Arc::new(Field::new("", DataType::Boolean, true)),
         ));
         assert!(matches!(
             SpatialFilter::try_from_expr(&expr_wrong_types).unwrap(),
