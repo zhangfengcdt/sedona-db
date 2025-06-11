@@ -96,6 +96,11 @@ impl SedonaContext {
             self.functions.insert_scalar_udf(udf.clone());
             self.ctx.register_udf(udf.clone().into());
         }
+
+        for udf in function_set.aggregate_udfs() {
+            self.functions.insert_aggregate_udf(udf.clone());
+            self.ctx.register_udaf(udf.clone().into());
+        }
     }
 
     /// Register a collection of kernels with this context

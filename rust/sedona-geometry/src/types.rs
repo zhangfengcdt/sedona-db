@@ -288,10 +288,7 @@ mod test {
     #[test]
     fn geometry_type_wkb_id_err() {
         let err = GeometryTypeId::try_from_wkb_id(17).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "Invalid: Unknown geometry type identifier 17"
-        );
+        assert_eq!(err.to_string(), "Unknown geometry type identifier 17");
     }
 
     #[rstest]
@@ -318,7 +315,7 @@ mod test {
         let err = GeometryTypeId::from_str("gazornenplat").unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Invalid: Invalid geometry type string: 'gazornenplat'"
+            "Invalid geometry type string: 'gazornenplat'"
         );
     }
 
@@ -357,15 +354,12 @@ mod test {
     #[test]
     fn geometry_type_dims_wkb_id_err() {
         let err = GeometryTypeAndDimensions::try_from_wkb_id(17).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "Invalid: Unknown geometry type identifier 17"
-        );
+        assert_eq!(err.to_string(), "Unknown geometry type identifier 17");
 
         let err = GeometryTypeAndDimensions::try_from_wkb_id(4000).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Invalid: Unknown dimensions in ISO WKB geometry type: 4000"
+            "Unknown dimensions in ISO WKB geometry type: 4000"
         );
     }
 

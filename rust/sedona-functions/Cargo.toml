@@ -22,10 +22,9 @@ arrow-array = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 geo-traits = { workspace = true }
-geo-traits-ext = { workspace = true }
 geo-types = { workspace = true }
-geo-generic-alg = { workspace = true }
 sedona-expr = { path = "../sedona-expr" }
+sedona-geometry = { path = "../sedona-geometry" }
 sedona-schema = { path = "../sedona-schema" }
 wkb = { workspace = true }
 wkt = { workspace = true }

@@ -3,6 +3,7 @@ pub mod register;
 mod st_area;
 mod st_asbinary;
 mod st_astext;
+pub mod st_envelope_aggr;
 mod st_geomfromwkb;
 mod st_geomfromwkt;
 mod st_intersects;

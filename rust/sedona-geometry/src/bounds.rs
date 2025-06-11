@@ -28,7 +28,11 @@ fn geo_traits_bounds_xy(
     Ok(BoundingBox::xy(x, y))
 }
 
-fn geo_traits_update_xy_bounds(
+/// Update a pair of intervals for x and y bounds
+///
+/// Useful for updating bounds in-place when accumulating
+/// bounds for statistics or function implementations.
+pub fn geo_traits_update_xy_bounds(
     geom: impl GeometryTrait<T = f64>,
     x: &mut Interval,
     y: &mut Interval,

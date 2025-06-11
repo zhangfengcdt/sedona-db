@@ -210,7 +210,7 @@ mod test {
             .unwrap_err();
         assert_eq!(
             err.message(),
-            "Invalid: Invalid geometry type string: 'gazornenplat'"
+            "Invalid geometry type string: 'gazornenplat'"
         );
     }
 

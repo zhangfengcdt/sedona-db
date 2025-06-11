@@ -2,6 +2,7 @@ use crate::{
     st_area::st_area_udf,
     st_asbinary::st_asbinary_udf,
     st_astext::st_astext_udf,
+    st_envelope_aggr::st_envelope_aggr_udf,
     st_geomfromwkb::{st_geogfromwkb_udf, st_geomfromwkb_udf},
     st_geomfromwkt::{st_geogfromwkt_udf, st_geomfromwkt_udf},
     st_intersects::st_intersects_udf,
@@ -15,6 +16,7 @@ use sedona_expr::function_set::FunctionSet;
 /// Export the set of functions defined in this crate
 pub fn default_function_set() -> FunctionSet {
     let mut function_set = FunctionSet::new();
+
     function_set.insert_scalar_udf(st_area_udf());
     function_set.insert_scalar_udf(st_asbinary_udf());
     function_set.insert_scalar_udf(st_astext_udf());
@@ -29,6 +31,9 @@ pub fn default_function_set() -> FunctionSet {
     function_set.insert_scalar_udf(st_within_udf());
     function_set.insert_scalar_udf(st_x_udf());
     function_set.insert_scalar_udf(st_y_udf());
+
+    function_set.insert_aggregate_udf(st_envelope_aggr_udf());
+
     function_set
 }
 
