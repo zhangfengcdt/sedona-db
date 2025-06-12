@@ -12,6 +12,7 @@ repos:
     -   id: codespell
         # types_or: [markdown, c, c++, rust, python]
         additional_dependencies: [tomli]
+        exclude: "^c/sedona-geoarrow-c/src/(geoarrow|nanoarrow)/.*"
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.11.8

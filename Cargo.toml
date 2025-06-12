@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "c/sedona-geoarrow-c",
     "rust/sedona-adbc",
     "rust/sedona-expr",
     "rust/sedona-functions",
@@ -10,7 +11,7 @@ members = [
     "rust/sedona-testing",
     "rust/sedona",
     "python/sedona-rs",
-    "sedona-cli"
+    "sedona-cli",
 ]
 resolver = "2"
 
