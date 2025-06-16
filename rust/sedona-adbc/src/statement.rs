@@ -1,7 +1,10 @@
 use adbc_core::PartitionedResult;
 use arrow_array::{RecordBatch, RecordBatchReader};
 use arrow_schema::Schema;
-use sedona::context::{SedonaContext, SedonaDataFrame};
+use sedona::{
+    context::{SedonaContext, SedonaDataFrame},
+    reader::SedonaStreamReader,
+};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
@@ -11,10 +14,7 @@ use adbc_core::{
     Optionable, Statement,
 };
 
-use crate::{
-    err_not_implemented, err_unrecognized_option, reader::SedonaStreamReader,
-    utils::from_datafusion_error,
-};
+use crate::{err_not_implemented, err_unrecognized_option, utils::from_datafusion_error};
 
 pub struct SedonaStatement {
     runtime: Arc<Runtime>,

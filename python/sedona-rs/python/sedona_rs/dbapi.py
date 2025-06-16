@@ -1,11 +1,9 @@
-from typing import Optional
-
 import adbc_driver_manager.dbapi
 
 import sedona_rs.adbc
 
 
-def connect(path: Optional[str] = None, **kwargs) -> "Connection":
+def connect(**kwargs) -> "Connection":
     """Connect to Sedona via ADBC."""
     db = None
     conn = None

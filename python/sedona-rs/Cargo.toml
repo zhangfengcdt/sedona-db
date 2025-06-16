@@ -9,7 +9,14 @@ name = "_lib"
 crate-type = ["cdylib"]
 
 [dependencies]
-adbc_core = "0.17.0"
+adbc_core = { workspace = true }
+arrow-schema = { workspace = true }
+arrow-array = { workspace = true }
+datafusion = { workspace = true }
+datafusion-common = { workspace = true }
 pyo3 = "0.24.0"
 sedona = { path = "../../rust/sedona", features = ["aws", "gcp", "http"] }
 sedona-adbc = { path = "../../rust/sedona-adbc" }
+sedona-schema = { path = "../../rust/sedona-schema" }
+thiserror = { workspace = true }
+tokio = { workspace = true }

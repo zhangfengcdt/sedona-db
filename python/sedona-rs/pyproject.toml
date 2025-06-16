@@ -5,8 +5,6 @@ build-backend = "maturin"
 [project]
 name = "sedona-rs"
 requires-python = ">=3.8"
-# We can these optional in the future
-dependencies = ["adbc-driver-manager", "pyarrow"]
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
@@ -14,9 +12,8 @@ classifiers = [
 ]
 dynamic = ["version"]
 
-
 [project.optional-dependencies]
-test = ["pytest", "adbc-driver-manager[dbapi]"]
+test = ["pytest", "adbc-driver-manager[dbapi]", "pandas", "geopandas", "geoarrow-pyarrow"]
 
 [tool.maturin]
 features = ["pyo3/extension-module"]

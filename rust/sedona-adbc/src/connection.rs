@@ -7,7 +7,7 @@ use adbc_core::{
     options::{InfoCode, ObjectDepth},
     Connection,
 };
-use sedona::context::SedonaContext;
+use sedona::{context::SedonaContext, reader::SedonaStreamReader};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
@@ -18,8 +18,8 @@ use adbc_core::{
 };
 
 use crate::{
-    err_not_implemented, err_unrecognized_option, reader::SedonaStreamReader,
-    statement::SedonaStatement, utils::from_datafusion_error, utils::OptionValueExt,
+    err_not_implemented, err_unrecognized_option, statement::SedonaStatement,
+    utils::from_datafusion_error, utils::OptionValueExt,
 };
 
 pub struct SedonaConnection {

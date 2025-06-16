@@ -3,6 +3,10 @@ use std::ffi::c_void;
 use pyo3::{ffi::Py_uintptr_t, prelude::*};
 use sedona_adbc::AdbcSedonaRsDriverInit;
 
+mod context;
+mod dataframe;
+mod error;
+
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[pyfunction]
@@ -20,5 +24,9 @@ fn sedona_adbc_driver_init() -> PyResult<Py_uintptr_t> {
 fn _lib(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sedona_python_version, m)?)?;
     m.add_function(wrap_pyfunction!(sedona_adbc_driver_init, m)?)?;
+
+    m.add_class::<context::InternalContext>()?;
+    m.add_class::<dataframe::InternalDataFrame>()?;
+
     Ok(())
 }

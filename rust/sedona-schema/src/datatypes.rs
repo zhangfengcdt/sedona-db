@@ -340,7 +340,7 @@ fn serialize_edges_and_crs(edges: &Edges, crs: &Crs) -> String {
     };
 
     match (crs_component, edges_component) {
-        (None, None) => "".to_string(),
+        (None, None) => "{}".to_string(),
         (None, Some(edges)) => format!("{{{}}}", edges),
         (Some(crs), None) => format!("{{{}}}", crs),
         (Some(crs), Some(edges)) => format!("{{{},{}}}", edges, crs),
@@ -475,7 +475,7 @@ mod tests {
 
     #[test]
     fn geoarrow_serialize() {
-        assert_eq!(serialize_edges_and_crs(&Edges::Planar, &Crs::None), "");
+        assert_eq!(serialize_edges_and_crs(&Edges::Planar, &Crs::None), "{}");
         assert_eq!(
             serialize_edges_and_crs(&Edges::Planar, &lnglat()),
             r#"{"crs":"OGC:CRS84"}"#

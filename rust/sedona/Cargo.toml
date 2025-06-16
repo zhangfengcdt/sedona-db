@@ -20,6 +20,7 @@ http = ["object_store/http"]
 
 [dev-dependencies]
 sedona-testing = { path = "../sedona-testing" }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 [dependencies]
 abi_stable = { workspace = true }

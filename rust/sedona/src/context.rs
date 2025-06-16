@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use arrow_array::RecordBatch;
 use async_trait::async_trait;
@@ -11,8 +11,13 @@ use datafusion::{
     sql::parser::DFParser,
 };
 use datafusion_expr::sqlparser::dialect::dialect_from_str;
-use sedona_expr::{function_set::FunctionSet, projection::wrap_batch, scalar_udf::ScalarKernelRef};
+use sedona_expr::{
+    function_set::FunctionSet,
+    projection::wrap_batch,
+    scalar_udf::{ArgMatcher, ScalarKernelRef},
+};
 use sedona_geoparquet::format::GeoParquetFormatFactory;
+use sedona_schema::datatypes::SedonaType;
 
 use crate::{
     catalog::DynamicObjectStoreCatalog,
@@ -188,7 +193,24 @@ pub trait SedonaDataFrame {
     /// be recognized as an Arrow extension type in an external system.
     async fn collect_sedona(self) -> Result<Vec<RecordBatch>>;
 
+    /// Execute this `DataFrame` and stream batches to the consumer
+    ///
+    /// Because user-defined data types currently require special handling to work with
+    /// DataFusion internals, output with geometry columns must use this function to
+    /// be recognized as an Arrow extension type in an external system.
     async fn execute_stream_sedona(self) -> Result<SendableRecordBatchStream>;
+
+    /// Return the indices of the columns that are geometry or geography
+    fn geometry_column_indices(&self) -> Result<Vec<usize>>;
+
+    /// Return the index of the column that should be considered the primary geometry
+    ///
+    /// This applies a heuritic to detect the "primary" geometry column for operations
+    /// that need this information (e.g., creating a GeoPandas GeoDataFrame). The
+    /// heuristic chooses (1) the column named "geometry", (2) the column name
+    /// "geography", (3) the column named "geom", (4) the column named "geog",
+    /// or (5) the first column with a geometry or geography data type.
+    fn primary_geometry_column_index(&self) -> Result<Option<usize>>;
 }
 
 #[async_trait]
@@ -216,6 +238,39 @@ impl SedonaDataFrame for DataFrame {
     /// Executes this DataFrame and returns a stream over a single partition
     async fn execute_stream_sedona(self) -> Result<SendableRecordBatchStream> {
         Ok(unwrap_stream(self.execute_stream().await?))
+    }
+
+    fn geometry_column_indices(&self) -> Result<Vec<usize>> {
+        let mut indices = Vec::new();
+        let matcher = ArgMatcher::is_geometry_or_geography();
+        for (i, field) in self.schema().fields().iter().enumerate() {
+            if matcher.match_type(&SedonaType::from_data_type(field.data_type())?) {
+                indices.push(i);
+            }
+        }
+
+        Ok(indices)
+    }
+
+    fn primary_geometry_column_index(&self) -> Result<Option<usize>> {
+        let indices = self.geometry_column_indices()?;
+        if indices.is_empty() {
+            return Ok(None);
+        }
+
+        let names_map = indices
+            .iter()
+            .rev()
+            .map(|i| (self.schema().field(*i).name().to_lowercase(), *i))
+            .collect::<HashMap<_, _>>();
+
+        for special_name in ["geometry", "geography", "geom", "geog"] {
+            if let Some(i) = names_map.get(special_name) {
+                return Ok(Some(*i));
+            }
+        }
+
+        Ok(Some(indices[0]))
     }
 }
 
@@ -344,6 +399,32 @@ mod tests {
         assert_eq!(batches_out[1], batch_in);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn geometry_columns() {
+        let ctx = SedonaContext::new();
+
+        // No geometry column
+        let df = ctx.sql("SELECT 1 as one").await.unwrap();
+        assert!(df.geometry_column_indices().unwrap().is_empty());
+        assert!(df.primary_geometry_column_index().unwrap().is_none());
+
+        // Should list geometry and geography but pick geom as the primary column
+        let df = ctx
+            .sql("SELECT ST_GeogPoint(0, 1) as geog, ST_Point(0, 1) as geom")
+            .await
+            .unwrap();
+        assert_eq!(df.geometry_column_indices().unwrap(), vec![0, 1]);
+        assert_eq!(df.primary_geometry_column_index().unwrap(), Some(1));
+
+        // ...but should still detect a column without a special name
+        let df = ctx
+            .sql("SELECT ST_Point(0, 1) as name_not_special_cased")
+            .await
+            .unwrap();
+        assert_eq!(df.geometry_column_indices().unwrap(), vec![0]);
+        assert_eq!(df.primary_geometry_column_index().unwrap(), Some(0));
     }
 
     #[tokio::test]

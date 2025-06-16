@@ -12,7 +12,7 @@ rust-version.workspace = true
 result_large_err = "allow"
 
 [dependencies]
-adbc_core = { git = "https://github.com/apache/arrow-adbc", rev = "1ba248290cd299c4969b679463bcd54c217cf2e4" }
+adbc_core = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 datafusion = { workspace = true }
