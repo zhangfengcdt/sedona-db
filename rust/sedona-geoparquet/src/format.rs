@@ -385,11 +385,20 @@ impl GeoParquetFileSource {
         &self,
         schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
     ) -> Self {
+        let inner = self
+            .inner
+            .clone()
+            .with_schema_adapter_factory(schema_adapter_factory)
+            .expect("with_schema_adapter_factory failed");
+
+        let parquet_source = inner
+            .as_any()
+            .downcast_ref::<ParquetSource>()
+            .expect("GeoParquetFileSource constructed with non ParquetSource inner")
+            .clone();
+
         Self {
-            inner: self
-                .inner
-                .clone()
-                .with_schema_adapter_factory(schema_adapter_factory),
+            inner: parquet_source,
             metadata_size_hint: self.metadata_size_hint,
             predicate: self.predicate.clone(),
         }

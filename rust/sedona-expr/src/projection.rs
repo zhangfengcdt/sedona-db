@@ -29,7 +29,7 @@ pub fn wrap_expressions(schema: &DFSchema) -> Result<Option<Vec<Expr>>> {
         if let Some(ext) = ExtensionType::from_field(schema.field(i)) {
             let dummy_scalar = dummy_scalar_value(&ext.to_data_type())?;
             let wrap_call = wrap_udf
-                .call(vec![this_column.clone(), Expr::Literal(dummy_scalar)])
+                .call(vec![this_column.clone(), Expr::Literal(dummy_scalar, None)])
                 .alias_qualified(this_qualifier.cloned(), this_field.name());
 
             exprs.push(wrap_call);
