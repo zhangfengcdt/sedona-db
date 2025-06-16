@@ -16,6 +16,7 @@ cc = { version = "1" }
 
 [dev-dependencies]
 criterion = { workspace = true }
+sedona = { path = "../../rust/sedona" }
 sedona-testing = { path = "../../rust/sedona-testing" }
 
 [dependencies]
