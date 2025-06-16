@@ -16,6 +16,7 @@ fn main() {
 
     cc::Build::new()
         .cpp(true)
+        .std("c++17")
         .file("src/geoarrow/double_parse_fast_float.cc")
         .include("src/")
         .flag("-DGEOARROW_NAMESPACE=SedonaRs")
