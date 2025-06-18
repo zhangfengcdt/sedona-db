@@ -31,6 +31,8 @@ use datafusion::execution::context::SessionState;
 
 use async_trait::async_trait;
 
+use datafusion::execution::SessionStateBuilder;
+use dirs::home_dir;
 use object_store::{CredentialProvider, ObjectStore};
 use url::Url;
 
@@ -49,6 +51,62 @@ use object_store::http::HttpBuilder;
 use object_store::ClientOptions;
 
 use crate::context::SedonaContext;
+
+pub async fn ensure_object_store_registered(state: &mut SessionState, name: &str) -> Result<()> {
+    let optimized_name = substitute_tilde(name.to_owned());
+    let table_url = ListingTableUrl::parse(optimized_name.as_str())?;
+    let scheme = table_url.scheme();
+    let url = table_url.as_ref();
+
+    // If the store is already registered for this URL then `get_store`
+    // will return `Ok` which means we don't need to register it again. However,
+    // if `get_store` returns an `Err` then it means the corresponding store is
+    // not registered yet and we need to register it
+    match state.runtime_env().object_store_registry.get_store(url) {
+        Ok(_) => { /*Nothing to do here, store for this URL is already registered*/ }
+        Err(_) => {
+            let mut builder = SessionStateBuilder::from(state.clone());
+
+            // Register the store for this URL. Here we don't have access
+            // to any command options so the only choice is to use an empty collection
+            match scheme {
+                "s3" | "oss" | "cos" => {
+                    if let Some(table_options) = builder.table_options() {
+                        table_options.extensions.insert(AwsOptions::default())
+                    }
+                }
+                "gs" | "gcs" => {
+                    if let Some(table_options) = builder.table_options() {
+                        table_options.extensions.insert(GcpOptions::default())
+                    }
+                }
+                _ => {}
+            };
+            let new_state = builder.build();
+            let store = get_object_store(
+                &new_state,
+                table_url.scheme(),
+                url,
+                &new_state.default_table_options(),
+            )
+            .await?;
+            new_state.runtime_env().register_object_store(url, store);
+        }
+    }
+
+    Ok(())
+}
+
+pub fn substitute_tilde(cur: String) -> String {
+    if let Some(usr_dir_path) = home_dir() {
+        if let Some(usr_dir) = usr_dir_path.to_str() {
+            if cur.starts_with('~') && !usr_dir.is_empty() {
+                return cur.replacen('~', usr_dir, 1);
+            }
+        }
+    }
+    cur
+}
 
 #[cfg(feature = "aws")]
 pub async fn get_s3_object_store_builder(
@@ -706,5 +764,43 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn test_substitute_tilde() {
+        use std::env;
+        use std::path::MAIN_SEPARATOR;
+        let original_home = home_dir();
+        let test_home_path = if cfg!(windows) {
+            "C:\\Users\\user"
+        } else {
+            "/home/user"
+        };
+        env::set_var(
+            if cfg!(windows) { "USERPROFILE" } else { "HOME" },
+            test_home_path,
+        );
+        let input = "~/Code/datafusion/benchmarks/data/tpch_sf1/part/part-0.parquet";
+        let expected = format!(
+            "{}{}Code{}datafusion{}benchmarks{}data{}tpch_sf1{}part{}part-0.parquet",
+            test_home_path,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR,
+            MAIN_SEPARATOR
+        );
+        let actual = substitute_tilde(input.to_string());
+        assert_eq!(actual, expected);
+        match original_home {
+            Some(home_path) => env::set_var(
+                if cfg!(windows) { "USERPROFILE" } else { "HOME" },
+                home_path.to_str().unwrap(),
+            ),
+            None => env::remove_var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }),
+        }
     }
 }

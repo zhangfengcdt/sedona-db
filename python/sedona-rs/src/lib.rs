@@ -21,12 +21,13 @@ fn sedona_adbc_driver_init() -> PyResult<Py_uintptr_t> {
 }
 
 #[pymodule]
-fn _lib(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _lib(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sedona_python_version, m)?)?;
     m.add_function(wrap_pyfunction!(sedona_adbc_driver_init, m)?)?;
 
     m.add_class::<context::InternalContext>()?;
     m.add_class::<dataframe::InternalDataFrame>()?;
+    m.add("SedonaError", py.get_type::<error::SedonaError>())?;
 
     Ok(())
 }

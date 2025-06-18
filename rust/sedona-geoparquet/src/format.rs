@@ -546,7 +546,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn format_from_listing_table() {
+    async fn format_from_url_table() {
         let ctx = setup_context();
         let example = test_geoparquet("example", "geometry").unwrap();
         let df = ctx.table(&example).await.unwrap();

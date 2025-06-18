@@ -1,19 +1,15 @@
 use std::any::Any;
 use std::sync::{Arc, Weak};
 
-use crate::object_storage::{get_object_store, AwsOptions, GcpOptions};
+use crate::object_storage::ensure_object_store_registered;
 
 use datafusion::catalog::{CatalogProvider, CatalogProviderList, SchemaProvider};
 
+use async_trait::async_trait;
 use datafusion::common::plan_datafusion_err;
-use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
-use datafusion::execution::session_state::SessionStateBuilder;
-
-use async_trait::async_trait;
-use dirs::home_dir;
 use parking_lot::RwLock;
 
 /// Wraps another catalog, automatically register require object stores for the file locations
@@ -140,46 +136,8 @@ impl SchemaProvider for DynamicObjectStoreSchemaProvider {
             .ok_or_else(|| plan_datafusion_err!("locking error"))?
             .read()
             .clone();
-        let mut builder = SessionStateBuilder::from(state.clone());
-        let optimized_name = substitute_tilde(name.to_owned());
-        let table_url = ListingTableUrl::parse(optimized_name.as_str())?;
-        let scheme = table_url.scheme();
-        let url = table_url.as_ref();
 
-        // If the store is already registered for this URL then `get_store`
-        // will return `Ok` which means we don't need to register it again. However,
-        // if `get_store` returns an `Err` then it means the corresponding store is
-        // not registered yet and we need to register it
-        match state.runtime_env().object_store_registry.get_store(url) {
-            Ok(_) => { /*Nothing to do here, store for this URL is already registered*/ }
-            Err(_) => {
-                // Register the store for this URL. Here we don't have access
-                // to any command options so the only choice is to use an empty collection
-                match scheme {
-                    "s3" | "oss" | "cos" => {
-                        if let Some(table_options) = builder.table_options() {
-                            table_options.extensions.insert(AwsOptions::default())
-                        }
-                    }
-                    "gs" | "gcs" => {
-                        if let Some(table_options) = builder.table_options() {
-                            table_options.extensions.insert(GcpOptions::default())
-                        }
-                    }
-                    _ => {}
-                };
-                state = builder.build();
-                let store = get_object_store(
-                    &state,
-                    table_url.scheme(),
-                    url,
-                    &state.default_table_options(),
-                )
-                .await?;
-                state.runtime_env().register_object_store(url, store);
-            }
-        }
-
+        ensure_object_store_registered(&mut state, name).await?;
         self.inner.table(name).await
     }
 
@@ -192,16 +150,6 @@ impl SchemaProvider for DynamicObjectStoreSchemaProvider {
     }
 }
 
-pub fn substitute_tilde(cur: String) -> String {
-    if let Some(usr_dir_path) = home_dir() {
-        if let Some(usr_dir) = usr_dir_path.to_str() {
-            if cur.starts_with('~') && !usr_dir.is_empty() {
-                return cur.replacen('~', usr_dir, 1);
-            }
-        }
-    }
-    cur
-}
 #[cfg(test)]
 mod tests {
 
@@ -209,7 +157,7 @@ mod tests {
 
     use super::*;
 
-    use datafusion::catalog::SchemaProvider;
+    use datafusion::{catalog::SchemaProvider, datasource::listing::ListingTableUrl};
 
     fn setup_context() -> (SedonaContext, Arc<dyn SchemaProvider>) {
         let ctx = SedonaContext::new();
@@ -312,43 +260,5 @@ mod tests {
         let (_ctx, schema) = setup_context();
 
         assert!(schema.table(location).await.is_err());
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    #[test]
-    fn test_substitute_tilde() {
-        use std::env;
-        use std::path::MAIN_SEPARATOR;
-        let original_home = home_dir();
-        let test_home_path = if cfg!(windows) {
-            "C:\\Users\\user"
-        } else {
-            "/home/user"
-        };
-        env::set_var(
-            if cfg!(windows) { "USERPROFILE" } else { "HOME" },
-            test_home_path,
-        );
-        let input = "~/Code/datafusion/benchmarks/data/tpch_sf1/part/part-0.parquet";
-        let expected = format!(
-            "{}{}Code{}datafusion{}benchmarks{}data{}tpch_sf1{}part{}part-0.parquet",
-            test_home_path,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR
-        );
-        let actual = substitute_tilde(input.to_string());
-        assert_eq!(actual, expected);
-        match original_home {
-            Some(home_path) => env::set_var(
-                if cfg!(windows) { "USERPROFILE" } else { "HOME" },
-                home_path.to_str().unwrap(),
-            ),
-            None => env::remove_var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }),
-        }
     }
 }

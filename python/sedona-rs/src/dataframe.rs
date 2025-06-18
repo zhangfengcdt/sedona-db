@@ -64,7 +64,7 @@ impl InternalDataFrame {
         if let Some(requested_capsule) = requested_schema {
             let schema_capsule_name = CString::new("arrow_schema").unwrap();
             if requested_capsule.name()? != Some(&schema_capsule_name) {
-                return Err(PySedonaError::Invalid(
+                return Err(PySedonaError::SedonaPython(
                     "Expected capsule with name 'arrow_schema'".to_string(),
                 ));
             }
@@ -74,7 +74,7 @@ impl InternalDataFrame {
             let actual_schema = self.inner.schema().as_arrow();
             if requested_schema != unwrap_schema(actual_schema) {
                 // Eventually we can support this by inserting a cast
-                return Err(PySedonaError::Invalid(
+                return Err(PySedonaError::SedonaPython(
                     "Requested schema != DataFrame schema not yet supported".to_string(),
                 ));
             }

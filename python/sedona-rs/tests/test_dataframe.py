@@ -6,8 +6,7 @@ import pytest
 import sedona_rs
 
 
-def test_dataframe_to_arrow():
-    con = sedona_rs.connect()
+def test_dataframe_to_arrow(con):
     df = con.sql("SELECT 1 as one, ST_GeomFromWKT('POINT (0 1)') as geom")
     expected_schema = pa.schema(
         [pa.field("one", pa.int64(), nullable=False), pa.field("geom", ga.wkb())]
@@ -23,14 +22,13 @@ def test_dataframe_to_arrow():
 
     # ...but not otherwise (yet)
     with pytest.raises(
-        ValueError, match="Requested schema != DataFrame schema not yet supported"
+        sedona_rs._lib.SedonaError,
+        match="Requested schema != DataFrame schema not yet supported",
     ):
         df.to_arrow_table(schema=pa.schema({}))
 
 
-def test_dataframe_to_pandas():
-    con = sedona_rs.connect()
-
+def test_dataframe_to_pandas(con):
     # Check with a geometry column
     df_with_geo = con.sql("SELECT 1 as one, ST_GeomFromWKT('POINT (0 1)') as geom")
     geopandas.testing.assert_geodataframe_equal(

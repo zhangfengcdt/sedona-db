@@ -6,7 +6,10 @@ use datafusion::{
     catalog::TableProvider,
     common::{plan_datafusion_err, plan_err},
     error::{DataFusionError, Result},
-    execution::{runtime_env::RuntimeEnvBuilder, SendableRecordBatchStream, SessionStateBuilder},
+    execution::{
+        context::DataFilePaths, runtime_env::RuntimeEnvBuilder, SendableRecordBatchStream,
+        SessionStateBuilder,
+    },
     prelude::{DataFrame, SessionConfig, SessionContext},
     sql::parser::DFParser,
 };
@@ -16,11 +19,15 @@ use sedona_expr::{
     projection::wrap_batch,
     scalar_udf::{ArgMatcher, ScalarKernelRef},
 };
-use sedona_geoparquet::format::GeoParquetFormatFactory;
+use sedona_geoparquet::{
+    format::GeoParquetFormatFactory,
+    provider::{geoparquet_listing_table, GeoParquetReadOptions},
+};
 use sedona_schema::datatypes::SedonaType;
 
 use crate::{
     catalog::DynamicObjectStoreCatalog,
+    object_storage::ensure_object_store_registered,
     projection::{unwrap_df, wrap_df},
 };
 use crate::{exec::create_plan_from_sql, projection::unwrap_stream};
@@ -147,6 +154,31 @@ impl SedonaContext {
         }
 
         Ok(results[0].clone())
+    }
+
+    /// Creates a [`DataFrame`] for reading a Parquet file with Geo type support
+    ///
+    /// This is the geo-enabled version of [SessionContext::read_parquet].
+    pub async fn read_parquet<P: DataFilePaths>(
+        &self,
+        table_paths: P,
+        options: GeoParquetReadOptions<'_>,
+    ) -> Result<DataFrame> {
+        let urls = table_paths.to_urls()?;
+        let provider =
+            match geoparquet_listing_table(&self.ctx, urls.clone(), options.clone()).await {
+                Ok(provider) => provider,
+                Err(e) => {
+                    if urls.is_empty() {
+                        return Err(e);
+                    }
+
+                    ensure_object_store_registered(&mut self.ctx.state(), urls[0].as_str()).await?;
+                    geoparquet_listing_table(&self.ctx, urls, options).await?
+                }
+            };
+
+        self.ctx.read_table(Arc::new(provider))
     }
 
     /// Registers the [`RecordBatch`] as the specified table name

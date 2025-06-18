@@ -1,3 +1,6 @@
+from pathlib import Path
+from typing import Union, Iterable
+
 from sedona_rs._lib import InternalContext
 from sedona_rs.dataframe import DataFrame
 
@@ -12,6 +15,28 @@ class SedonaContext:
 
     def __init__(self):
         self._impl = InternalContext()
+
+    def read_parquet(self, table_paths: Union[str, Path, Iterable[str]]) -> DataFrame:
+        """Create a [`DataFrame`][] from one or more Parquet files
+
+        Args:
+            table_paths: A str, Path, or iterable of paths containing URLs to Parquet
+                files.
+
+        Examples:
+
+            ```python
+            >>> import sedona_rs
+            >>> url = "https://github.com/apache/sedona-testing/raw/refs/heads/main/data/parquet/geoparquet-1.1.0.parquet"
+            >>> sedona_rs.connect().read_parquet(url)
+            <sedona_rs.dataframe.DataFrame object at ...>
+
+            ```
+        """
+        if isinstance(table_paths, (str, Path)):
+            table_paths = [table_paths]
+
+        return DataFrame(self._impl.read_parquet([str(path) for path in table_paths]))
 
     def sql(self, sql: str) -> DataFrame:
         """Create a [`DataFrame`][] by executing SQL

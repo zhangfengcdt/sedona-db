@@ -1875,7 +1875,7 @@ checksum = "980cca31de37f5dadf7ea18e4ffc2b6833611f45bed5ef9de0831d2abb50f1ef"
 dependencies = [
  "abi_stable",
  "arrow",
- "arrow-schema 55.1.0",
+ "arrow-schema",
  "async-ffi",
  "async-trait",
  "datafusion",
@@ -4568,8 +4568,8 @@ name = "sedona"
 version = "0.0.1"
 dependencies = [
  "abi_stable",
- "arrow-array 55.1.0",
- "arrow-schema 55.1.0",
+ "arrow-array",
+ "arrow-schema",
  "async-trait",
  "aws-config",
  "aws-credential-types",

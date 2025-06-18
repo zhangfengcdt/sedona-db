@@ -1,8 +1,10 @@
 use arrow_schema::ArrowError;
 use datafusion_common::DataFusionError;
-use pyo3::{exceptions::PyValueError, PyErr};
+use pyo3::{create_exception, PyErr};
 
 use thiserror::Error;
+
+create_exception!(sedona_rs._lib, SedonaError, pyo3::exceptions::PyException);
 
 #[derive(Error, Debug)]
 pub enum PySedonaError {
@@ -11,7 +13,7 @@ pub enum PySedonaError {
     #[error("{0}")]
     DF(Box<DataFusionError>),
     #[error("{0}")]
-    Invalid(String),
+    SedonaPython(String),
 }
 
 impl From<PySedonaError> for PyErr {
@@ -20,9 +22,9 @@ impl From<PySedonaError> for PyErr {
             PySedonaError::Py(py_err) => py_err,
             PySedonaError::DF(e) => {
                 let msg = e.message().to_string();
-                PyValueError::new_err(msg)
+                SedonaError::new_err(msg)
             }
-            PySedonaError::Invalid(msg) => PyValueError::new_err(msg),
+            PySedonaError::SedonaPython(msg) => SedonaError::new_err(msg),
         }
     }
 }
