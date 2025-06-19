@@ -531,7 +531,8 @@ mod test {
     use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
     use datafusion_physical_expr::PhysicalExpr;
     use sedona_expr::projection::unwrap_batch;
-    use sedona_schema::datatypes::{lnglat, Edges, SedonaType, WKB_GEOMETRY};
+    use sedona_schema::crs::lnglat;
+    use sedona_schema::datatypes::{Edges, SedonaType, WKB_GEOMETRY};
     use sedona_testing::create::create_scalar;
     use sedona_testing::data::{geoarrow_data_dir, test_geoparquet};
 

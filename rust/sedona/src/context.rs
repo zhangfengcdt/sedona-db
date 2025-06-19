@@ -313,7 +313,10 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema};
     use datafusion::assert_batches_eq;
     use futures::TryStreamExt;
-    use sedona_schema::datatypes::{lnglat, Edges, SedonaType, WKB_GEOMETRY};
+    use sedona_schema::{
+        crs::lnglat,
+        datatypes::{Edges, SedonaType, WKB_GEOMETRY},
+    };
     use sedona_testing::{create::create_array_storage, data::test_geoparquet};
 
     use super::*;

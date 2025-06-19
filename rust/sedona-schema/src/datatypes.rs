@@ -1,13 +1,12 @@
 use arrow_array::ArrayRef;
+use arrow_schema::{DataType, Field};
 use datafusion_common::error::{DataFusionError, Result};
-use datafusion_common::{internal_err, not_impl_err, ScalarValue};
+use datafusion_common::{internal_err, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use serde_json::Value;
 use std::fmt::Debug;
-use std::sync::Arc;
 
-use arrow_schema::{DataType, Field};
-
+use crate::crs::{deserialize_crs, Crs};
 use crate::extension_type::ExtensionType;
 
 /// Data types supported by Sedona that resolve to a concrete Arrow DataType
@@ -52,40 +51,6 @@ pub const WKB_GEOGRAPHY: SedonaType = SedonaType::Wkb(Edges::Spherical, Crs::Non
 ///
 /// See [`WKB_GEOGRAPHY`]
 pub const WKB_VIEW_GEOGRAPHY: SedonaType = SedonaType::WkbView(Edges::Spherical, Crs::None);
-
-/// Longitude/latitude CRS (WGS84)
-///
-/// A [`CrsRef`] that matches EPSG:4326 or OGC:CRS84.
-pub fn lnglat() -> Crs {
-    LngLat::crs()
-}
-
-/// Coordinate reference systems
-///
-/// From Sedona's perspective, we can have a missing Crs at the type level or
-/// something that can resolve to a JSON value (which is what we need to export it
-/// to GeoArrow), something that can resolve to a PROJJSON value (which is what we need
-/// to export it to Parquet/Iceberg) and something with which we can check
-/// equality (for binary operators).
-pub type Crs = Option<Arc<dyn CoordinateReferenceSystem + Send + Sync>>;
-
-impl PartialEq<dyn CoordinateReferenceSystem + Send + Sync>
-    for dyn CoordinateReferenceSystem + Send + Sync
-{
-    fn eq(&self, other: &Self) -> bool {
-        self.crs_equals(other)
-    }
-}
-
-/// Coordinate reference system abstraction
-///
-/// A trait defining the minimum required properties of a concrete coordinate
-/// reference system, allowing the details of this to be implemented elsewhere.
-pub trait CoordinateReferenceSystem: Debug {
-    fn to_json(&self) -> String;
-    fn to_authority_code(&self) -> Result<String>;
-    fn crs_equals(&self, other: &dyn CoordinateReferenceSystem) -> bool;
-}
 
 // Implementation details
 
@@ -365,58 +330,10 @@ fn deserialize_edges(edges: &Value) -> Result<Edges> {
     }
 }
 
-/// Deserialize a specific GeoArrow "crs" value
-fn deserialize_crs(crs: &Value) -> Result<Crs> {
-    if LngLat::is_lnglat(crs) {
-        return Ok(lnglat());
-    }
-
-    not_impl_err!("Deserialization of crs {}", crs)
-}
-
-/// Concrete implementation of a default longitude/latitude coordinate reference system
-#[derive(Debug)]
-struct LngLat {}
-
-impl LngLat {
-    pub fn crs() -> Crs {
-        Crs::Some(Arc::new(LngLat {}))
-    }
-
-    pub fn is_lnglat(value: &Value) -> bool {
-        if let Some(string_value) = value.as_str() {
-            if string_value == "OGC:CRS84" || string_value == "EPSG:4326" {
-                return true;
-            }
-        }
-
-        // TODO: check id.authority + id.code
-        false
-    }
-}
-
-impl CoordinateReferenceSystem for LngLat {
-    fn to_json(&self) -> String {
-        // We could return a full-on PROJJSON string here but this string gets copied
-        // a fair amount
-        "\"OGC:CRS84\"".to_string()
-    }
-
-    fn to_authority_code(&self) -> Result<String> {
-        Ok("OGC:CRS84".to_string())
-    }
-
-    fn crs_equals(&self, other: &dyn CoordinateReferenceSystem) -> bool {
-        if let Ok(auth_code) = other.to_authority_code() {
-            auth_code == "OGC:CRS84" || auth_code == "EPSG:4326"
-        } else {
-            false
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use crate::crs::lnglat;
+
     use super::*;
 
     #[test]
@@ -549,22 +466,5 @@ mod tests {
             .unwrap_err()
             .message()
             .contains("Unsupported edges value"));
-    }
-
-    #[test]
-    fn crs_lnglat() {
-        let lnglat = LngLat {};
-        assert!(lnglat.crs_equals(&lnglat));
-        assert_eq!(lnglat.to_authority_code().unwrap(), "OGC:CRS84");
-
-        let json_value = lnglat.to_json();
-        assert_eq!(json_value, "\"OGC:CRS84\"");
-
-        let lnglat_crs = LngLat::crs();
-        assert_eq!(lnglat_crs, lnglat_crs);
-        assert_ne!(lnglat_crs, Crs::None);
-
-        let lnglat_parsed: Result<Value, _> = serde_json::from_str(&json_value);
-        assert!(LngLat::is_lnglat(&lnglat_parsed.unwrap()))
     }
 }
