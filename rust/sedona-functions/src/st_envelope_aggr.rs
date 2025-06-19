@@ -1,10 +1,9 @@
-use std::{iter::zip, sync::Arc, vec};
+use std::{sync::Arc, vec};
 
 use crate::executor::GenericExecutor;
 use arrow_array::ArrayRef;
-use arrow_schema::{DataType, Field, FieldRef};
+use arrow_schema::FieldRef;
 use datafusion_common::{
-    cast::as_float64_array,
     error::{DataFusionError, Result},
     internal_err, ScalarValue,
 };
@@ -20,7 +19,7 @@ use sedona_geometry::{
     interval::{Interval, IntervalTrait},
     wkb_factory::{wkb_linestring, wkb_point, wkb_polygon},
 };
-use sedona_schema::datatypes::{SedonaType, WKB_GEOMETRY};
+use sedona_schema::datatypes::{Edges, SedonaType, WKB_GEOMETRY};
 
 /// ST_Envelope_Aggr() aggregate UDF implementation
 ///
@@ -53,15 +52,6 @@ impl SedonaAccumulator for STEnvelopeAggr {
         matcher.match_args(args)
     }
 
-    fn state_fields(&self, _args: &[SedonaType]) -> Result<Vec<FieldRef>> {
-        Ok(vec![
-            Field::new("x_lo", DataType::Float64, false).into(),
-            Field::new("x_hi", DataType::Float64, false).into(),
-            Field::new("y_lo", DataType::Float64, false).into(),
-            Field::new("y_hi", DataType::Float64, false).into(),
-        ])
-    }
-
     fn accumulator(
         &self,
         args: &[SedonaType],
@@ -71,6 +61,12 @@ impl SedonaAccumulator for STEnvelopeAggr {
             args[0].clone(),
             output_type.clone(),
         )))
+    }
+
+    fn state_fields(&self, _args: &[SedonaType]) -> Result<Vec<FieldRef>> {
+        Ok(vec![Arc::new(
+            WKB_GEOMETRY.to_storage_field("envelope", true)?,
+        )])
     }
 }
 
@@ -91,13 +87,11 @@ impl BoundsAccumulator2D {
             y: Interval::empty(),
         }
     }
-}
 
-impl Accumulator for BoundsAccumulator2D {
-    fn evaluate(&mut self) -> Result<ScalarValue> {
-        // For empty input, we return NULL
+    // Create a WKB result based on the current state of the accumulator.
+    fn make_wkb_result(&self) -> Result<Option<Vec<u8>>> {
         if self.x.is_empty() || self.y.is_empty() {
-            return self.output_type.wrap_scalar(&ScalarValue::Binary(None));
+            return Ok(None);
         }
 
         let wkb = match (self.x.width() > 0.0, self.y.width() > 0.0) {
@@ -127,32 +121,30 @@ impl Accumulator for BoundsAccumulator2D {
             }
         };
 
-        let res = self
-            .output_type
-            .wrap_scalar(&ScalarValue::Binary(Some(wkb)))?;
-        Ok(res)
+        Ok(Some(wkb))
     }
 
-    fn size(&self) -> usize {
-        size_of::<BoundsAccumulator2D>()
+    // Check the input length for update methods.
+    fn check_update_input_len(input: &[ArrayRef], expected: usize, context: &str) -> Result<()> {
+        if input.is_empty() {
+            return Err(DataFusionError::Internal(format!(
+                "No input arrays provided to accumulator in {}",
+                context
+            )));
+        }
+        if input.len() != expected {
+            return internal_err!(
+                "Unexpected input length in {} (expected {}, got {})",
+                context,
+                expected,
+                input.len()
+            );
+        }
+        Ok(())
     }
 
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![
-            ScalarValue::Float64(Some(self.x.lo())),
-            ScalarValue::Float64(Some(self.x.hi())),
-            ScalarValue::Float64(Some(self.y.lo())),
-            ScalarValue::Float64(Some(self.y.hi())),
-        ])
-    }
-
-    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let args = [ColumnarValue::Array(
-            self.input_type.unwrap_array(&values[0])?,
-        )];
-        let arg_types = [self.input_type.clone()];
-        let executor = GenericExecutor::new(&arg_types, &args);
-
+    // Execute the update operation for the accumulator.
+    fn execute_update(&mut self, executor: GenericExecutor) -> Result<(), DataFusionError> {
         executor.execute_wkb_void(|_i, maybe_item| {
             if let Some(item) = maybe_item {
                 geo_traits_update_xy_bounds(item, &mut self.x, &mut self.y)
@@ -160,31 +152,44 @@ impl Accumulator for BoundsAccumulator2D {
             }
             Ok(())
         })?;
+        Ok(())
+    }
+}
 
+impl Accumulator for BoundsAccumulator2D {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        Self::check_update_input_len(values, 1, "update_batch")?;
+        let arg_types = [SedonaType::Wkb(Edges::Planar, None)];
+        let args = [ColumnarValue::Array(
+            self.input_type.unwrap_array(&values[0])?,
+        )];
+        let executor = GenericExecutor::new(&arg_types, &args);
+        self.execute_update(executor)?;
         Ok(())
     }
 
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        let wkb = self.make_wkb_result()?;
+        let scalar = ScalarValue::Binary(wkb);
+        self.output_type.wrap_scalar(&scalar)
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        let wkb = self.make_wkb_result()?;
+        Ok(vec![ScalarValue::Binary(wkb)])
+    }
+
+    fn size(&self) -> usize {
+        size_of::<BoundsAccumulator2D>()
+    }
+
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        if states.len() != 4 {
-            return internal_err!(
-                "Unexpected state in ST_Envelope_Aggr() (expected 4 arrays, got {}",
-                states.len()
-            );
-        }
-
-        let arrays = states
-            .iter()
-            .map(|array| as_float64_array(array))
-            .collect::<Result<Vec<_>>>()?;
-
-        for xs in zip(arrays[0].iter().flatten(), arrays[1].iter().flatten()) {
-            self.x.update_interval(&xs.into());
-        }
-
-        for ys in zip(arrays[2].iter().flatten(), arrays[3].iter().flatten()) {
-            self.y.update_interval(&ys.into());
-        }
-
+        Self::check_update_input_len(states, 1, "merge_batch")?;
+        let array = &states[0];
+        let args = [ColumnarValue::Array(array.clone())];
+        let arg_types = [SedonaType::Wkb(Edges::Planar, None)];
+        let executor = GenericExecutor::new(&arg_types, &args);
+        self.execute_update(executor)?;
         Ok(())
     }
 }
