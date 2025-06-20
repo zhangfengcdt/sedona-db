@@ -3,7 +3,7 @@ requires = ["maturin>=1.8,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "sedona-rs"
+name = "sedonadb"
 requires-python = ">=3.8"
 classifiers = [
     "Programming Language :: Rust",
@@ -17,5 +17,5 @@ test = ["pytest", "adbc-driver-manager[dbapi]", "pandas", "geopandas", "geoarrow
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
-module-name = "sedona_rs._lib"
+module-name = "sedonadb._lib"
 python-source = "python"

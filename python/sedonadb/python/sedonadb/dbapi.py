@@ -1,6 +1,6 @@
 import adbc_driver_manager.dbapi
 
-import sedona_rs.adbc
+import sedonadb.adbc
 
 
 def connect(**kwargs) -> "Connection":
@@ -9,7 +9,7 @@ def connect(**kwargs) -> "Connection":
     conn = None
 
     try:
-        db = sedona_rs.adbc.connect()
+        db = sedonadb.adbc.connect()
         conn = adbc_driver_manager.AdbcConnection(db)
         return adbc_driver_manager.dbapi.Connection(db, conn, **kwargs)
     except Exception:

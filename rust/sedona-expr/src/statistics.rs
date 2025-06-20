@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// Statistics specific to spatial data types
 ///
-/// These statistics are an abstraction to provide sedona-rs the ability to
+/// These statistics are an abstraction to provide sedonadb the ability to
 /// perform generic pruning and optimization for datasources that have the
 /// ability to provide this information. This may evolve to support more
 /// fields; however, can currently express Parquet built-in GeoStatistics,

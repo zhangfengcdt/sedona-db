@@ -1,5 +1,5 @@
-from sedona_rs import _lib
-from sedona_rs.context import connect
+from sedonadb import _lib
+from sedonadb.context import connect
 
 __version__ = _lib.sedona_python_version()
 

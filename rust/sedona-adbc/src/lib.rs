@@ -8,4 +8,4 @@ pub mod statement;
 use adbc_core::error::{Error, Status};
 use driver::SedonaDriver;
 
-adbc_core::export_driver!(AdbcSedonaRsDriverInit, SedonaDriver);
+adbc_core::export_driver!(AdbcSedonadbDriverInit, SedonaDriver);

@@ -18,7 +18,7 @@ pub struct ArrayReader {
 impl Drop for ArrayReader {
     fn drop(&mut self) {
         if !self.ptr_mut().is_null() {
-            unsafe { SedonaRsGeoArrowArrayReaderReset(self.ptr_mut()) };
+            unsafe { SedonaDBGeoArrowArrayReaderReset(self.ptr_mut()) };
         }
     }
 }
@@ -33,7 +33,7 @@ impl ArrayReader {
         };
 
         let mut out = Self { inner };
-        unsafe { SedonaRsGeoArrowArrayReaderInitFromType(out.ptr_mut(), type_id) };
+        unsafe { SedonaDBGeoArrowArrayReaderInitFromType(out.ptr_mut(), type_id) };
         Ok(out)
     }
 
@@ -53,12 +53,12 @@ impl ArrayReader {
             error.reset();
             let ffi_array_ptr: *const ArrowArray = transmute(&ffi_array as *const FFI_ArrowArray);
             let code =
-                SedonaRsGeoArrowArrayReaderSetArray(self.ptr_mut(), ffi_array_ptr, error.ptr_mut());
+                SedonaDBGeoArrowArrayReaderSetArray(self.ptr_mut(), ffi_array_ptr, error.ptr_mut());
             error.msg_not_ok(code)?;
 
             visitor.set_error(error);
             let code =
-                SedonaRsGeoArrowArrayReaderVisit(self.ptr_mut(), 0, array_len, visitor.ptr_mut());
+                SedonaDBGeoArrowArrayReaderVisit(self.ptr_mut(), 0, array_len, visitor.ptr_mut());
             visitor.reset_error();
 
             error.msg_not_ok(code)?;
@@ -85,7 +85,7 @@ pub struct ArrayWriter {
 impl Drop for ArrayWriter {
     fn drop(&mut self) {
         if !self.ptr_mut().is_null() {
-            unsafe { SedonaRsGeoArrowArrayWriterReset(self.ptr_mut()) };
+            unsafe { SedonaDBGeoArrowArrayWriterReset(self.ptr_mut()) };
         }
     }
 }
@@ -104,7 +104,7 @@ impl ArrayWriter {
             visitor: Visitor::new(),
             data_type: arrow_storage_type(type_id)?,
         };
-        unsafe { SedonaRsGeoArrowArrayWriterInitFromType(out.ptr_mut(), type_id) };
+        unsafe { SedonaDBGeoArrowArrayWriterInitFromType(out.ptr_mut(), type_id) };
         Ok(out)
     }
 
@@ -114,7 +114,7 @@ impl ArrayWriter {
 
     /// Create a reference to the internal visitor pointing to this writer
     pub fn visitor_mut(&mut self) -> &mut Visitor {
-        unsafe { SedonaRsGeoArrowArrayWriterInitVisitor(self.ptr_mut(), self.visitor.ptr_mut()) };
+        unsafe { SedonaDBGeoArrowArrayWriterInitVisitor(self.ptr_mut(), self.visitor.ptr_mut()) };
         &mut self.visitor
     }
 
@@ -127,7 +127,7 @@ impl ArrayWriter {
             let array_ptr: *mut ArrowArray =
                 transmute(&mut out as *mut arrow_array::ffi::FFI_ArrowArray);
             let code =
-                SedonaRsGeoArrowArrayWriterFinish(self.ptr_mut(), array_ptr, ptr::null_mut());
+                SedonaDBGeoArrowArrayWriterFinish(self.ptr_mut(), array_ptr, ptr::null_mut());
             if code != 0 {
                 return Err(GeoArrowCError::Code(code));
             }
@@ -226,7 +226,7 @@ impl Visitor {
     /// Create a new visitor wrapper that wraps a visitor that does nothing
     pub fn void() -> Self {
         let mut visitor = Self::new();
-        unsafe { SedonaRsGeoArrowVisitorInitVoid(visitor.ptr_mut()) };
+        unsafe { SedonaDBGeoArrowVisitorInitVoid(visitor.ptr_mut()) };
         visitor
     }
 

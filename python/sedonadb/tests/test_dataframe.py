@@ -3,7 +3,7 @@ import geopandas.testing
 import pandas as pd
 import pyarrow as pa
 import pytest
-import sedona_rs
+import sedonadb
 
 
 def test_dataframe_to_arrow(con):
@@ -22,7 +22,7 @@ def test_dataframe_to_arrow(con):
 
     # ...but not otherwise (yet)
     with pytest.raises(
-        sedona_rs._lib.SedonaError,
+        sedonadb._lib.SedonaError,
         match="Requested schema != DataFrame schema not yet supported",
     ):
         df.to_arrow_table(schema=pa.schema({}))

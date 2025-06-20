@@ -104,8 +104,10 @@ impl ReadOptions<'_> for GeoParquetReadOptions<'_> {
 mod test {
 
     use arrow_schema::DataType;
-    use sedona_schema::crs::lnglat;
-    use sedona_schema::datatypes::{Edges, SedonaType};
+    use sedona_schema::{
+        crs::lnglat,
+        datatypes::{Edges, SedonaType},
+    };
     use sedona_testing::data::geoarrow_data_dir;
 
     use super::*;

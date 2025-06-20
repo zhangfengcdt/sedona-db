@@ -1,12 +1,12 @@
 from pathlib import Path
 
 import pytest
-import sedona_rs
+import sedonadb
 
 
 HERE = Path(__file__).parent
 
-CON = sedona_rs.connect()
+CON = sedonadb.connect()
 
 
 @pytest.fixture()

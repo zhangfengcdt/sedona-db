@@ -52,8 +52,8 @@ class DataFrame:
         Examples:
 
             ```python
-            >>> import sedona_rs
-            >>> con = sedona_rs.connect()
+            >>> import sedonadb
+            >>> con = sedonadb.connect()
             >>> con.sql("SELECT ST_Point(0, 1) as geometry").to_arrow_table()
             pyarrow.Table
             geometry: extension<geoarrow.wkb<WkbType>>
@@ -88,8 +88,8 @@ class DataFrame:
         Examples:
 
             ```python
-            >>> import sedona_rs
-            >>> con = sedona_rs.connect()
+            >>> import sedonadb
+            >>> con = sedonadb.connect()
             >>> con.sql("SELECT ST_Point(0, 1) as geometry").to_pandas()
                   geometry
             0  POINT (0 1)

@@ -1,8 +1,8 @@
 from pathlib import Path
 from typing import Union, Iterable
 
-from sedona_rs._lib import InternalContext
-from sedona_rs.dataframe import DataFrame
+from sedonadb._lib import InternalContext
+from sedonadb.dataframe import DataFrame
 
 
 class SedonaContext:
@@ -26,10 +26,10 @@ class SedonaContext:
         Examples:
 
             ```python
-            >>> import sedona_rs
+            >>> import sedonadb
             >>> url = "https://github.com/apache/sedona-testing/raw/refs/heads/main/data/parquet/geoparquet-1.1.0.parquet"
-            >>> sedona_rs.connect().read_parquet(url)
-            <sedona_rs.dataframe.DataFrame object at ...>
+            >>> sedonadb.connect().read_parquet(url)
+            <sedonadb.dataframe.DataFrame object at ...>
 
             ```
         """
@@ -50,9 +50,9 @@ class SedonaContext:
         Examples:
 
             ```python
-            >>> import sedona_rs
-            >>> sedona_rs.connect().sql("SELECT ST_Point(0, 1) as geom")
-            <sedona_rs.dataframe.DataFrame object at ...>
+            >>> import sedonadb
+            >>> sedonadb.connect().sql("SELECT ST_Point(0, 1) as geom")
+            <sedonadb.dataframe.DataFrame object at ...>
 
             ```
         """

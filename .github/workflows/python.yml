@@ -51,7 +51,7 @@ jobs:
 
       - name: Install
         run: |
-          pip install -e "python/sedona-rs/[test]" -vv
+          pip install -e "python/sedonadb/[test]" -vv
 
       - name: Run tests
         run: |

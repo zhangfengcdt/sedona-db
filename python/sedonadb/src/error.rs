@@ -4,7 +4,7 @@ use pyo3::{create_exception, PyErr};
 
 use thiserror::Error;
 
-create_exception!(sedona_rs._lib, SedonaError, pyo3::exceptions::PyException);
+create_exception!(sedonadb._lib, SedonaError, pyo3::exceptions::PyException);
 
 #[derive(Error, Debug)]
 pub enum PySedonaError {

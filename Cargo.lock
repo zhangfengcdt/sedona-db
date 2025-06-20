@@ -4775,23 +4775,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sedona-rs"
-version = "0.1.0"
-dependencies = [
- "adbc_core",
- "arrow-array",
- "arrow-schema",
- "datafusion",
- "datafusion-common",
- "pyo3",
- "sedona",
- "sedona-adbc",
- "sedona-schema",
- "thiserror 2.0.12",
- "tokio",
-]
-
-[[package]]
 name = "sedona-schema"
 version = "0.0.1"
 dependencies = [
@@ -4817,6 +4800,23 @@ dependencies = [
  "sedona-schema",
  "wkb",
  "wkt",
+]
+
+[[package]]
+name = "sedonadb"
+version = "0.1.0"
+dependencies = [
+ "adbc_core",
+ "arrow-array",
+ "arrow-schema",
+ "datafusion",
+ "datafusion-common",
+ "pyo3",
+ "sedona",
+ "sedona-adbc",
+ "sedona-schema",
+ "thiserror 2.0.12",
+ "tokio",
 ]
 
 [[package]]

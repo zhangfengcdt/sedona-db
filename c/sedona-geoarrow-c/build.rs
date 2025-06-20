@@ -10,8 +10,8 @@ fn main() {
         .file("src/geoarrow/geoarrow.c")
         .file("src/nanoarrow/nanoarrow.c")
         .include("src/")
-        .flag("-DGEOARROW_NAMESPACE=SedonaRs")
-        .flag("-DNANOARROW_NAMESPACE=SedonaRs")
+        .flag("-DGEOARROW_NAMESPACE=SedonaDB")
+        .flag("-DNANOARROW_NAMESPACE=SedonaDB")
         .compile("geoarrow");
 
     cc::Build::new()
@@ -19,13 +19,13 @@ fn main() {
         .std("c++17")
         .file("src/geoarrow/double_parse_fast_float.cc")
         .include("src/")
-        .flag("-DGEOARROW_NAMESPACE=SedonaRs")
-        .flag("-DNANOARROW_NAMESPACE=SedonaRs")
+        .flag("-DGEOARROW_NAMESPACE=SedonaDB")
+        .flag("-DNANOARROW_NAMESPACE=SedonaDB")
         .compile("geoarrow_fast_float");
 
     let bindings = bindgen::Builder::default()
         .header("src/geoarrow/geoarrow.h")
-        .clang_arg("-DGEOARROW_NAMESPACE=SedonaRs")
+        .clang_arg("-DGEOARROW_NAMESPACE=SedonaDB")
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .generate()
         .expect("Unable to generate bindings");

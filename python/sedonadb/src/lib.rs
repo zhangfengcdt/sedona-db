@@ -1,7 +1,7 @@
 use std::ffi::c_void;
 
 use pyo3::{ffi::Py_uintptr_t, prelude::*};
-use sedona_adbc::AdbcSedonaRsDriverInit;
+use sedona_adbc::AdbcSedonadbDriverInit;
 
 mod context;
 mod dataframe;
@@ -16,7 +16,7 @@ fn sedona_python_version() -> PyResult<String> {
 
 #[pyfunction]
 fn sedona_adbc_driver_init() -> PyResult<Py_uintptr_t> {
-    let driver_init_void = AdbcSedonaRsDriverInit as *const c_void;
+    let driver_init_void = AdbcSedonadbDriverInit as *const c_void;
     Ok(driver_init_void as Py_uintptr_t)
 }
 
