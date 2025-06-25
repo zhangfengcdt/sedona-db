@@ -55,6 +55,60 @@ pub fn write_wkb_linestring<I: ExactSizeIterator<Item = (f64, f64)>>(
     Ok(())
 }
 
+/// Create WKB representing a MULTILINESTRING
+///
+/// A convenience wrapper for [write_wkb_multilinestring] that creates a Vec,
+/// which is useful for creating DataFusion scalar values.
+pub fn wkb_multilinestring<I>(linestrings: I) -> Result<Vec<u8>, SedonaGeometryError>
+where
+    I: ExactSizeIterator<Item = Vec<(f64, f64)>> + Clone,
+{
+    // Base size + linestrings count + estimated per-linestring overhead
+    let total_points: usize = linestrings.clone().map(|ls| ls.len()).sum();
+    let capacity = 5 + 4 + (linestrings.len() * 9) + (total_points * 16);
+    let mut out_wkb = Vec::with_capacity(capacity);
+    write_wkb_multilinestring(&mut out_wkb, linestrings)?;
+    Ok(out_wkb)
+}
+
+/// Write WKB representing a MULTILINESTRING into a buffer
+///
+/// This can be used to build Binary arrays, as the arrow-rs BinaryBuilder
+/// implements Write.
+pub fn write_wkb_multilinestring<I>(
+    buf: &mut impl Write,
+    linestrings: I,
+) -> Result<(), SedonaGeometryError>
+where
+    I: ExactSizeIterator<Item = Vec<(f64, f64)>>,
+{
+    let num_linestrings: u32 = linestrings.len().try_into()?;
+
+    // Write header: byte order (little endian) and geometry type (5 for MultiLineString)
+    buf.write_all(&[0x01, 0x05, 0x00, 0x00, 0x00])?;
+
+    // Write number of linestrings
+    buf.write_all(&num_linestrings.to_le_bytes())?;
+
+    // For each linestring, write a complete linestring WKB
+    for linestring in linestrings {
+        // Each linestring needs its own byte order and type
+        buf.write_all(&[0x01, 0x02, 0x00, 0x00, 0x00])?;
+
+        // Write number of points in the linestring
+        let num_points: u32 = linestring.len().try_into()?;
+        buf.write_all(&num_points.to_le_bytes())?;
+
+        // Write each point coordinate
+        for pt in linestring {
+            buf.write_all(&pt.0.to_le_bytes())?;
+            buf.write_all(&pt.1.to_le_bytes())?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Create WKB representing a POLYGON
 ///
 /// A convenience wrapper for [write_wkb_polygon] that creates a Vec,
@@ -96,6 +150,68 @@ pub fn write_wkb_polygon<I: ExactSizeIterator<Item = (f64, f64)>>(
     Ok(())
 }
 
+/// Create WKB representing a MULTIPOLYGON
+///
+/// A convenience wrapper for [write_wkb_multipolygon] that creates a Vec,
+/// which is useful for creating DataFusion scalar values.
+pub fn wkb_multipolygon<I>(polygons: I) -> Result<Vec<u8>, SedonaGeometryError>
+where
+    I: ExactSizeIterator<Item = Vec<(f64, f64)>>,
+{
+    // Base size + polygons count + memory for coordinate pairs and ring headers
+    let capacity = 5 + 4 + polygons.len() * (4 + 16 * polygons.len());
+    let mut out_wkb = Vec::with_capacity(capacity);
+    write_wkb_multipolygon(&mut out_wkb, polygons)?;
+    Ok(out_wkb)
+}
+
+/// Write WKB representing a MULTIPOLYGON into a buffer
+///
+/// This can be used to build Binary arrays, as the arrow-rs BinaryBuilder
+/// implements Write.
+pub fn write_wkb_multipolygon<I>(
+    buf: &mut impl Write,
+    polygons: I,
+) -> Result<(), SedonaGeometryError>
+where
+    I: ExactSizeIterator<Item = Vec<(f64, f64)>>,
+{
+    let num_polygons: u32 = polygons.len().try_into()?;
+
+    // Write header: byte order (little endian) and geometry type (6 for MultiPolygon)
+    buf.write_all(&[0x01, 0x06, 0x00, 0x00, 0x00])?;
+
+    // Write number of polygons
+    buf.write_all(&num_polygons.to_le_bytes())?;
+
+    // For each polygon, write a complete polygon WKB
+    for polygon in polygons {
+        // Each polygon needs its own byte order and type
+        buf.write_all(&[0x01, 0x03, 0x00, 0x00, 0x00])?;
+
+        // If polygon is empty
+        if polygon.is_empty() {
+            buf.write_all(&[0x00, 0x00, 0x00, 0x00])?; // 0 rings
+            continue;
+        }
+
+        // Write 1 ring (exterior only for now)
+        buf.write_all(&[0x01, 0x00, 0x00, 0x00])?;
+
+        // Write number of points in the polygon
+        let num_points: u32 = polygon.len().try_into()?;
+        buf.write_all(&num_points.to_le_bytes())?;
+
+        // Write each point coordinate
+        for pt in polygon {
+            buf.write_all(&pt.0.to_le_bytes())?;
+            buf.write_all(&pt.1.to_le_bytes())?;
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod test {
 
@@ -130,6 +246,25 @@ mod test {
     }
 
     #[test]
+    fn test_wkb_multilinestring() {
+        let wkt: Wkt = Wkt::from_str("MULTILINESTRING EMPTY").unwrap();
+        let mut wkb = vec![];
+        write_geometry(&mut wkb, &wkt, wkb::Endianness::LittleEndian).unwrap();
+        assert_eq!(wkb_multilinestring([].into_iter()).unwrap(), wkb);
+
+        let wkt: Wkt = Wkt::from_str("MULTILINESTRING ((0 0, 1 1, 2 2), (3 3, 4 4))").unwrap();
+        let mut wkb = vec![];
+        write_geometry(&mut wkb, &wkt, wkb::Endianness::LittleEndian).unwrap();
+
+        let linestrings = vec![
+            vec![(0.0, 0.0), (1.0, 1.0), (2.0, 2.0)],
+            vec![(3.0, 3.0), (4.0, 4.0)],
+        ];
+
+        assert_eq!(wkb_multilinestring(linestrings.into_iter()).unwrap(), wkb);
+    }
+
+    #[test]
     fn test_wkb_polygon() {
         let wkt: Wkt = Wkt::from_str("POLYGON EMPTY").unwrap();
         let mut wkb = vec![];
@@ -143,5 +278,25 @@ mod test {
             wkb_polygon([(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (0.0, 0.0)].into_iter()).unwrap(),
             wkb
         );
+    }
+
+    #[test]
+    fn test_wkb_multipolygon() {
+        let wkt: Wkt = Wkt::from_str("MULTIPOLYGON EMPTY").unwrap();
+        let mut wkb = vec![];
+        write_geometry(&mut wkb, &wkt, wkb::Endianness::LittleEndian).unwrap();
+        assert_eq!(wkb_multipolygon([].into_iter()).unwrap(), wkb);
+
+        let wkt: Wkt =
+            Wkt::from_str("MULTIPOLYGON (((0 0, 1 0, 0 1, 0 0)), ((2 2, 3 2, 2 3, 2 2)))").unwrap();
+        let mut wkb = vec![];
+        write_geometry(&mut wkb, &wkt, wkb::Endianness::LittleEndian).unwrap();
+
+        let polygons = vec![
+            vec![(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (0.0, 0.0)],
+            vec![(2.0, 2.0), (3.0, 2.0), (2.0, 3.0), (2.0, 2.0)],
+        ];
+
+        assert_eq!(wkb_multipolygon(polygons.into_iter()).unwrap(), wkb);
     }
 }
