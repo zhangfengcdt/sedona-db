@@ -395,14 +395,12 @@ impl GeoParquetMetadata {
         for key in self.columns.keys() {
             let left = self.columns.get(key).unwrap();
             let right = other.columns.get(key).ok_or(DataFusionError::Plan(format!(
-                "Other GeoParquet metadata missing column {}",
-                key
+                "Other GeoParquet metadata missing column {key}"
             )))?;
 
             if left.encoding != right.encoding {
                 return Err(DataFusionError::Plan(format!(
-                    "Different GeoParquet encodings for column {}",
-                    key
+                    "Different GeoParquet encodings for column {key}"
                 )));
             }
 
@@ -410,15 +408,13 @@ impl GeoParquetMetadata {
                 (Some(left_crs), Some(right_crs)) => {
                     if left_crs != right_crs {
                         return Err(DataFusionError::Plan(format!(
-                            "Different GeoParquet CRS for column {}",
-                            key
+                            "Different GeoParquet CRS for column {key}"
                         )));
                     }
                 }
                 (Some(_), None) | (None, Some(_)) => {
                     return Err(DataFusionError::Plan(format!(
-                        "Different GeoParquet CRS for column {}",
-                        key
+                        "Different GeoParquet CRS for column {key}"
                     )));
                 }
                 (None, None) => (),

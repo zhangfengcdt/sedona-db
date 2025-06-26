@@ -267,7 +267,7 @@ fn deserialize_edges_and_crs(value: &Option<String>) -> Result<(Edges, Crs)> {
             }
 
             let json_value: Value = serde_json::from_str(val).map_err(|err| {
-                DataFusionError::Internal(format!("Error deserializing GeoArrow metadata: {}", err))
+                DataFusionError::Internal(format!("Error deserializing GeoArrow metadata: {err}"))
             })?;
             if !json_value.is_object() {
                 return internal_err!("Expected GeoArrow metadata as JSON object but got {}", val);
@@ -306,9 +306,9 @@ fn serialize_edges_and_crs(edges: &Edges, crs: &Crs) -> String {
 
     match (crs_component, edges_component) {
         (None, None) => "{}".to_string(),
-        (None, Some(edges)) => format!("{{{}}}", edges),
-        (Some(crs), None) => format!("{{{}}}", crs),
-        (Some(crs), Some(edges)) => format!("{{{},{}}}", edges, crs),
+        (None, Some(edges)) => format!("{{{edges}}}"),
+        (Some(crs), None) => format!("{{{crs}}}"),
+        (Some(crs), Some(edges)) => format!("{{{edges},{crs}}}"),
     }
 }
 

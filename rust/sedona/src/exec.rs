@@ -138,7 +138,7 @@ mod tests {
             )
         })?;
         for location in locations {
-            let sql = format!("copy (values (1,2)) to '{}' STORED AS PARQUET;", location);
+            let sql = format!("copy (values (1,2)) to '{location}' STORED AS PARQUET;");
             let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
             for statement in statements {
                 //Should not fail

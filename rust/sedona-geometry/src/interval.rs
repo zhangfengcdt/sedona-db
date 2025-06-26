@@ -141,8 +141,7 @@ impl TryFrom<WraparoundInterval> for Interval {
     fn try_from(value: WraparoundInterval) -> Result<Self, Self::Error> {
         if value.is_wraparound() {
             Err(SedonaGeometryError::Invalid(format!(
-                "Can't convert wraparound interval {:?} to Interval",
-                value
+                "Can't convert wraparound interval {value:?} to Interval"
             )))
         } else {
             Ok(Interval::new(value.lo(), value.hi()))

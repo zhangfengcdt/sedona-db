@@ -231,12 +231,16 @@ mod test {
         );
 
         assert_value_equal(
-            &udf_native.invoke_batch(&[scalar_value.clone()], 1).unwrap(),
+            &udf_native
+                .invoke_batch(std::slice::from_ref(&scalar_value), 1)
+                .unwrap(),
             &scalar_value,
         );
 
         assert_value_equal(
-            &udf_native.invoke_batch(&[array_value.clone()], 1).unwrap(),
+            &udf_native
+                .invoke_batch(std::slice::from_ref(&array_value), 1)
+                .unwrap(),
             &array_value,
         );
 
@@ -250,14 +254,14 @@ mod test {
 
         assert_value_equal(
             &udf_from_ffi
-                .invoke_batch(&[scalar_value.clone()], 1)
+                .invoke_batch(std::slice::from_ref(&scalar_value), 1)
                 .unwrap(),
             &scalar_value,
         );
 
         assert_value_equal(
             &udf_from_ffi
-                .invoke_batch(&[array_value.clone()], 1)
+                .invoke_batch(std::slice::from_ref(&array_value), 1)
                 .unwrap(),
             &array_value,
         );

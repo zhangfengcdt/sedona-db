@@ -134,16 +134,16 @@ fn format_batches_with_maxrows<W: std::io::Write>(
             let formatted =
                 pretty_format_batches_with_options(&filtered_batches, &DEFAULT_FORMAT_OPTIONS)?;
             if over_limit {
-                let mut formatted_str = format!("{}", formatted);
+                let mut formatted_str = format!("{formatted}");
                 formatted_str = keep_only_maxrows(&formatted_str, maxrows);
-                writeln!(writer, "{}", formatted_str)?;
+                writeln!(writer, "{formatted_str}")?;
             } else {
-                writeln!(writer, "{}", formatted)?;
+                writeln!(writer, "{formatted}")?;
             }
         }
         MaxRows::Unlimited => {
             let formatted = pretty_format_batches_with_options(batches, &DEFAULT_FORMAT_OPTIONS)?;
-            writeln!(writer, "{}", formatted)?;
+            writeln!(writer, "{formatted}")?;
         }
     }
 
@@ -194,7 +194,7 @@ impl PrintFormat {
                 let empty_batch = RecordBatch::new_empty(schema);
                 let formatted =
                     pretty_format_batches_with_options(&[empty_batch], &DEFAULT_FORMAT_OPTIONS)?;
-                writeln!(writer, "{}", formatted)?;
+                writeln!(writer, "{formatted}")?;
             }
             _ => {}
         }

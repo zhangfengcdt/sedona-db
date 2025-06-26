@@ -53,7 +53,7 @@ pub fn create_array_storage(wkt_values: &[Option<&str>], data_type: &SedonaType)
     match data_type {
         SedonaType::Wkb(_, _) => Arc::new(make_wkb_array::<BinaryArray>(wkt_values)),
         SedonaType::WkbView(_, _) => Arc::new(make_wkb_array::<BinaryViewArray>(wkt_values)),
-        _ => panic!("create_array_storage not implemented for {:?}", data_type),
+        _ => panic!("create_array_storage not implemented for {data_type:?}"),
     }
 }
 
@@ -64,7 +64,7 @@ pub fn create_scalar_storage(wkt_value: Option<&str>, data_type: &SedonaType) ->
     match data_type {
         SedonaType::Wkb(_, _) => ScalarValue::Binary(wkt_value.map(make_wkb)),
         SedonaType::WkbView(_, _) => ScalarValue::BinaryView(wkt_value.map(make_wkb)),
-        _ => panic!("create_scalar_storage not implemented for {:?}", data_type),
+        _ => panic!("create_scalar_storage not implemented for {data_type:?}"),
     }
 }
 

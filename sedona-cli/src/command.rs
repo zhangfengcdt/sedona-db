@@ -65,7 +65,7 @@ impl Command {
             }
             Self::ListTables => exec_and_print(ctx, print_options, "SHOW TABLES".into()).await,
             Self::DescribeTableStmt(name) => {
-                exec_and_print(ctx, print_options, format!("SHOW COLUMNS FROM {}", name)).await
+                exec_and_print(ctx, print_options, format!("SHOW COLUMNS FROM {name}")).await
             }
             Self::QuietMode(quiet) => {
                 if let Some(quiet) = quiet {
@@ -87,7 +87,7 @@ impl Command {
             Self::SearchFunctions(function) => {
                 if let Ok(func) = function.parse::<Function>() {
                     let details = func.function_details()?;
-                    println!("{}", details);
+                    println!("{details}");
                     Ok(())
                 } else {
                     exec_err!("{function} is not a supported function")

@@ -43,7 +43,7 @@ pub fn st_geogfromwkb_udf() -> SedonaScalarUDF {
 fn doc(name: &str, out_type_name: &str) -> Documentation {
     Documentation::builder(
         DOC_SECTION_OTHER,
-        format!("Construct a {} from WKB", out_type_name),
+        format!("Construct a {out_type_name} from WKB"),
         format!("SELECT {name}('POINT(40.7128 -74.0060)')"),
     )
     .with_argument(

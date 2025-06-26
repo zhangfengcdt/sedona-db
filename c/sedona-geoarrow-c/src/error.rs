@@ -19,10 +19,10 @@ impl Display for GeoArrowCError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             GeoArrowCError::Invalid(error) => {
-                write!(f, "{}", error)
+                write!(f, "{error}")
             }
             GeoArrowCError::Arrow(error) => {
-                write!(f, "{}", error)
+                write!(f, "{error}")
             }
             GeoArrowCError::Code(code) => {
                 write!(f, "{}", Errno(*code))
@@ -31,7 +31,7 @@ impl Display for GeoArrowCError {
                 write!(f, "{}: {}", Errno(*code), message)
             }
             GeoArrowCError::External(error) => {
-                write!(f, "{}", error)
+                write!(f, "{error}")
             }
         }
     }

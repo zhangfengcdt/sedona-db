@@ -117,7 +117,7 @@ impl FromStr for ProjJSON {
 
     fn from_str(s: &str) -> Result<Self> {
         let value: Value = serde_json::from_str(s).map_err(|err| {
-            DataFusionError::Internal(format!("Error deserializing PROJJSON Crs: {}", err))
+            DataFusionError::Internal(format!("Error deserializing PROJJSON Crs: {err}"))
         })?;
 
         Self::try_new(value)
@@ -128,8 +128,7 @@ impl ProjJSON {
     pub fn try_new(value: Value) -> Result<Self> {
         if !value.is_object() {
             return Err(DataFusionError::Internal(format!(
-                "Can't create PROJJSON from non-object: {}",
-                value
+                "Can't create PROJJSON from non-object: {value}"
             )));
         }
 

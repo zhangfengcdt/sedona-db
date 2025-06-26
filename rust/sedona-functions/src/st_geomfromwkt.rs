@@ -48,7 +48,7 @@ pub fn st_geogfromwkt_udf() -> SedonaScalarUDF {
 fn doc(name: &str, out_type_name: &str) -> Documentation {
     Documentation::builder(
         DOC_SECTION_OTHER,
-        format!("Construct a {} from WKT", out_type_name),
+        format!("Construct a {out_type_name} from WKT"),
         format!("SELECT {name}('POINT(40.7128 -74.0060)')"),
     )
     .with_argument(
@@ -129,10 +129,10 @@ where
 
 fn invoke_scalar(wkt_bytes: &str, builder: &mut BinaryBuilder) -> Result<()> {
     let geometry: Wkt<f64> = Wkt::from_str(wkt_bytes)
-        .map_err(|err| DataFusionError::Internal(format!("WKT parse error: {}", err)))?;
+        .map_err(|err| DataFusionError::Internal(format!("WKT parse error: {err}")))?;
 
     write_geometry(builder, &geometry, wkb::Endianness::LittleEndian)
-        .map_err(|err| DataFusionError::Internal(format!("WKB write error: {}", err)))
+        .map_err(|err| DataFusionError::Internal(format!("WKB write error: {err}")))
 }
 
 #[cfg(test)]

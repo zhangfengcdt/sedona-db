@@ -116,8 +116,7 @@ fn assert_type_equal(
     let expected_sedona = SedonaType::from_data_type(expected).unwrap();
     if actual_sedona != expected_sedona {
         panic!(
-            "{actual_label} != {expected_label}:\n{actual_label} has type {:?}, {expected_label} has type {:?}",
-            actual_sedona, expected_sedona
+            "{actual_label} != {expected_label}:\n{actual_label} has type {actual_sedona:?}, {expected_label} has type {expected_sedona:?}"
         );
     }
 
@@ -126,10 +125,7 @@ fn assert_type_equal(
 
 fn assert_arrow_scalar_equal(actual: &ScalarValue, expected: &ScalarValue) {
     if actual != expected {
-        panic!(
-            "Arrow ScalarValues not equal:\nactual is {:?}, expected {:?}",
-            actual, expected
-        )
+        panic!("Arrow ScalarValues not equal:\nactual is {actual:?}, expected {expected:?}")
     }
 }
 
@@ -200,7 +196,7 @@ fn format_wkb(value: &[u8]) -> String {
         wkt::to_wkt::write_geometry(&mut wkt, &geom).unwrap();
         wkt
     } else {
-        format!("Invalid WKB: {:?}", value)
+        format!("Invalid WKB: {value:?}")
     }
 }
 

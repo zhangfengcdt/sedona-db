@@ -135,7 +135,7 @@ pub async fn exec_from_repl(
                 break;
             }
             Err(err) => {
-                eprintln!("Unknown error happened {:?}", err);
+                eprintln!("Unknown error happened {err:?}");
                 break;
             }
         }

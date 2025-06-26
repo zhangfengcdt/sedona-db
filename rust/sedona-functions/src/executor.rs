@@ -170,7 +170,7 @@ pub trait IterGeo {
 ///
 /// Currently this is internal and only implemented for the [ScalarValue].
 trait ScalarGeo {
-    fn scalar_as_wkb(&self) -> Result<Option<Wkb>>;
+    fn scalar_as_wkb(&self) -> Result<Option<Wkb<'_>>>;
 }
 
 impl IterGeo for ArrayRef {
@@ -227,7 +227,7 @@ impl IterGeo for ScalarValue {
 }
 
 impl ScalarGeo for ScalarValue {
-    fn scalar_as_wkb(&self) -> Result<Option<Wkb>> {
+    fn scalar_as_wkb(&self) -> Result<Option<Wkb<'_>>> {
         match self {
             ScalarValue::Binary(maybe_item) | ScalarValue::BinaryView(maybe_item) => {
                 parse_wkb_item(maybe_item.as_deref())
@@ -336,7 +336,7 @@ fn iter_wkb_binary<
 }
 
 /// Parse a single wkb item
-fn parse_wkb_item(maybe_item: Option<&[u8]>) -> Result<Option<Wkb>> {
+fn parse_wkb_item(maybe_item: Option<&[u8]>) -> Result<Option<Wkb<'_>>> {
     match maybe_item {
         Some(item) => {
             let geometry = wkb::reader::read_wkb(item)

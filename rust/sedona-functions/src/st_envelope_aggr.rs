@@ -128,8 +128,7 @@ impl BoundsAccumulator2D {
     fn check_update_input_len(input: &[ArrayRef], expected: usize, context: &str) -> Result<()> {
         if input.is_empty() {
             return Err(DataFusionError::Internal(format!(
-                "No input arrays provided to accumulator in {}",
-                context
+                "No input arrays provided to accumulator in {context}"
             )));
         }
         if input.len() != expected {

@@ -111,7 +111,7 @@ async fn main_inner() -> Result<()> {
     let args = Args::parse();
 
     if !args.quiet {
-        println!("Sedona CLI v{}", DATAFUSION_CLI_VERSION);
+        println!("Sedona CLI v{DATAFUSION_CLI_VERSION}");
     }
 
     if let Some(ref path) = args.data_path {
@@ -147,7 +147,7 @@ fn parse_valid_file(dir: &str) -> Result<String, String> {
     if Path::new(dir).is_file() {
         Ok(dir.to_string())
     } else {
-        Err(format!("Invalid file '{}'", dir))
+        Err(format!("Invalid file '{dir}'"))
     }
 }
 
@@ -155,7 +155,7 @@ fn parse_valid_data_dir(dir: &str) -> Result<String, String> {
     if Path::new(dir).is_dir() {
         Ok(dir.to_string())
     } else {
-        Err(format!("Invalid data directory '{}'", dir))
+        Err(format!("Invalid data directory '{dir}'"))
     }
 }
 

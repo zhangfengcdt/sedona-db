@@ -276,7 +276,7 @@ impl SedonaDataFrame for DataFrame {
                     .clone()
                     .with_schema(schema_ref.clone())
                     .map_err(|err| {
-                        DataFusionError::Internal(format!("batch.with_schema() failed {}", err))
+                        DataFusionError::Internal(format!("batch.with_schema() failed {err}"))
                     })
             })
             .collect();

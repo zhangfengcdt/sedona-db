@@ -270,8 +270,7 @@ fn geoarrow_type_id(sedona_type: &SedonaType) -> Result<GeoArrowType, GeoArrowCE
             DataType::Utf8View => GeoArrowType_GEOARROW_TYPE_WKT_VIEW,
             _ => {
                 return Err(GeoArrowCError::Invalid(format!(
-                    "Can't guess GeoArrow type from {:?}",
-                    sedona_type
+                    "Can't guess GeoArrow type from {sedona_type:?}"
                 )));
             }
         },
@@ -290,8 +289,7 @@ fn arrow_storage_type(type_id: GeoArrowType) -> Result<DataType, GeoArrowCError>
         GeoArrowType_GEOARROW_TYPE_WKT_VIEW => DataType::Utf8View,
         _ => {
             return Err(GeoArrowCError::Invalid(format!(
-                "Can't guess Arrow type from GeoArrowType with ID {:?}",
-                type_id
+                "Can't guess Arrow type from GeoArrowType with ID {type_id:?}"
             )))
         }
     })

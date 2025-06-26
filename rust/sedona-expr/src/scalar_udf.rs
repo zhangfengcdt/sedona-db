@@ -484,9 +484,12 @@ mod tests {
         let wkb_dummy_val =
             WKB_GEOMETRY.wrap_arg(&ColumnarValue::Scalar(ScalarValue::Binary(None)))?;
 
-        assert_eq!(udf.return_type(&[wkb_arrow.clone()])?, DataType::Null);
         assert_eq!(
-            udf.coerce_types(&[wkb_arrow.clone()])?,
+            udf.return_type(std::slice::from_ref(&wkb_arrow))?,
+            DataType::Null
+        );
+        assert_eq!(
+            udf.coerce_types(std::slice::from_ref(&wkb_arrow))?,
             vec![wkb_arrow.clone()]
         );
 
@@ -500,11 +503,14 @@ mod tests {
         let bool_arrow = DataType::Boolean;
         let bool_dummy_val = ColumnarValue::Scalar(ScalarValue::Boolean(None));
         assert_eq!(
-            udf.coerce_types(&[bool_arrow.clone()])?,
+            udf.coerce_types(std::slice::from_ref(&bool_arrow))?,
             vec![bool_arrow.clone()]
         );
 
-        assert_eq!(udf.return_type(&[bool_arrow.clone()])?, DataType::Boolean);
+        assert_eq!(
+            udf.return_type(std::slice::from_ref(&bool_arrow))?,
+            DataType::Boolean
+        );
 
         if let ColumnarValue::Scalar(scalar) = udf.invoke_batch(&[bool_dummy_val], 5)? {
             assert_eq!(scalar, ScalarValue::Boolean(None));
@@ -530,7 +536,10 @@ mod tests {
         ));
 
         // Now, calling with a Boolean should result in a Utf8
-        assert_eq!(udf.return_type(&[bool_arrow.clone()])?, DataType::Utf8);
+        assert_eq!(
+            udf.return_type(std::slice::from_ref(&bool_arrow))?,
+            DataType::Utf8
+        );
 
         Ok(())
     }
