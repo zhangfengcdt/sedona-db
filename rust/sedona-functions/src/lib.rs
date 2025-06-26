@@ -10,5 +10,6 @@ pub mod st_intersection_aggr;
 mod st_intersects;
 mod st_length;
 mod st_point;
+pub mod st_union_aggr;
 mod st_within;
 mod st_xy;

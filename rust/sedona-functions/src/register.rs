@@ -9,6 +9,7 @@ use crate::{
     st_intersects::st_intersects_udf,
     st_length::st_length_udf,
     st_point::{st_geogpoint_udf, st_point_udf},
+    st_union_aggr::st_union_aggr_udf,
     st_within::st_within_udf,
     st_xy::{st_x_udf, st_y_udf},
 };
@@ -35,6 +36,7 @@ pub fn default_function_set() -> FunctionSet {
 
     function_set.insert_aggregate_udf(st_envelope_aggr_udf());
     function_set.insert_aggregate_udf(st_intersection_aggr_udf());
+    function_set.insert_aggregate_udf(st_union_aggr_udf());
 
     function_set
 }
