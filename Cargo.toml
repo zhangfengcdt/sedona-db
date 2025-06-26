@@ -59,6 +59,7 @@ geo-generic-alg = { git = "https://github.com/wherobots/geo.git", branch = "gene
 geo-types = "0.7.16"
 geo-traits = "0.2.0"
 geo-traits-ext = "0.1.0"
+geo = { version = "0.30.0" }
 
 wkb = "0.8.0"
 wkt = "0.13.0"

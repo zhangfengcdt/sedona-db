@@ -2514,6 +2514,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "geo"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4416397671d8997e9a3e7ad99714f4f00a22e9eaa9b966a5985d2194fc9e02e1"
+dependencies = [
+ "earcutr",
+ "float_next_after",
+ "geo-types",
+ "geographiclib-rs",
+ "i_overlay",
+ "log",
+ "num-traits",
+ "robust",
+ "rstar",
+ "spade",
+]
+
+[[package]]
 name = "geo-generic-alg"
 version = "0.1.0"
 source = "git+https://github.com/wherobots/geo.git?branch=generic-alg#2f791c7236a131ec523ec36f13822fccaf91e3b5"
@@ -4673,6 +4691,7 @@ dependencies = [
  "criterion",
  "datafusion-common",
  "datafusion-expr",
+ "geo",
  "geo-traits",
  "geo-types",
  "rstest",
@@ -4693,6 +4712,7 @@ dependencies = [
  "criterion",
  "datafusion-common",
  "datafusion-expr",
+ "geo",
  "geo-generic-alg",
  "geo-traits",
  "geo-traits-ext",
@@ -4700,6 +4720,7 @@ dependencies = [
  "rstest",
  "sedona-expr",
  "sedona-functions",
+ "sedona-geometry",
  "sedona-schema",
  "sedona-testing",
  "wkb",

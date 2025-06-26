@@ -6,6 +6,7 @@ mod st_astext;
 pub mod st_envelope_aggr;
 mod st_geomfromwkb;
 mod st_geomfromwkt;
+pub mod st_intersection_aggr;
 mod st_intersects;
 mod st_length;
 mod st_point;

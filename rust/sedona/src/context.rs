@@ -14,6 +14,7 @@ use datafusion::{
     sql::parser::DFParser,
 };
 use datafusion_expr::sqlparser::dialect::dialect_from_str;
+use sedona_expr::aggregate_udf::SedonaAccumulatorRef;
 use sedona_expr::{
     function_set::FunctionSet,
     projection::wrap_batch,
@@ -99,6 +100,10 @@ impl SedonaContext {
         #[cfg(feature = "geo")]
         out.register_scalar_kernels(sedona_geo::register::scalar_kernels().into_iter())?;
 
+        // Register geo aggregate kernels if built with geo support
+        #[cfg(feature = "geo")]
+        out.register_aggregate_kernels(sedona_geo::register::aggregate_kernels().into_iter())?;
+
         Ok(out)
     }
 
@@ -123,6 +128,18 @@ impl SedonaContext {
         for (name, kernel) in kernels {
             let udf = self.functions.add_scalar_udf_kernel(name, kernel)?;
             self.ctx.register_udf(udf.clone().into());
+        }
+
+        Ok(())
+    }
+
+    pub fn register_aggregate_kernels<'a>(
+        &mut self,
+        kernels: impl Iterator<Item = (&'a str, SedonaAccumulatorRef)>,
+    ) -> Result<()> {
+        for (name, kernel) in kernels {
+            let udf = self.functions.add_aggregate_udf_kernel(name, kernel)?;
+            self.ctx.register_udaf(udf.clone().into());
         }
 
         Ok(())

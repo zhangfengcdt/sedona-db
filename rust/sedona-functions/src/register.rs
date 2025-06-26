@@ -5,6 +5,7 @@ use crate::{
     st_envelope_aggr::st_envelope_aggr_udf,
     st_geomfromwkb::{st_geogfromwkb_udf, st_geomfromwkb_udf},
     st_geomfromwkt::{st_geogfromwkt_udf, st_geomfromwkt_udf},
+    st_intersection_aggr::st_intersection_aggr_udf,
     st_intersects::st_intersects_udf,
     st_length::st_length_udf,
     st_point::{st_geogpoint_udf, st_point_udf},
@@ -33,6 +34,7 @@ pub fn default_function_set() -> FunctionSet {
     function_set.insert_scalar_udf(st_y_udf());
 
     function_set.insert_aggregate_udf(st_envelope_aggr_udf());
+    function_set.insert_aggregate_udf(st_intersection_aggr_udf());
 
     function_set
 }
