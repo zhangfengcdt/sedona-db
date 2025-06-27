@@ -66,11 +66,23 @@ impl SedonaContext {
         let rt_builder = RuntimeEnvBuilder::new();
         let runtime_env = rt_builder.build_arc()?;
 
-        let mut state = SessionStateBuilder::new()
+        let mut state_builder = SessionStateBuilder::new()
             .with_default_features()
             .with_runtime_env(runtime_env)
-            .with_config(session_config)
-            .build();
+            .with_config(session_config);
+
+        // Register the spatial join planner extension
+        #[cfg(feature = "spatial-join")]
+        {
+            use sedona_spatial_join::SpatialJoinOptions;
+
+            state_builder = sedona_spatial_join::register_spatial_join_optimizer(
+                state_builder,
+                SpatialJoinOptions::default(),
+            );
+        }
+
+        let mut state = state_builder.build();
         state.register_file_format(Arc::new(GeoParquetFormatFactory::new()), true)?;
 
         // Enable dynamic file query (i.e., select * from 'filename')

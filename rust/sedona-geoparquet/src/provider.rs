@@ -65,7 +65,7 @@ pub struct GeoParquetReadOptions<'a> {
     inner: ParquetReadOptions<'a>,
 }
 
-impl<'a> GeoParquetReadOptions<'a> {
+impl GeoParquetReadOptions<'_> {
     /// Create a new GeoParquetReadOptions with default values
     pub fn new() -> Self {
         Default::default()

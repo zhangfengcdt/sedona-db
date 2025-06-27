@@ -20,6 +20,8 @@ datafusion-expr = { workspace = true }
 geo-traits = { workspace = true }
 geo-types = { workspace = true }
 parquet = { workspace = true, features = ["arrow", "snap", "zstd"] }
+rand = { workspace = true }
+sedona-geometry = { path = "../sedona-geometry" }
 sedona-schema = { path = "../sedona-schema" }
 wkb = { workspace = true }
 wkt = { workspace = true }
