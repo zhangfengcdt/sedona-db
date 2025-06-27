@@ -8,6 +8,7 @@ use crate::{
     st_intersection_aggr::st_intersection_aggr_udf,
     st_intersects::st_intersects_udf,
     st_length::st_length_udf,
+    st_perimeter::st_perimeter_udf,
     st_point::{st_geogpoint_udf, st_point_udf},
     st_union_aggr::st_union_aggr_udf,
     st_within::st_within_udf,
@@ -29,6 +30,7 @@ pub fn default_function_set() -> FunctionSet {
     function_set.insert_scalar_udf(st_geomfromwkt_udf());
     function_set.insert_scalar_udf(st_intersects_udf());
     function_set.insert_scalar_udf(st_length_udf());
+    function_set.insert_scalar_udf(st_perimeter_udf());
     function_set.insert_scalar_udf(st_point_udf());
     function_set.insert_scalar_udf(st_within_udf());
     function_set.insert_scalar_udf(st_x_udf());

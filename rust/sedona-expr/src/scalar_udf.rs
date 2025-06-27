@@ -85,7 +85,7 @@ impl ArgMatcher {
     ///
     /// Returns true if args applies to the input types.
     pub fn matches(&self, args: &[SedonaType]) -> bool {
-        if args.len() != self.matchers.len() {
+        if args.len() > self.matchers.len() {
             return false;
         }
 
@@ -95,6 +95,12 @@ impl ArgMatcher {
             }
         }
 
+        // All remaining matchers must be optional
+        for matcher in self.matchers.iter().skip(args.len()) {
+            if !matcher.is_optional() {
+                return false;
+            }
+        }
         true
     }
 
@@ -134,10 +140,25 @@ impl ArgMatcher {
     pub fn is_binary() -> Arc<dyn TypeMatcher + Send + Sync> {
         Arc::new(IsBinary {})
     }
+
+    /// Matches any boolean argument
+    pub fn is_boolean() -> Arc<dyn TypeMatcher + Send + Sync> {
+        Arc::new(IsBoolean {})
+    }
+
+    /// Matches any argument that is optional
+    pub fn is_optional(
+        matcher: Arc<dyn TypeMatcher + Send + Sync>,
+    ) -> Arc<dyn TypeMatcher + Send + Sync> {
+        Arc::new(OptionalMatcher { inner: matcher })
+    }
 }
 
 pub trait TypeMatcher: Debug {
     fn match_type(&self, arg: &SedonaType) -> bool;
+    fn is_optional(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug)]
@@ -148,6 +169,21 @@ struct IsExact {
 impl TypeMatcher for IsExact {
     fn match_type(&self, arg: &SedonaType) -> bool {
         self.exact_type.match_signature(arg)
+    }
+}
+
+#[derive(Debug)]
+struct OptionalMatcher {
+    inner: Arc<dyn TypeMatcher + Send + Sync>,
+}
+
+impl TypeMatcher for OptionalMatcher {
+    fn match_type(&self, arg: &SedonaType) -> bool {
+        self.inner.match_type(arg)
+    }
+
+    fn is_optional(&self) -> bool {
+        true
     }
 }
 
@@ -225,6 +261,20 @@ impl TypeMatcher for IsBinary {
         match arg {
             SedonaType::Arrow(data_type) => {
                 matches!(data_type, DataType::Binary | DataType::BinaryView)
+            }
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct IsBoolean {}
+
+impl TypeMatcher for IsBoolean {
+    fn match_type(&self, arg: &SedonaType) -> bool {
+        match arg {
+            SedonaType::Arrow(data_type) => {
+                matches!(data_type, DataType::Boolean)
             }
             _ => false,
         }
@@ -429,6 +479,45 @@ mod tests {
         assert!(ArgMatcher::is_binary().match_type(&SedonaType::Arrow(DataType::Binary)));
         assert!(ArgMatcher::is_binary().match_type(&SedonaType::Arrow(DataType::BinaryView)));
         assert!(!ArgMatcher::is_binary().match_type(&SedonaType::Arrow(DataType::Utf8)));
+
+        assert!(ArgMatcher::is_boolean().match_type(&SedonaType::Arrow(DataType::Boolean)));
+        assert!(!ArgMatcher::is_boolean().match_type(&SedonaType::Arrow(DataType::Int32)));
+    }
+
+    #[test]
+    fn optional_matcher() {
+        let matcher = ArgMatcher::new(
+            vec![
+                ArgMatcher::is_geometry(),
+                ArgMatcher::is_optional(ArgMatcher::is_boolean()),
+            ],
+            SedonaType::Arrow(DataType::Null),
+        );
+
+        // Match when both arguments present and matching
+        assert!(matcher.matches(&[WKB_GEOMETRY, SedonaType::Arrow(DataType::Boolean)]));
+
+        // Match when first argument present, second is None
+        assert!(matcher.matches(&[WKB_GEOMETRY]));
+
+        // No match when first is None, second is present
+        assert!(!matcher.matches(&[SedonaType::Arrow(DataType::Boolean)]));
+
+        // No match when second argument is incorrect type
+        assert!(!matcher.matches(&[WKB_GEOMETRY, WKB_GEOMETRY]));
+
+        // No match when first argument is incorrect type
+        assert!(!matcher.matches(&[
+            SedonaType::Arrow(DataType::Boolean),
+            SedonaType::Arrow(DataType::Boolean)
+        ]));
+
+        // No match when too many arguments
+        assert!(!matcher.matches(&[
+            WKB_GEOGRAPHY,
+            SedonaType::Arrow(DataType::Boolean),
+            SedonaType::Arrow(DataType::Boolean)
+        ]));
     }
 
     #[test]
