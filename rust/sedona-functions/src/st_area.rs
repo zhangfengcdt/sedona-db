@@ -21,9 +21,10 @@ fn st_area_doc() -> Documentation {
     Documentation::builder(
         DOC_SECTION_OTHER,
         "Return the area of a geometry",
-        "SELECT ST_Area(ST_GeomFromWKT('POLYGON ((0 0, 1 0, 0 1, 0 0))'))",
+        "ST_Area (A: Geometry)",
     )
     .with_argument("geom", "geometry: Input geometry")
+    .with_sql_example("SELECT ST_Area(ST_GeomFromWKT('POLYGON ((0 0, 1 0, 0 1, 0 0))'))")
     .build()
 }
 

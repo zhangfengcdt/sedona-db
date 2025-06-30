@@ -23,9 +23,12 @@ fn st_intersection_aggr_doc() -> Documentation {
     Documentation::builder(
         DOC_SECTION_OTHER,
         "Return the polygon intersection of all polygons in geom.",
-        "SELECT ST_Intersection_Aggr(ST_GeomFromWKT('POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))'))",
+        "ST_Intersection_Aggr (A: geometryColumn)",
     )
     .with_argument("geom", "geometry: Input geometry or geography")
+    .with_sql_example(
+        "SELECT ST_Intersection_Aggr(ST_GeomFromWKT('POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))'))",
+    )
     .build()
 }
 

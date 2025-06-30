@@ -24,10 +24,11 @@ fn st_within_doc() -> Documentation {
     Documentation::builder(
         DOC_SECTION_OTHER,
         "Return true if geomA is fully contained by geomB",
-        "SELECT ST_Within(ST_GeomFromWKT('POLYGON((1 1,2 1,2 2,1 2,1 1))'), ST_GeomFromWKT('POLYGON((0 0,3 0,3 3,0 3,0 0))')) as val",
+        "ST_Within (A: Geometry, B: Geometry)",
     )
         .with_argument("geomA", "geometry: Input geometry or geography")
         .with_argument("geomB", "geometry: Input geometry or geography")
+        .with_sql_example("SELECT ST_Within(ST_GeomFromWKT('POLYGON((1 1,2 1,2 2,1 2,1 1))'), ST_GeomFromWKT('POLYGON((0 0,3 0,3 3,0 3,0 0))')) as val")
         .build()
 }
 

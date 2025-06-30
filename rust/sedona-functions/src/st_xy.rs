@@ -46,9 +46,13 @@ fn st_xy_doc(dim: &str) -> Documentation {
             "Return the {} component of a point geometry or geography",
             dim.to_uppercase()
         ),
-        format!("SELECT ST_{}(ST_Point(1.0, 2.0))", dim.to_uppercase()),
+        format!("ST_{}(A: Point)", dim.to_uppercase()),
     )
     .with_argument("geom", "geometry: Input geometry or geography")
+    .with_sql_example(format!(
+        "SELECT ST_{}(ST_Point(1.0, 2.0))",
+        dim.to_uppercase()
+    ))
     .build()
 }
 

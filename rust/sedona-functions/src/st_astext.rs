@@ -26,9 +26,10 @@ fn st_astext_doc() -> Documentation {
     Documentation::builder(
         DOC_SECTION_OTHER,
         "Return the Well-Known Text string representation of a geometry or geography",
-        "SELECT ST_AsText(ST_Point(1.0, 2.0))",
+        "ST_AsText (A: Geometry)",
     )
     .with_argument("geom", "geometry: Input geometry or geography")
+    .with_sql_example("SELECT ST_AsText(ST_Point(1.0, 2.0))")
     .with_related_udf("ST_GeomFromWKT")
     .build()
 }

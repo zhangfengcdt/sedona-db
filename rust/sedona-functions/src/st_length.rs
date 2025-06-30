@@ -24,9 +24,12 @@ fn st_length_doc() -> Documentation {
          This function only supports LineString, MultiLineString, and GeometryCollections \
          containing linear geometries. Use ST_Perimeter for polygons.\
         ",
-        "SELECT ST_Length(ST_GeomFromWKT('LINESTRING(38 16,38 50,65 50,66 16,38 16)'))",
+        "ST_Length (A: Geometry)",
     )
     .with_argument("geom", "geometry: Input geometry")
+    .with_sql_example(
+        "SELECT ST_Length(ST_GeomFromWKT('LINESTRING(38 16,38 50,65 50,66 16,38 16)'))",
+    )
     .with_related_udf("ST_Perimeter")
     .build()
 }

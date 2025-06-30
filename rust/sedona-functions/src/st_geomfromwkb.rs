@@ -44,15 +44,16 @@ fn doc(name: &str, out_type_name: &str) -> Documentation {
     Documentation::builder(
         DOC_SECTION_OTHER,
         format!("Construct a {out_type_name} from WKB"),
-        format!("SELECT {name}('POINT(40.7128 -74.0060)')"),
+        format!("{name} (Wkb: Binary)"),
     )
     .with_argument(
-        "WKT",
+        "WKB",
         format!(
-            "string: Well-known text representation of the {}",
+            "binary: Well-known binary representation of the {}",
             out_type_name.to_lowercase()
         ),
     )
+    .with_sql_example(format!("SELECT {name}([01 02 00 00 00 02 00 00 00 00 00 00 00 84 D6 00 C0 00 00 00 00 80 B5 D6 BF 00 00 00 60 E1 EF F7 BF 00 00 00 80 07 5D E5 BF])"))
     .with_related_udf("ST_AsText")
     .build()
 }

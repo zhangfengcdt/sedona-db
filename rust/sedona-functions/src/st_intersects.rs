@@ -24,10 +24,11 @@ fn st_intersects_doc() -> Documentation {
     Documentation::builder(
         DOC_SECTION_OTHER,
         "Return true if geomA intersects geomB",
-        "SELECT ST_Intersects(ST_Point(0.25 0.25), ST_GeomFromText('POLYGON ((0 0, 1 0, 0 1, 0 0))')) AS val",
+        "ST_Intersects (A: Geometry, B: Geometry)"
     )
     .with_argument("geomA", "geometry: Input geometry or geography")
     .with_argument("geomB", "geometry: Input geometry or geography")
+    .with_sql_example("SELECT ST_Intersects(ST_Point(0.25 0.25), ST_GeomFromText('POLYGON ((0 0, 1 0, 0 1, 0 0))')) AS val")
     .build()
 }
 

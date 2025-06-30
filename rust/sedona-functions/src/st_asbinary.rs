@@ -24,9 +24,10 @@ fn st_asbinary_doc() -> Documentation {
     Documentation::builder(
         DOC_SECTION_OTHER,
         "Return the Well-Known Binary representation of a geometry or geography",
-        "SELECT ST_AsBinary(ST_Point(1.0, 2.0))",
+        "ST_AsBinary (A: Geometry)",
     )
     .with_argument("geom", "geometry: Input geometry or geography")
+    .with_sql_example("SELECT ST_AsBinary(ST_Point(1.0, 2.0))")
     .build()
 }
 

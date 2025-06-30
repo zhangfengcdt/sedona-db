@@ -50,10 +50,11 @@ fn doc(name: &str, out_type_name: &str) -> Documentation {
             "Construct a Point {} from X and Y",
             out_type_name.to_lowercase()
         ),
-        format!("{name}(-64.36, 45.09)"),
+        format!("{name} (x: Double, y: Double)"),
     )
     .with_argument("x", "double: X value")
     .with_argument("y", "double: Y value")
+    .with_sql_example(format!("{name}(-64.36, 45.09)"))
     .build()
 }
 

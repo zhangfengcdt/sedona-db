@@ -49,7 +49,7 @@ fn doc(name: &str, out_type_name: &str) -> Documentation {
     Documentation::builder(
         DOC_SECTION_OTHER,
         format!("Construct a {out_type_name} from WKT"),
-        format!("SELECT {name}('POINT(40.7128 -74.0060)')"),
+        format!("{name} (Wkt: String)"),
     )
     .with_argument(
         "WKT",
@@ -58,6 +58,7 @@ fn doc(name: &str, out_type_name: &str) -> Documentation {
             out_type_name.to_lowercase()
         ),
     )
+    .with_sql_example(format!("SELECT {name}('POINT(40.7128 -74.0060)')"))
     .with_related_udf("ST_AsText")
     .build()
 }
