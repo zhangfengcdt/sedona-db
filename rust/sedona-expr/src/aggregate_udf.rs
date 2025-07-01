@@ -68,6 +68,11 @@ impl SedonaAggregateUDF {
         self.kernels.push(kernel);
     }
 
+    // List the current kernels
+    pub fn kernels(&self) -> &[SedonaAccumulatorRef] {
+        &self.kernels
+    }
+
     fn dispatch_impl(&self, args: &[SedonaType]) -> Result<(&dyn SedonaAccumulator, SedonaType)> {
         // Resolve kernels in reverse so that more recently added ones are resolved first
         for kernel in self.kernels.iter().rev() {
@@ -308,7 +313,7 @@ mod test {
         assert_eq!(udf.name(), "empty");
         let err = udf.return_type(&[]).unwrap_err();
         assert_eq!(err.message(), "empty([]): No kernel matching arguments");
-
+        assert!(udf.kernels().is_empty());
         assert_eq!(udf.coerce_types(&[])?, vec![]);
 
         let batch_err = udf.return_type(&[]).unwrap_err();
