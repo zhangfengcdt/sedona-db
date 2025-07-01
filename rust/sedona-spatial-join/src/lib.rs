@@ -1,17 +1,13 @@
-pub mod index;
-pub mod option;
-pub use index::*;
-pub use option::*;
-
 pub mod exec;
-pub use exec::*;
-
-pub mod stream;
-
+pub mod index;
+pub mod once_fut;
 pub mod optimizer;
-pub use optimizer::*;
+pub mod option;
+pub mod spatial_predicate;
+pub mod stream;
+pub mod utils;
+pub mod wkb_array;
 
-mod once_fut;
-mod spatial_predicate;
-mod utils;
-mod wkb_array;
+pub use exec::SpatialJoinExec;
+pub use optimizer::register_spatial_join_optimizer;
+pub use option::{ExecutionMode, SpatialJoinOptions};

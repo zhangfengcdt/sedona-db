@@ -1,30 +1,45 @@
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 
 use arrow_array::{Array, ArrayRef, RecordBatch};
+use arrow_schema::SchemaRef;
 use datafusion_common::{utils::proxy::VecAllocExt, DataFusionError, Result};
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation},
     SendableRecordBatchStream,
 };
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, JoinType};
 use futures::StreamExt;
 use geo_index::rtree::{sort::STRSort, RTree, RTreeBuilder, RTreeIndex};
 use geo_types::Rect;
+use parking_lot::Mutex;
 use sedona_schema::datatypes::SedonaType;
 use wkb::reader::Wkb;
 
 use crate::{
     spatial_predicate::{GeometryBatchResult, SpatialPredicate, SpatialPredicateEvaluator},
     stream::SpatialJoinMetrics,
+    utils::need_produce_result_in_final,
     wkb_array::GetGeo,
     SpatialJoinOptions,
 };
+use arrow::array::BooleanBufferBuilder;
 
 pub(crate) struct SpatialIndex {
+    schema: SchemaRef,
     rtree: RTree<f64>,
     batch_pos_vec: Vec<(i32, i32)>,
     geometry_batches: Vec<GeometryBatch>,
+    /// Shared bitmap builders for visited left indices, one per batch
+    visited_left_side: Option<Mutex<Vec<BooleanBufferBuilder>>>,
+    /// Counter of running probe-threads, potentially able to update `bitmap`.
+    /// Each time a probe thread finished probing the index, it will decrement the counter.
+    /// The last finished probe thread will produce the extra output batches for unmatched
+    /// build side when running left-outer joins. See also [`report_probe_completed`].
+    probe_threads_counter: AtomicUsize,
     /// Memory reservation for tracking the memory usage of the spatial index
     /// Cleared on `SpatialIndex` drop
     #[expect(dead_code)]
@@ -61,28 +76,45 @@ pub struct JoinResultMetrics {
 
 impl SpatialIndex {
     pub fn try_new(
+        schema: SchemaRef,
         rtree: RTree<f64>,
         batch_pos_vec: Vec<(i32, i32)>,
         geometry_batches: Vec<GeometryBatch>,
+        visited_left_side: Option<Mutex<Vec<BooleanBufferBuilder>>>,
+        probe_threads_counter: AtomicUsize,
         reservation: MemoryReservation,
     ) -> Result<Self> {
         Ok(Self {
+            schema,
             rtree,
             batch_pos_vec,
             geometry_batches,
+            visited_left_side,
+            probe_threads_counter,
             reservation,
         })
     }
 
-    pub fn empty(reservation: MemoryReservation) -> Self {
+    pub fn empty(
+        schema: SchemaRef,
+        probe_threads_counter: AtomicUsize,
+        reservation: MemoryReservation,
+    ) -> Self {
         let rtree_builder = RTreeBuilder::<f64>::new(0);
         let rtree = rtree_builder.finish::<STRSort>();
         Self {
+            schema,
             rtree,
             batch_pos_vec: Vec::new(),
             geometry_batches: Vec::new(),
+            visited_left_side: None,
+            probe_threads_counter,
             reservation,
         }
+    }
+
+    pub fn schema(&self) -> SchemaRef {
+        self.schema.clone()
     }
 
     /// Get the batch at the given index.
@@ -113,6 +145,8 @@ impl SpatialIndex {
         batch_positions.sort_unstable();
 
         let mut num_results = 0;
+        let mut matched_build_indices = Vec::new(); // Track matched indices for bitmap update
+
         for (batch_idx, row_idx) in batch_positions {
             let geometry_batch = &self.geometry_batches[batch_idx as usize];
             // SAFETY: row_idx comes from the spatial index query result, so it must be valid
@@ -127,6 +161,7 @@ impl SpatialIndex {
             if evaluator.evaluate_predicate(&build_wkb, probe_wkb, distance)? {
                 num_results += 1;
                 build_batch_positions.push((batch_idx, row_idx));
+                matched_build_indices.push((batch_idx, row_idx));
             }
         }
 
@@ -135,22 +170,43 @@ impl SpatialIndex {
             candidate_count,
         })
     }
+
+    /// Get the bitmaps for tracking visited left-side indices. The bitmaps will be updated
+    /// by the spatial join stream when producing output batches during index probing phase.
+    pub fn visited_left_side(&self) -> Option<&Mutex<Vec<BooleanBufferBuilder>>> {
+        self.visited_left_side.as_ref()
+    }
+
+    /// Decrements counter of running threads, and returns `true`
+    /// if caller is the last running thread
+    pub fn report_probe_completed(&self) -> bool {
+        self.probe_threads_counter.fetch_sub(1, Ordering::Relaxed) == 1
+    }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn build_index(
+    mut build_schema: SchemaRef,
     build_streams: Vec<SendableRecordBatchStream>,
     spatial_predicate: SpatialPredicate,
     options: SpatialJoinOptions,
     metrics_vec: Vec<SpatialJoinMetrics>,
     memory_pool: Arc<dyn MemoryPool>,
+    join_type: JoinType,
+    probe_threads_count: usize,
 ) -> Result<SpatialIndex> {
     let consumer = MemoryConsumer::new("SpatialJoinIndex");
     let mut reservation = consumer.register(&memory_pool);
 
     let num_partitions = build_streams.len();
     if num_partitions == 0 {
-        return Ok(SpatialIndex::empty(reservation));
+        return Ok(SpatialIndex::empty(
+            build_schema,
+            AtomicUsize::new(probe_threads_count),
+            reservation,
+        ));
     }
+    build_schema = build_streams.first().unwrap().schema();
 
     let metrics = metrics_vec.first().unwrap().clone();
 
@@ -206,7 +262,37 @@ pub(crate) async fn build_index(
 
     metrics.build_mem_used.add(reservation.size());
 
-    SpatialIndex::try_new(rtree, batch_pos_vec, geometry_batches, reservation)
+    // Initialize bitmaps for tracking visited left-side indices if needed (one per batch)
+    let visited_left_side = if need_produce_result_in_final(join_type) {
+        let mut bitmaps = Vec::with_capacity(geometry_batches.len());
+        let mut total_buffer_size = 0;
+
+        for batch in &geometry_batches {
+            let batch_rows = batch.batch.num_rows();
+            let buffer_size = batch_rows.div_ceil(8);
+            total_buffer_size += buffer_size;
+
+            let mut bitmap = BooleanBufferBuilder::new(batch_rows);
+            bitmap.append_n(batch_rows, false);
+            bitmaps.push(bitmap);
+        }
+
+        reservation.try_grow(total_buffer_size)?;
+        metrics.build_mem_used.add(total_buffer_size);
+        Some(Mutex::new(bitmaps))
+    } else {
+        None
+    };
+
+    SpatialIndex::try_new(
+        build_schema,
+        rtree,
+        batch_pos_vec,
+        geometry_batches,
+        visited_left_side,
+        AtomicUsize::new(probe_threads_count),
+        reservation,
+    )
 }
 
 async fn collect_build_partition(
