@@ -1,6 +1,7 @@
 use std::{collections::HashSet, str::FromStr};
 
 use datafusion_common::{stats::Precision, ColumnStatistics, DataFusionError, Result, ScalarValue};
+use sedona_geometry::interval::{Interval, IntervalTrait};
 use sedona_geometry::{bounding_box::BoundingBox, types::GeometryTypeAndDimensions};
 use serde::{Deserialize, Serialize};
 
@@ -14,8 +15,24 @@ use serde::{Deserialize, Serialize};
 /// This struct can also represent partial or missing information.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GeoStatistics {
-    bbox: Option<BoundingBox>,
-    geometry_types: Option<HashSet<GeometryTypeAndDimensions>>,
+    // Core spatial statistics for pruning
+    bbox: Option<BoundingBox>, // The overall bounding box (min/max coordinates) containing all geometries
+    geometry_types: Option<HashSet<GeometryTypeAndDimensions>>, // Set of all geometry types and dimensions present
+
+    // Extended statistics for analysis
+    total_geometries: Option<i64>, // Total count of all geometries
+    total_size_bytes: Option<i64>, // Total size of all geometries in bytes
+    total_points: Option<i64>,     // Total number of points/vertices across all geometries
+
+    // Type distribution counts
+    puntal_count: Option<i64>,     // Count of point-type geometries
+    lineal_count: Option<i64>,     // Count of line-type geometries
+    polygonal_count: Option<i64>,  // Count of polygon-type geometries
+    collection_count: Option<i64>, // Count of geometry collections
+
+    // Envelope dimensions statistics
+    total_envelope_width: Option<f64>, // Sum of all envelope widths (for calculating mean width)
+    total_envelope_height: Option<f64>, // Sum of all envelope heights (for calculating mean height)
 }
 
 impl GeoStatistics {
@@ -24,6 +41,281 @@ impl GeoStatistics {
         Self {
             bbox: None,
             geometry_types: None,
+            total_geometries: None,
+            total_size_bytes: None,
+            total_points: None,
+            puntal_count: None,
+            lineal_count: None,
+            polygonal_count: None,
+            collection_count: None,
+            total_envelope_width: None,
+            total_envelope_height: None,
+        }
+    }
+
+    /// Create statistics representing empty information (with zero values instead of None)
+    pub fn empty() -> Self {
+        Self {
+            bbox: Some(BoundingBox::xy(Interval::empty(), Interval::empty())),
+            geometry_types: Some(HashSet::new()), // Empty set of geometry types
+            total_geometries: Some(0),            // Zero geometries
+            total_size_bytes: Some(0),            // Zero bytes
+            total_points: Some(0),                // Zero points
+            puntal_count: Some(0),                // Zero point geometries
+            lineal_count: Some(0),                // Zero line geometries
+            polygonal_count: Some(0),             // Zero polygon geometries
+            collection_count: Some(0),            // Zero collection geometries
+            total_envelope_width: Some(0.0),      // Zero width
+            total_envelope_height: Some(0.0),     // Zero height
+        }
+    }
+
+    /// Update the bounding box and return self
+    pub fn with_bbox(self, bbox: Option<BoundingBox>) -> Self {
+        Self { bbox, ..self }
+    }
+
+    /// Update the geometry types and return self
+    pub fn with_geometry_types(self, types: Option<&[GeometryTypeAndDimensions]>) -> Self {
+        match types {
+            Some(type_slice) => {
+                let type_set: HashSet<GeometryTypeAndDimensions> =
+                    type_slice.iter().cloned().collect();
+                Self {
+                    geometry_types: Some(type_set),
+                    ..self
+                }
+            }
+            None => Self {
+                geometry_types: None,
+                ..self
+            },
+        }
+    }
+
+    /// Get the bounding box if available
+    pub fn bbox(&self) -> Option<&BoundingBox> {
+        self.bbox.as_ref()
+    }
+
+    /// Get the geometry types if available
+    pub fn geometry_types(&self) -> Option<&HashSet<GeometryTypeAndDimensions>> {
+        self.geometry_types.as_ref()
+    }
+
+    /// Get the total number of geometries if available
+    pub fn total_geometries(&self) -> Option<i64> {
+        self.total_geometries
+    }
+
+    /// Get the total size in bytes if available
+    pub fn total_size_bytes(&self) -> Option<i64> {
+        self.total_size_bytes
+    }
+
+    /// Get the total number of points if available
+    pub fn total_points(&self) -> Option<i64> {
+        self.total_points
+    }
+
+    /// Get the count of puntal geometries if available
+    pub fn puntal_count(&self) -> Option<i64> {
+        self.puntal_count
+    }
+
+    /// Get the count of lineal geometries if available
+    pub fn lineal_count(&self) -> Option<i64> {
+        self.lineal_count
+    }
+
+    /// Get the count of polygonal geometries if available
+    pub fn polygonal_count(&self) -> Option<i64> {
+        self.polygonal_count
+    }
+
+    /// Get the count of geometry collections if available
+    pub fn collection_count(&self) -> Option<i64> {
+        self.collection_count
+    }
+
+    /// Get the total envelope width if available
+    pub fn total_envelope_width(&self) -> Option<f64> {
+        self.total_envelope_width
+    }
+
+    /// Get the total envelope height if available
+    pub fn total_envelope_height(&self) -> Option<f64> {
+        self.total_envelope_height
+    }
+
+    /// Calculate the mean envelope width if possible
+    pub fn mean_envelope_width(&self) -> Option<f64> {
+        match (self.total_envelope_width, self.total_geometries) {
+            (Some(width), Some(count)) if count > 0 => Some(width / count as f64),
+            _ => None,
+        }
+    }
+
+    /// Calculate the mean envelope height if possible
+    pub fn mean_envelope_height(&self) -> Option<f64> {
+        match (self.total_envelope_height, self.total_geometries) {
+            (Some(height), Some(count)) if count > 0 => Some(height / count as f64),
+            _ => None,
+        }
+    }
+
+    /// Calculate the mean envelope area if possible
+    pub fn mean_envelope_area(&self) -> Option<f64> {
+        match (self.mean_envelope_width(), self.mean_envelope_height()) {
+            (Some(width), Some(height)) => Some(width * height),
+            _ => None,
+        }
+    }
+
+    /// Calculate the mean size in bytes if possible
+    pub fn mean_size_bytes(&self) -> Option<f64> {
+        match (self.total_size_bytes, self.total_geometries) {
+            (Some(bytes), Some(count)) if count > 0 => Some(bytes as f64 / count as f64),
+            _ => None,
+        }
+    }
+
+    /// Calculate the mean points per geometry if possible
+    pub fn mean_points_per_geometry(&self) -> Option<f64> {
+        match (self.total_points, self.total_geometries) {
+            (Some(points), Some(count)) if count > 0 => Some(points as f64 / count as f64),
+            _ => None,
+        }
+    }
+
+    /// Update the total geometries count and return self
+    pub fn with_total_geometries(self, count: i64) -> Self {
+        Self {
+            total_geometries: Some(count),
+            ..self
+        }
+    }
+
+    /// Update the total size in bytes and return self
+    pub fn with_total_size_bytes(self, bytes: i64) -> Self {
+        Self {
+            total_size_bytes: Some(bytes),
+            ..self
+        }
+    }
+
+    /// Update the total points count and return self
+    pub fn with_total_points(self, points: i64) -> Self {
+        Self {
+            total_points: Some(points),
+            ..self
+        }
+    }
+
+    /// Update the puntal geometries count and return self
+    pub fn with_puntal_count(self, count: i64) -> Self {
+        Self {
+            puntal_count: Some(count),
+            ..self
+        }
+    }
+
+    /// Update the lineal geometries count and return self
+    pub fn with_lineal_count(self, count: i64) -> Self {
+        Self {
+            lineal_count: Some(count),
+            ..self
+        }
+    }
+
+    /// Update the polygonal geometries count and return self
+    pub fn with_polygonal_count(self, count: i64) -> Self {
+        Self {
+            polygonal_count: Some(count),
+            ..self
+        }
+    }
+
+    /// Update the collection geometries count and return self
+    pub fn with_collection_count(self, count: i64) -> Self {
+        Self {
+            collection_count: Some(count),
+            ..self
+        }
+    }
+
+    /// Update the total envelope width and return self
+    pub fn with_total_envelope_width(self, width: f64) -> Self {
+        Self {
+            total_envelope_width: Some(width),
+            ..self
+        }
+    }
+
+    /// Update the total envelope height and return self
+    pub fn with_total_envelope_height(self, height: f64) -> Self {
+        Self {
+            total_envelope_height: Some(height),
+            ..self
+        }
+    }
+
+    /// Update this statistics object with another one
+    pub fn merge(&mut self, other: &Self) {
+        // Merge bounding boxes
+        if let Some(other_bbox) = &other.bbox {
+            match &mut self.bbox {
+                Some(bbox) => bbox.update_box(other_bbox),
+                None => self.bbox = Some(other_bbox.clone()),
+            }
+        }
+
+        // Merge geometry types
+        if let Some(other_types) = &other.geometry_types {
+            match &mut self.geometry_types {
+                Some(types) => {
+                    let mut new_types = types.clone();
+                    new_types.extend(other_types.iter().cloned());
+                    self.geometry_types = Some(new_types);
+                }
+                None => self.geometry_types = Some(other_types.clone()),
+            }
+        }
+
+        // Merge counts and totals
+        self.total_geometries =
+            Self::merge_option_add(self.total_geometries, other.total_geometries);
+        self.total_size_bytes =
+            Self::merge_option_add(self.total_size_bytes, other.total_size_bytes);
+        self.total_points = Self::merge_option_add(self.total_points, other.total_points);
+
+        // Merge type counts
+        self.puntal_count = Self::merge_option_add(self.puntal_count, other.puntal_count);
+        self.lineal_count = Self::merge_option_add(self.lineal_count, other.lineal_count);
+        self.polygonal_count = Self::merge_option_add(self.polygonal_count, other.polygonal_count);
+        self.collection_count =
+            Self::merge_option_add(self.collection_count, other.collection_count);
+
+        // Merge envelope dimensions
+        self.total_envelope_width =
+            Self::merge_option_add_f64(self.total_envelope_width, other.total_envelope_width);
+        self.total_envelope_height =
+            Self::merge_option_add_f64(self.total_envelope_height, other.total_envelope_height);
+    }
+
+    // Helper to merge two optional integers with addition
+    fn merge_option_add(a: Option<i64>, b: Option<i64>) -> Option<i64> {
+        match (a, b) {
+            (Some(a_val), Some(b_val)) => Some(a_val + b_val),
+            _ => None,
+        }
+    }
+
+    // Helper to merge two optional floats with addition
+    fn merge_option_add_f64(a: Option<f64>, b: Option<f64>) -> Option<f64> {
+        match (a, b) {
+            (Some(a_val), Some(b_val)) => Some(a_val + b_val),
+            _ => None,
         }
     }
 
@@ -59,22 +351,6 @@ impl GeoStatistics {
             .with_sum_value(Precision::Exact(ScalarValue::Binary(Some(serialized)))))
     }
 
-    /// Add a [BoundingBox] to these statistics
-    pub fn with_bbox(self, bbox: Option<BoundingBox>) -> Self {
-        Self {
-            bbox,
-            geometry_types: self.geometry_types,
-        }
-    }
-
-    /// Add a definitive list of geometry type/dimension values
-    pub fn with_geometry_types(self, geometry_types: Option<&[GeometryTypeAndDimensions]>) -> Self {
-        Self {
-            bbox: self.bbox,
-            geometry_types: geometry_types.map(|types| types.iter().cloned().collect()),
-        }
-    }
-
     /// Add a definitive list of geometry type/dimension values specified as strings
     ///
     /// This accepts a list of strings like "point z" or "polygon zm". These strings
@@ -91,31 +367,30 @@ impl GeoStatistics {
                     .collect::<Result<HashSet<GeometryTypeAndDimensions>>>()?;
 
                 Ok(Self {
-                    bbox: self.bbox,
                     geometry_types: Some(new_geometry_types),
+                    ..self
                 })
             }
             None => Ok(Self {
-                bbox: self.bbox,
                 geometry_types: None,
+                ..self
             }),
         }
     }
 
-    /// Retrieve the [BoundingBox] for these statistics, if specified
-    pub fn bbox(&self) -> &Option<BoundingBox> {
-        &self.bbox
-    }
+    /// Convert this GeoStatistics to a ScalarValue for storage in DataFusion statistics
+    pub fn to_scalar_value(&self) -> Result<ScalarValue> {
+        // Serialize to JSON
+        let serialized = serde_json::to_vec(self).map_err(|e| {
+            DataFusionError::Internal(format!("Failed to serialize GeoStatistics: {e}"))
+        })?;
 
-    /// Retrieve the geometry/dimension values for these statistics, if specified
-    pub fn geometry_types(&self) -> &Option<HashSet<GeometryTypeAndDimensions>> {
-        &self.geometry_types
+        Ok(ScalarValue::Binary(Some(serialized)))
     }
 }
 
 #[cfg(test)]
 mod test {
-
     use geo_traits::Dimensions;
     use sedona_geometry::types::GeometryTypeId;
 
@@ -123,94 +398,108 @@ mod test {
 
     #[test]
     fn unspecified() {
-        let unspecified = GeoStatistics::unspecified();
-        assert!(unspecified.bbox().is_none());
-        assert!(unspecified.geometry_types().is_none());
+        let stats = GeoStatistics::unspecified();
+        assert_eq!(stats.bbox(), None);
+        assert_eq!(stats.geometry_types(), None);
+        assert_eq!(stats.total_geometries(), None);
+        assert_eq!(stats.total_size_bytes(), None);
+        assert_eq!(stats.total_points(), None);
+        assert_eq!(stats.puntal_count(), None);
+        assert_eq!(stats.lineal_count(), None);
+        assert_eq!(stats.polygonal_count(), None);
+        assert_eq!(stats.collection_count(), None);
+        assert_eq!(stats.total_envelope_width(), None);
+        assert_eq!(stats.total_envelope_height(), None);
 
-        let regular_stats = unspecified.to_column_statistics().unwrap();
+        let regular_stats = stats.to_column_statistics().unwrap();
         assert_eq!(
             GeoStatistics::try_from_column_statistics(&regular_stats)
                 .unwrap()
                 .unwrap(),
-            unspecified
+            stats
         );
     }
 
     #[test]
     fn specified_bbox() {
-        let specified =
-            GeoStatistics::unspecified().with_bbox(Some(BoundingBox::xy((0, 1), (2, 3))));
-        assert_eq!(
-            specified.bbox().as_ref().unwrap(),
-            &BoundingBox::xy((0, 1), (2, 3))
-        );
-        assert!(specified.geometry_types().is_none());
+        let bbox = BoundingBox::xy((0.0, 1.0), (2.0, 3.0));
+        // Test with_bbox
+        let stats = GeoStatistics::empty().with_bbox(Some(bbox.clone()));
+        assert_eq!(stats.bbox(), Some(&bbox));
+        assert_eq!(stats.geometry_types(), Some(HashSet::new()).as_ref());
 
-        let regular_stats = specified.to_column_statistics().unwrap();
+        let regular_stats = stats.to_column_statistics().unwrap();
         assert_eq!(
             GeoStatistics::try_from_column_statistics(&regular_stats)
                 .unwrap()
                 .unwrap(),
-            specified
+            stats
         );
 
-        let removed_bbox = specified.with_bbox(None);
-        assert!(removed_bbox.bbox().is_none());
+        // Test with None
+        let stats_with_none = GeoStatistics::empty().with_bbox(None);
+        assert_eq!(stats_with_none.bbox(), None);
     }
 
     #[test]
     fn specified_geometry_types() {
-        use Dimensions::*;
-        use GeometryTypeId::*;
-        let geometry_types: Vec<GeometryTypeAndDimensions> = [(Point, Xy), (LineString, Xyzm)]
-            .into_iter()
-            .map(Into::into)
-            .collect();
+        let type_array = [GeometryTypeAndDimensions::new(
+            GeometryTypeId::Polygon,
+            Dimensions::Xy,
+        )];
 
-        let specified = GeoStatistics::unspecified().with_geometry_types(Some(&geometry_types));
-
+        // Test with_geometry_types
+        let stats = GeoStatistics::empty().with_geometry_types(Some(&type_array));
+        let expected_set: HashSet<GeometryTypeAndDimensions> = type_array.iter().cloned().collect();
+        assert_eq!(stats.geometry_types(), Some(&expected_set));
         assert_eq!(
-            specified.geometry_types(),
-            &Some(geometry_types.into_iter().collect::<HashSet<_>>())
+            stats.bbox(),
+            Some(&BoundingBox::xy(Interval::empty(), Interval::empty()))
         );
-        assert!(specified.bbox().is_none());
 
-        let regular_stats = specified.to_column_statistics().unwrap();
+        let regular_stats = stats.to_column_statistics().unwrap();
         assert_eq!(
             GeoStatistics::try_from_column_statistics(&regular_stats)
                 .unwrap()
                 .unwrap(),
-            specified
+            stats
         );
 
-        let removed_geometry_types = specified.with_geometry_types(None);
-        assert!(removed_geometry_types.geometry_types().is_none());
+        // Test with None
+        let stats_with_none = GeoStatistics::empty().with_geometry_types(None);
+        assert_eq!(stats_with_none.geometry_types(), None);
     }
 
     #[test]
     fn specified_geometry_types_by_name() {
-        use Dimensions::*;
-        use GeometryTypeId::*;
-        let geometry_types: Vec<GeometryTypeAndDimensions> = [(Point, Xy), (LineString, Xyzm)]
-            .into_iter()
-            .map(Into::into)
-            .collect();
-
-        let specified = GeoStatistics::unspecified()
-            .try_with_str_geometry_types(Some(&["point", "linestring zm"]))
+        // Test try_with_str_geometry_types
+        let stats = GeoStatistics::empty()
+            .try_with_str_geometry_types(Some(&["polygon", "point"]))
             .unwrap();
 
+        let mut expected_types = HashSet::new();
+        expected_types.insert(GeometryTypeAndDimensions::new(
+            GeometryTypeId::Polygon,
+            Dimensions::Xy,
+        ));
+        expected_types.insert(GeometryTypeAndDimensions::new(
+            GeometryTypeId::Point,
+            Dimensions::Xy,
+        ));
+
+        assert_eq!(stats.geometry_types(), Some(&expected_types));
         assert_eq!(
-            specified.geometry_types(),
-            &Some(geometry_types.into_iter().collect::<HashSet<_>>())
+            stats.bbox(),
+            Some(&BoundingBox::xy(Interval::empty(), Interval::empty()))
         );
 
-        let err = specified
-            .try_with_str_geometry_types(Some(&["gazornenplat"]))
-            .unwrap_err();
+        // Test serialization
+        let regular_stats = stats.to_column_statistics().unwrap();
         assert_eq!(
-            err.message(),
-            "Invalid geometry type string: 'gazornenplat'"
+            GeoStatistics::try_from_column_statistics(&regular_stats)
+                .unwrap()
+                .unwrap(),
+            stats
         );
     }
 
@@ -237,5 +526,121 @@ mod test {
             err.message(),
             "EOF while parsing a value at line 1 column 0"
         )
+    }
+
+    #[test]
+    fn test_extended_stats() {
+        // Use fluent API with with_* methods
+        let stats = GeoStatistics::empty()
+            .with_total_geometries(100)
+            .with_total_size_bytes(10000)
+            .with_total_points(5000)
+            .with_puntal_count(20)
+            .with_lineal_count(30)
+            .with_polygonal_count(40)
+            .with_collection_count(10)
+            .with_total_envelope_width(500.0)
+            .with_total_envelope_height(300.0);
+
+        // Test getters
+        assert_eq!(stats.total_geometries(), Some(100));
+        assert_eq!(stats.total_size_bytes(), Some(10000));
+        assert_eq!(stats.total_points(), Some(5000));
+        assert_eq!(stats.puntal_count(), Some(20));
+        assert_eq!(stats.lineal_count(), Some(30));
+        assert_eq!(stats.polygonal_count(), Some(40));
+        assert_eq!(stats.collection_count(), Some(10));
+        assert_eq!(stats.total_envelope_width(), Some(500.0));
+        assert_eq!(stats.total_envelope_height(), Some(300.0));
+
+        // Test derived statistics
+        assert_eq!(stats.mean_size_bytes(), Some(100.0));
+        assert_eq!(stats.mean_points_per_geometry(), Some(50.0));
+        assert_eq!(stats.mean_envelope_width(), Some(5.0));
+        assert_eq!(stats.mean_envelope_height(), Some(3.0));
+        assert_eq!(stats.mean_envelope_area(), Some(15.0));
+
+        // Test serialization/deserialization via column statistics
+        let column_stats = stats.to_column_statistics().unwrap();
+        let deserialized = GeoStatistics::try_from_column_statistics(&column_stats)
+            .unwrap()
+            .unwrap();
+        assert_eq!(deserialized, stats);
+    }
+
+    #[test]
+    fn test_merge_extended_stats() {
+        // Create statistics objects using fluent API
+        let stats1 = GeoStatistics::empty()
+            .with_total_geometries(50)
+            .with_total_size_bytes(5000)
+            .with_total_points(2500)
+            .with_puntal_count(10)
+            .with_lineal_count(15)
+            .with_polygonal_count(20)
+            .with_collection_count(5)
+            .with_total_envelope_width(250.0)
+            .with_total_envelope_height(150.0);
+
+        let stats2 = GeoStatistics::empty()
+            .with_total_geometries(50)
+            .with_total_size_bytes(5000)
+            .with_total_points(2500)
+            .with_puntal_count(10)
+            .with_lineal_count(15)
+            .with_polygonal_count(20)
+            .with_collection_count(5)
+            .with_total_envelope_width(250.0)
+            .with_total_envelope_height(150.0);
+
+        // Now merge them
+        let mut merged = stats1.clone();
+        merged.merge(&stats2);
+
+        // Check merged results
+        assert_eq!(merged.total_geometries(), Some(100));
+        assert_eq!(merged.total_size_bytes(), Some(10000));
+        assert_eq!(merged.total_points(), Some(5000));
+        assert_eq!(merged.puntal_count(), Some(20));
+        assert_eq!(merged.lineal_count(), Some(30));
+        assert_eq!(merged.polygonal_count(), Some(40));
+        assert_eq!(merged.collection_count(), Some(10));
+        assert_eq!(merged.total_envelope_width(), Some(500.0));
+        assert_eq!(merged.total_envelope_height(), Some(300.0));
+
+        // Test serialization/deserialization of merged stats
+        let column_stats = merged.to_column_statistics().unwrap();
+        let deserialized = GeoStatistics::try_from_column_statistics(&column_stats)
+            .unwrap()
+            .unwrap();
+        assert_eq!(deserialized, merged);
+    }
+
+    #[test]
+    fn test_partial_merge() {
+        let stats1 = GeoStatistics::empty()
+            .with_total_geometries(50)
+            .with_total_size_bytes(5000);
+
+        let stats2 = GeoStatistics::empty()
+            .with_puntal_count(20)
+            .with_lineal_count(30);
+
+        let mut merged = stats1.clone();
+        merged.merge(&stats2);
+
+        // Check merged results
+        assert_eq!(merged.total_geometries(), Some(50));
+        assert_eq!(merged.total_size_bytes(), Some(5000));
+        assert_eq!(merged.puntal_count(), Some(20));
+        assert_eq!(merged.lineal_count(), Some(30));
+        assert_eq!(merged.polygonal_count(), Some(0));
+
+        // Test serialization/deserialization of partially merged stats
+        let column_stats = merged.to_column_statistics().unwrap();
+        let deserialized = GeoStatistics::try_from_column_statistics(&column_stats)
+            .unwrap()
+            .unwrap();
+        assert_eq!(deserialized, merged);
     }
 }

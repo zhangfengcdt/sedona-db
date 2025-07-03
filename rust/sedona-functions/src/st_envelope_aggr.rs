@@ -37,7 +37,7 @@ fn st_envelope_aggr_doc() -> Documentation {
     Documentation::builder(
         DOC_SECTION_OTHER,
         "Return the entire envelope boundary of all geometries in geom",
-        "ST_Envelope_Aggr (A: geometryColumn)",
+        "ST_Envelope_Aggr (geom: Geometry)",
     )
     .with_argument("geom", "geometry: Input geometry or geography")
     .with_sql_example("SELECT ST_Envelope_Aggr(ST_GeomFromWKT('MULTIPOINT (0 1, 10 11)'))")

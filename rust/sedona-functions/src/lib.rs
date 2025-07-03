@@ -1,5 +1,6 @@
 pub mod executor;
 pub mod register;
+pub mod st_analyze_aggr;
 mod st_area;
 mod st_asbinary;
 mod st_astext;

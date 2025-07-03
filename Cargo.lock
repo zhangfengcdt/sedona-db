@@ -4717,18 +4717,18 @@ name = "sedona-functions"
 version = "0.0.1"
 dependencies = [
  "arrow-array",
+ "arrow-json",
  "arrow-schema",
  "criterion",
  "datafusion-common",
  "datafusion-expr",
- "geo",
  "geo-traits 0.2.0",
- "geo-types",
  "rstest",
  "sedona-expr",
  "sedona-geometry",
  "sedona-schema",
  "sedona-testing",
+ "serde_json",
  "wkb",
  "wkt",
 ]
@@ -4745,12 +4745,10 @@ dependencies = [
  "geo",
  "geo-generic-alg",
  "geo-traits 0.2.0",
- "geo-traits-ext",
  "geo-types",
  "rstest",
  "sedona-expr",
  "sedona-functions",
- "sedona-geometry",
  "sedona-schema",
  "sedona-testing",
  "wkb",
@@ -4782,10 +4780,8 @@ dependencies = [
 name = "sedona-geometry"
 version = "0.0.1"
 dependencies = [
- "criterion",
  "geo-traits 0.2.0",
  "rstest",
- "sedona-testing",
  "serde",
  "serde_json",
  "serde_with",

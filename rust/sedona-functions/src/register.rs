@@ -1,4 +1,5 @@
 use crate::{
+    st_analyze_aggr::st_analyze_aggr_udf,
     st_area::st_area_udf,
     st_asbinary::st_asbinary_udf,
     st_astext::st_astext_udf,
@@ -39,6 +40,7 @@ pub fn default_function_set() -> FunctionSet {
     function_set.insert_aggregate_udf(st_envelope_aggr_udf());
     function_set.insert_aggregate_udf(st_intersection_aggr_udf());
     function_set.insert_aggregate_udf(st_union_aggr_udf());
+    function_set.insert_aggregate_udf(st_analyze_aggr_udf());
 
     function_set
 }

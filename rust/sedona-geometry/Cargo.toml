@@ -12,9 +12,7 @@ rust-version.workspace = true
 result_large_err = "allow"
 
 [dev-dependencies]
-criterion = { workspace = true }
 rstest = { workspace = true }
-sedona-testing = { path = "../sedona-testing" }
 serde_json = { workspace = true }
 wkt = { workspace = true }
 

@@ -7,11 +7,11 @@ use sedona_schema::datatypes::SedonaType;
 use wkb::reader::Wkb;
 
 pub(crate) trait GetGeo {
-    fn get_wkb(&self, sedona_type: &SedonaType, row_idx: usize) -> Result<Option<Wkb>>;
+    fn get_wkb(&self, sedona_type: &SedonaType, row_idx: usize) -> Result<Option<Wkb<'_>>>;
 }
 
 impl GetGeo for ArrayRef {
-    fn get_wkb(&self, sedona_type: &SedonaType, row_idx: usize) -> Result<Option<Wkb>> {
+    fn get_wkb(&self, sedona_type: &SedonaType, row_idx: usize) -> Result<Option<Wkb<'_>>> {
         match sedona_type {
             SedonaType::Wkb(_, _) => {
                 let byte_array = as_binary_array(self)?;
@@ -44,7 +44,7 @@ impl GetGeo for ArrayRef {
 /// Trait for indexed WKB access with minimal dispatch overhead
 pub(crate) trait WkbArrayAccess: Send + Sync + std::fmt::Debug {
     /// Get the WKB item at the specified index, returns None if index is beyond bounds
-    fn get_wkb_at(&self, index: usize) -> Result<Option<Wkb>>;
+    fn get_wkb_at(&self, index: usize) -> Result<Option<Wkb<'_>>>;
 
     /// Get the total number of items
     fn len(&self) -> usize;
@@ -63,7 +63,7 @@ impl BinaryWkbAccess {
 }
 
 impl WkbArrayAccess for BinaryWkbAccess {
-    fn get_wkb_at(&self, index: usize) -> Result<Option<Wkb>> {
+    fn get_wkb_at(&self, index: usize) -> Result<Option<Wkb<'_>>> {
         if self.array.is_null(index) {
             return Ok(None);
         }
@@ -92,7 +92,7 @@ impl BinaryViewWkbAccess {
 }
 
 impl WkbArrayAccess for BinaryViewWkbAccess {
-    fn get_wkb_at(&self, index: usize) -> Result<Option<Wkb>> {
+    fn get_wkb_at(&self, index: usize) -> Result<Option<Wkb<'_>>> {
         if self.array.is_null(index) {
             return Ok(None);
         }

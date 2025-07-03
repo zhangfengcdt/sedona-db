@@ -23,7 +23,7 @@ fn st_union_aggr_doc() -> Documentation {
     Documentation::builder(
         DOC_SECTION_OTHER,
         "Return the geometric union of all geometries in the input column.",
-        "ST_Union_Aggr (A: geometryColumn)",
+        "ST_Union_Aggr (geom: Geometry)",
     )
     .with_argument("geom", "geometry: Input geometry or geography")
     .with_sql_example("SELECT ST_Union_Aggr(ST_GeomFromWKT('POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))'))")

@@ -24,11 +24,9 @@ datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 geo-generic-alg = { workspace = true }
 geo-traits = { workspace = true, features = ["geo-types"] }
-geo-traits-ext = { workspace = true }
 geo-types = { workspace = true }
 geo = { workspace = true }
 sedona-expr = { path = "../sedona-expr" }
-sedona-geometry = { path = "../sedona-geometry" }
 sedona-functions = { path = "../sedona-functions" }
 sedona-schema = { path = "../sedona-schema" }
 wkb = { workspace = true }
