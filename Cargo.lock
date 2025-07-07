@@ -4863,6 +4863,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "sedona-s2geography"
+version = "0.0.1"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "bindgen 0.71.1",
+ "cmake",
+ "criterion",
+ "datafusion-common",
+ "datafusion-expr",
+ "errno",
+ "regex",
+ "rstest",
+ "sedona",
+ "sedona-expr",
+ "sedona-functions",
+ "sedona-schema",
+ "sedona-testing",
+ "thiserror 2.0.12",
+]
+
+[[package]]
 name = "sedona-schema"
 version = "0.0.1"
 dependencies = [

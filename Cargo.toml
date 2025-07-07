@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "c/sedona-geoarrow-c",
+    "c/sedona-s2geography",
     "rust/sedona-adbc",
     "rust/sedona-expr",
     "rust/sedona-functions",

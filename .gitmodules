@@ -1,3 +1,9 @@
 [submodule "submodules/geoarrow-data"]
 	path = submodules/geoarrow-data
 	url = https://github.com/geoarrow/geoarrow-data.git
+[submodule "c/sedona-s2geography/s2geography"]
+	path = c/sedona-s2geography/s2geography
+	url = https://github.com/paleolimbot/s2geography.git
+[submodule "c/sedona-s2geography/s2geometry"]
+	path = c/sedona-s2geography/s2geometry
+	url = https://github.com/google/s2geometry.git
