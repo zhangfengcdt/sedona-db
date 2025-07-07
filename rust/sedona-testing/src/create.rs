@@ -78,7 +78,8 @@ where
         .collect()
 }
 
-fn make_wkb(wkt_value: &str) -> Vec<u8> {
+/// Create a WKB from a WKT string.
+pub fn make_wkb(wkt_value: &str) -> Vec<u8> {
     let geom = Wkt::<f64>::from_str(wkt_value).unwrap();
     let mut out: Vec<u8> = vec![];
     wkb::writer::write_geometry(&mut out, &geom, Default::default()).unwrap();

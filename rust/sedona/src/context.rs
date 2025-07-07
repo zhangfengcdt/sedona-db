@@ -14,6 +14,7 @@ use datafusion::{
     sql::parser::DFParser,
 };
 use datafusion_expr::sqlparser::dialect::dialect_from_str;
+use sedona_common::option::add_sedona_option_extension;
 use sedona_expr::aggregate_udf::SedonaAccumulatorRef;
 use sedona_expr::{
     function_set::FunctionSet,
@@ -63,6 +64,7 @@ impl SedonaContext {
         // and perhaps for all of these initializing them optionally from environment
         // variables.
         let session_config = SessionConfig::from_env()?.with_information_schema(true);
+        let session_config = add_sedona_option_extension(session_config);
         let rt_builder = RuntimeEnvBuilder::new();
         let runtime_env = rt_builder.build_arc()?;
 
@@ -74,12 +76,7 @@ impl SedonaContext {
         // Register the spatial join planner extension
         #[cfg(feature = "spatial-join")]
         {
-            use sedona_spatial_join::SpatialJoinOptions;
-
-            state_builder = sedona_spatial_join::register_spatial_join_optimizer(
-                state_builder,
-                SpatialJoinOptions::default(),
-            );
+            state_builder = sedona_spatial_join::register_spatial_join_optimizer(state_builder);
         }
 
         let mut state = state_builder.build();
@@ -169,7 +166,8 @@ impl SedonaContext {
         let mut results = Vec::with_capacity(statements.len());
         for statement in statements {
             let plan = create_plan_from_sql(self, statement.clone()).await?;
-            results.push(DataFrame::new(self.ctx.state(), plan));
+            let df = self.ctx.execute_logical_plan(plan).await?;
+            results.push(df);
         }
 
         Ok(results)

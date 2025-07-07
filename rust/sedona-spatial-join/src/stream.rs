@@ -16,16 +16,16 @@ use std::sync::Arc;
 
 use crate::index::SpatialIndex;
 use crate::once_fut::OnceFut;
-use crate::option::SpatialJoinOptions;
-use crate::spatial_predicate::{GeometryBatchResult, SpatialPredicate, SpatialPredicateEvaluator};
+use crate::spatial_predicate::{
+    EvaluatedGeometryArray, SpatialPredicate, SpatialPredicateEvaluator,
+};
 use crate::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     get_final_indices_from_bit_map, need_produce_result_in_final, JoinedRowsIndices,
 };
-use crate::wkb_array::{create_wkb_array_access, WkbArrayAccess};
-use arrow::array::{Array, RecordBatch};
+use arrow::array::RecordBatch;
 use arrow::datatypes::{Schema, SchemaRef};
-use sedona_schema::datatypes::SedonaType;
+use sedona_common::option::SpatialJoinOptions;
 
 /// Stream for producing spatial join result batches.
 pub(crate) struct SpatialJoinStream {
@@ -48,6 +48,8 @@ pub(crate) struct SpatialJoinStream {
     /// Options for the spatial join
     #[allow(unused)]
     options: SpatialJoinOptions,
+    /// Target output batch size
+    target_output_batch_size: usize,
     /// Once future for the spatial index
     once_partial_leaf_nodes: OnceFut<SpatialIndex>,
     /// The spatial index
@@ -68,6 +70,7 @@ impl SpatialJoinStream {
         probe_side_ordered: bool,
         join_metrics: SpatialJoinMetrics,
         options: SpatialJoinOptions,
+        target_output_batch_size: usize,
         once_partial_leaf_nodes: OnceFut<SpatialIndex>,
     ) -> Self {
         let evaluator = on.evaluator(options.clone());
@@ -81,6 +84,7 @@ impl SpatialJoinStream {
             join_metrics,
             state: SpatialJoinStreamState::WaitBuildIndex,
             options,
+            target_output_batch_size,
             once_partial_leaf_nodes,
             spatial_index: None,
             evaluator,
@@ -351,15 +355,15 @@ impl SpatialJoinStream {
 
         // Evaluate the probe side geometry expression to get geometry array
         let evaluator = self.evaluator.as_ref();
-        let geometry_batch_result = evaluator.evaluate_probe(probe_batch)?;
+        let geom_array = evaluator.evaluate_probe(probe_batch)?;
 
         SpatialJoinBatchIterator::new(
             spatial_index.clone(),
             probe_batch.clone(),
-            geometry_batch_result,
+            geom_array,
             self.evaluator.clone(),
             Arc::new(self.join_metrics.clone()),
-            self.options.max_batch_size,
+            self.target_output_batch_size,
             self.probe_side_ordered,
         )
     }
@@ -393,74 +397,55 @@ struct PartialBuildBatch {
 
 /// Iterator that processes spatial join results in configurable batch sizes
 pub(crate) struct SpatialJoinBatchIterator {
-    /// Current accumulated build batch positions
-    build_batch_positions: Vec<(i32, i32)>,
-    /// Current accumulated probe indices
-    probe_indices: Vec<u32>,
-    /// Maximum batch size before yielding a result
-    max_batch_size: usize,
     /// The spatial index reference
     spatial_index: Arc<SpatialIndex>,
     /// The probe batch being processed
     probe_batch: RecordBatch,
-    /// Maintains the order of the probe side
-    probe_side_ordered: bool,
+    /// The geometry batch result from evaluating the probe batch
+    geom_array: EvaluatedGeometryArray,
     /// Current probe row index being processed
     current_probe_idx: usize,
-    /// The rects from evaluating the probe batch
-    rects: Vec<(usize, geo_types::Rect)>,
     /// Current rect index being processed
     current_rect_idx: usize,
-    /// Distance for spatial predicates
-    distance: Option<datafusion_expr::ColumnarValue>,
     /// The spatial predicate evaluator
     evaluator: Arc<dyn SpatialPredicateEvaluator>,
     /// Join metrics for tracking performance
     join_metrics: Arc<SpatialJoinMetrics>,
+    /// Maximum batch size before yielding a result
+    max_batch_size: usize,
+    /// Maintains the order of the probe side
+    probe_side_ordered: bool,
+    /// Current accumulated build batch positions
+    build_batch_positions: Vec<(i32, i32)>,
+    /// Current accumulated probe indices
+    probe_indices: Vec<u32>,
     /// Whether iteration is complete
     is_complete: bool,
-    /// WKB array accessor for efficient indexed access
-    wkb_accessor: Box<dyn WkbArrayAccess>,
 }
 
 impl SpatialJoinBatchIterator {
     pub(crate) fn new(
         spatial_index: Arc<SpatialIndex>,
         probe_batch: RecordBatch,
-        geometry_batch_result: GeometryBatchResult,
+        geom_array: EvaluatedGeometryArray,
         evaluator: Arc<dyn SpatialPredicateEvaluator>,
         join_metrics: Arc<SpatialJoinMetrics>,
         max_batch_size: usize,
         probe_side_ordered: bool,
     ) -> Result<Self> {
-        let GeometryBatchResult {
-            geometry_array,
-            rects,
-            distance,
-        } = geometry_batch_result;
-
-        // Convert to Sedona geometry type for processing
-        let sedona_type: SedonaType = geometry_array.data_type().try_into()?;
-        let geometry_array = sedona_type.unwrap_array(&geometry_array)?;
-
-        // Create WKB array accessor for efficient indexed access
-        let wkb_accessor = create_wkb_array_access(&geometry_array, &sedona_type)?;
-
         Ok(Self {
-            build_batch_positions: Vec::new(),
-            probe_indices: Vec::new(),
-            max_batch_size,
             spatial_index,
             probe_batch,
-            probe_side_ordered,
+            geom_array,
             current_probe_idx: 0,
-            rects,
             current_rect_idx: 0,
-            distance,
             evaluator,
             join_metrics,
+            max_batch_size,
+            probe_side_ordered,
+            build_batch_positions: Vec::new(),
+            probe_indices: Vec::new(),
             is_complete: false,
-            wkb_accessor,
         })
     }
 
@@ -474,14 +459,19 @@ impl SpatialJoinBatchIterator {
     ) -> Result<Option<RecordBatch>> {
         // Process probe rows incrementally until we have enough results or finish
         let initial_size = self.build_batch_positions.len();
-        let num_rows = self.wkb_accessor.len();
+
+        let wkbs = self.geom_array.wkbs();
+        let rects = &self.geom_array.rects;
+        let distance = &self.geom_array.distance;
+
+        let num_rows = wkbs.len();
 
         let last_probe_idx = self.current_probe_idx;
 
         // Process from current position until we hit batch size limit or complete
         while self.current_probe_idx < num_rows && !self.is_complete {
             // Get WKB for current probe index
-            let wkb_opt = self.wkb_accessor.get_wkb_at(self.current_probe_idx)?;
+            let wkb_opt = &wkbs[self.current_probe_idx];
 
             let Some(wkb) = wkb_opt else {
                 // Move to next probe index
@@ -490,16 +480,16 @@ impl SpatialJoinBatchIterator {
             };
 
             // Process all rects for this probe index
-            while self.current_rect_idx < self.rects.len()
-                && self.rects[self.current_rect_idx].0 == self.current_probe_idx
+            while self.current_rect_idx < rects.len()
+                && rects[self.current_rect_idx].0 == self.current_probe_idx
             {
-                let rect = &self.rects[self.current_rect_idx].1;
+                let rect = &rects[self.current_rect_idx].1;
                 self.current_rect_idx += 1;
 
                 let join_result_metrics = self.spatial_index.query(
-                    &wkb,
+                    wkb,
                     rect,
-                    &self.distance,
+                    distance,
                     self.evaluator.as_ref(),
                     &mut self.build_batch_positions,
                 )?;

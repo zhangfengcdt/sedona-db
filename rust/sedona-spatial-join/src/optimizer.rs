@@ -1,5 +1,9 @@
 use std::sync::Arc;
 
+use crate::exec::SpatialJoinExec;
+use crate::spatial_predicate::{
+    DistancePredicate, RelationPredicate, SpatialPredicate, SpatialRelationType,
+};
 use datafusion::physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion::{
     config::ConfigOptions, execution::session_state::SessionStateBuilder,
@@ -17,30 +21,18 @@ use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::NestedLoopJoinExec;
 use datafusion_physical_plan::{joins::utils::JoinFilter, ExecutionPlan};
-
-use crate::spatial_predicate::{
-    DistancePredicate, RelationPredicate, SpatialPredicate, SpatialRelationType,
-};
-use crate::{exec::SpatialJoinExec, option::SpatialJoinOptions};
+use sedona_common::option::SedonaOptions;
 
 /// Physical planner extension for spatial joins
 ///
 /// This extension recognizes nested loop join operations with spatial predicates
 /// and converts them to SpatialJoinExec, which is specially optimized for spatial joins.
 #[derive(Debug, Default)]
-pub struct SpatialJoinOptimizer {
-    /// Default options for spatial joins
-    pub default_options: SpatialJoinOptions,
-}
+pub struct SpatialJoinOptimizer;
 
 impl SpatialJoinOptimizer {
     pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn with_default_options(mut self, options: SpatialJoinOptions) -> Self {
-        self.default_options = options;
-        self
+        Self
     }
 }
 
@@ -50,8 +42,16 @@ impl PhysicalOptimizerRule for SpatialJoinOptimizer {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let transformed = plan.transform_up(|plan| self.try_optimize_join(plan, config))?;
-        Ok(transformed.data)
+        let Some(extension) = config.extensions.get::<SedonaOptions>() else {
+            return Ok(plan);
+        };
+
+        if extension.spatial_join.enable {
+            let transformed = plan.transform_up(|plan| self.try_optimize_join(plan, config))?;
+            Ok(transformed.data)
+        } else {
+            Ok(plan)
+        }
     }
 
     /// A human readable name for this optimizer rule
@@ -122,7 +122,6 @@ impl SpatialJoinOptimizer {
                     remainder,
                     join_type,
                     nested_loop_join.projection().cloned(),
-                    self.default_options.clone(),
                 )?;
 
                 return Ok(Some(Arc::new(spatial_join)));
@@ -136,12 +135,10 @@ impl SpatialJoinOptimizer {
 /// Helper function to register the spatial join optimizer with a session state
 pub fn register_spatial_join_optimizer(
     session_state_builder: SessionStateBuilder,
-    options: SpatialJoinOptions,
 ) -> SessionStateBuilder {
-    let spatial_join_planner = SpatialJoinOptimizer::new().with_default_options(options);
-    let session_state_builder =
-        session_state_builder.with_physical_optimizer_rule(Arc::new(spatial_join_planner));
-    session_state_builder.with_physical_optimizer_rule(Arc::new(SanityCheckPlan::new()))
+    session_state_builder
+        .with_physical_optimizer_rule(Arc::new(SpatialJoinOptimizer::new()))
+        .with_physical_optimizer_rule(Arc::new(SanityCheckPlan::new()))
 }
 
 /// Transform the join filter to a spatial predicate and a remainder.

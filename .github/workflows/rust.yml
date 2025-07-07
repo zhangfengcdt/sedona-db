@@ -43,6 +43,9 @@ jobs:
           # (e.g., updating DataFusion), the old cache is not very useful and may result
           # in out-of-disk ("no space left on device")
           prefix-key: "v1"
+      - name: Install dependencies
+        shell: bash
+        run: sudo apt-get update && sudo apt-get install -y libgeos-dev
       - name: Check formatting
         run: |
           cargo fmt --all -- --check

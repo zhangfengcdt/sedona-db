@@ -15,10 +15,11 @@ use datafusion_physical_plan::{
 use crate::{
     index::{build_index, SpatialIndex},
     once_fut::OnceAsync,
-    option::SpatialJoinOptions,
     spatial_predicate::SpatialPredicate,
     stream::{SpatialJoinMetrics, SpatialJoinStream},
     utils::{asymmetric_join_output_partitioning, boundedness_from_children},
+    // Re-export from sedona-common
+    SedonaOptions,
 };
 
 /// Physical execution plan for performing spatial joins between two tables. It uses a spatial
@@ -54,8 +55,6 @@ pub struct SpatialJoinExec {
     column_indices: Vec<ColumnIndex>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
-    /// Spatial join options
-    options: SpatialJoinOptions,
     /// Once future for building the spatial index.
     /// This futures run only once before the spatial index probing phase.
     once_async_spatial_index: OnceAsync<SpatialIndex>,
@@ -70,7 +69,6 @@ impl SpatialJoinExec {
         filter: Option<JoinFilter>,
         join_type: &JoinType,
         projection: Option<Vec<usize>>,
-        options: SpatialJoinOptions,
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
@@ -97,7 +95,6 @@ impl SpatialJoinExec {
             projection,
             metrics: Default::default(),
             cache,
-            options,
             once_async_spatial_index: OnceAsync::default(),
         })
     }
@@ -279,7 +276,6 @@ impl ExecutionPlan for SpatialJoinExec {
             projection: self.projection.clone(),
             metrics: Default::default(),
             cache: self.cache.clone(),
-            options: self.options.clone(),
             once_async_spatial_index: OnceAsync::default(),
         }))
     }
@@ -289,6 +285,15 @@ impl ExecutionPlan for SpatialJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let session_config = context.session_config();
+        let target_output_batch_size = session_config.options().execution.batch_size;
+        let sedona_options = session_config
+            .options()
+            .extensions
+            .get::<SedonaOptions>()
+            .cloned()
+            .unwrap_or_default();
+
         let once_partial_leaf_nodes = self.once_async_spatial_index.try_once(|| {
             let build_side = &self.left;
 
@@ -307,7 +312,7 @@ impl ExecutionPlan for SpatialJoinExec {
                 build_side.schema(),
                 build_streams,
                 self.on.clone(),
-                self.options.clone(),
+                sedona_options.spatial_join.clone(),
                 build_metrics,
                 Arc::clone(context.memory_pool()),
                 self.join_type,
@@ -340,7 +345,8 @@ impl ExecutionPlan for SpatialJoinExec {
             column_indices_after_projection,
             probe_side_ordered,
             join_metrics,
-            self.options.clone(),
+            sedona_options.spatial_join,
+            target_output_batch_size,
             once_partial_leaf_nodes,
         )))
     }
@@ -353,7 +359,7 @@ mod tests {
     use datafusion::{
         catalog::{MemTable, TableProvider},
         execution::SessionStateBuilder,
-        prelude::SessionContext,
+        prelude::{SessionConfig, SessionContext},
     };
     use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
     use geo_types::{Coord, Rect};
@@ -362,7 +368,8 @@ mod tests {
     use sedona_schema::datatypes::WKB_GEOMETRY;
     use sedona_testing::datagen::RandomPartitionedDataBuilder;
 
-    use crate::{register_spatial_join_optimizer, ExecutionMode};
+    use crate::register_spatial_join_optimizer;
+    use sedona_common::option::{add_sedona_option_extension, ExecutionMode, SpatialJoinOptions};
 
     use super::*;
 
@@ -419,12 +426,25 @@ mod tests {
         Ok((left_data, right_data))
     }
 
-    fn setup_context(options: Option<SpatialJoinOptions>) -> Result<SessionContext> {
+    fn setup_context(
+        options: Option<SpatialJoinOptions>,
+        batch_size: usize,
+    ) -> Result<SessionContext> {
+        let mut session_config = SessionConfig::from_env()?
+            .with_information_schema(true)
+            .with_batch_size(batch_size);
+        session_config = add_sedona_option_extension(session_config);
         let mut state_builder = SessionStateBuilder::new();
         if let Some(options) = options {
-            state_builder = register_spatial_join_optimizer(state_builder, options);
+            state_builder = register_spatial_join_optimizer(state_builder);
+            let opts = session_config
+                .options_mut()
+                .extensions
+                .get_mut::<SedonaOptions>()
+                .unwrap();
+            opts.spatial_join = options;
         }
-        let state = state_builder.build();
+        let state = state_builder.with_config(session_config).build();
         let ctx = SessionContext::new_with_state(state);
 
         let mut function_set = sedona_functions::register::default_function_set();
@@ -454,9 +474,9 @@ mod tests {
 
         let options = SpatialJoinOptions {
             execution_mode: ExecutionMode::PrepareNone,
-            max_batch_size: 10,
+            ..Default::default()
         };
-        let ctx = setup_context(Some(options.clone()))?;
+        let ctx = setup_context(Some(options.clone()), 10)?;
         for test_data in test_data_vec {
             let left_partitions = test_data.clone();
             let right_partitions = test_data;
@@ -491,15 +511,71 @@ mod tests {
         let ((left_schema, left_partitions), (right_schema, right_partitions)) =
             create_default_test_data()?;
 
+        let sql1 = "SELECT L.id l_id, R.id r_id FROM L JOIN R ON ST_Intersects(L.geometry, R.geometry) ORDER BY l_id, r_id";
+        let sql2 =
+            "SELECT * FROM L JOIN R ON ST_Intersects(L.geometry, R.geometry) ORDER BY L.id, R.id";
+
+        let batch_size = 10;
+
+        // Run nested loop join to get expected results
+        let expected_result_run_join_query = run_join_query(
+            &left_schema,
+            &right_schema,
+            left_partitions.clone(),
+            right_partitions.clone(),
+            None,
+            batch_size,
+            sql1,
+        )
+        .await?;
+        let expected_result_test_spatial_join_query = run_join_query(
+            &left_schema,
+            &right_schema,
+            left_partitions.clone(),
+            right_partitions.clone(),
+            None,
+            batch_size,
+            sql2,
+        )
+        .await?;
+
+        // Run spatial join using various configurations
         for max_batch_size in [10, 30, 1000] {
-            let options = SpatialJoinOptions {
-                execution_mode: ExecutionMode::PrepareNone,
-                max_batch_size,
-            };
-            test_spatial_join_query(&left_schema, &right_schema, left_partitions.clone(), right_partitions.clone(), &options,
-                "SELECT L.id l_id, R.id r_id FROM L JOIN R ON ST_Intersects(L.geometry, R.geometry) ORDER BY l_id, r_id").await?;
-            test_spatial_join_query(&left_schema, &right_schema, left_partitions.clone(), right_partitions.clone(), &options,
-                "SELECT * FROM L JOIN R ON ST_Intersects(L.geometry, R.geometry) ORDER BY L.id, R.id").await?;
+            for execution_mode in [
+                ExecutionMode::PrepareNone,
+                ExecutionMode::PrepareBuild,
+                ExecutionMode::PrepareProbe,
+            ] {
+                let options = SpatialJoinOptions {
+                    execution_mode,
+                    ..Default::default()
+                };
+                let result_run_join_query = run_join_query(
+                    &left_schema,
+                    &right_schema,
+                    left_partitions.clone(),
+                    right_partitions.clone(),
+                    Some(options.clone()),
+                    max_batch_size,
+                    sql1,
+                )
+                .await?;
+                assert_eq!(result_run_join_query, expected_result_run_join_query);
+                let result_test_spatial_join_query = run_join_query(
+                    &left_schema,
+                    &right_schema,
+                    left_partitions.clone(),
+                    right_partitions.clone(),
+                    Some(options),
+                    max_batch_size,
+                    sql2,
+                )
+                .await?;
+                assert_eq!(
+                    result_test_spatial_join_query,
+                    expected_result_test_spatial_join_query
+                );
+            }
         }
 
         Ok(())
@@ -513,13 +589,13 @@ mod tests {
         for max_batch_size in [10, 30, 100] {
             let options = SpatialJoinOptions {
                 execution_mode: ExecutionMode::PrepareNone,
-                max_batch_size,
+                ..Default::default()
             };
-            test_spatial_join_query(&left_schema, &right_schema, left_partitions.clone(), right_partitions.clone(), &options,
+            test_spatial_join_query(&left_schema, &right_schema, left_partitions.clone(), right_partitions.clone(), &options, max_batch_size,
                 "SELECT * FROM L JOIN R ON ST_Intersects(L.geometry, R.geometry) AND L.dist < R.dist ORDER BY L.id, R.id").await?;
-            test_spatial_join_query(&left_schema, &right_schema, left_partitions.clone(), right_partitions.clone(), &options,
+            test_spatial_join_query(&left_schema, &right_schema, left_partitions.clone(), right_partitions.clone(), &options, max_batch_size,
                 "SELECT L.id l_id, R.id r_id FROM L JOIN R ON ST_Intersects(L.geometry, R.geometry) AND L.dist < R.dist ORDER BY l_id, r_id").await?;
-            test_spatial_join_query(&left_schema, &right_schema, left_partitions.clone(), right_partitions.clone(), &options,
+            test_spatial_join_query(&left_schema, &right_schema, left_partitions.clone(), right_partitions.clone(), &options, max_batch_size,
                 "SELECT L.id l_id, R.id r_id, L.dist l_dist, R.dist r_dist FROM L JOIN R ON ST_Intersects(L.geometry, R.geometry) AND L.dist < R.dist ORDER BY l_id, r_id").await?;
         }
 
@@ -534,11 +610,11 @@ mod tests {
         for max_batch_size in [10, 30, 1000] {
             let options = SpatialJoinOptions {
                 execution_mode: ExecutionMode::PrepareNone,
-                max_batch_size,
+                ..Default::default()
             };
-            test_spatial_join_query(&left_schema, &right_schema, left_partitions.clone(), right_partitions.clone(), &options,
+            test_spatial_join_query(&left_schema, &right_schema, left_partitions.clone(), right_partitions.clone(), &options, max_batch_size,
                 "SELECT L.id l_id, R.id r_id FROM L JOIN R ON ST_Intersects(L.geometry, R.geometry) ORDER BY l_id, r_id").await?;
-            test_spatial_join_query(&left_schema, &right_schema, left_partitions.clone(), right_partitions.clone(), &options,
+            test_spatial_join_query(&left_schema, &right_schema, left_partitions.clone(), right_partitions.clone(), &options, max_batch_size,
                 "SELECT * FROM L JOIN R ON ST_Intersects(L.geometry, R.geometry) ORDER BY L.id, R.id").await?;
         }
 
@@ -581,8 +657,9 @@ mod tests {
 
         let options = SpatialJoinOptions {
             execution_mode: ExecutionMode::PrepareNone,
-            max_batch_size: 30,
+            ..Default::default()
         };
+        let batch_size = 30;
 
         let inner_sql = "SELECT L.id l_id, R.id r_id FROM L INNER JOIN R ON ST_Intersects(L.geometry, R.geometry) ORDER BY l_id, r_id";
         let sql = match join_type {
@@ -605,6 +682,7 @@ mod tests {
             left_partitions.clone(),
             right_partitions.clone(),
             &options,
+            batch_size,
             sql,
         )
         .await?;
@@ -618,6 +696,7 @@ mod tests {
                 left_partitions,
                 right_partitions,
                 Some(options),
+                batch_size,
                 inner_sql,
             )
             .await?;
@@ -633,6 +712,7 @@ mod tests {
         left_partitions: Vec<Vec<RecordBatch>>,
         right_partitions: Vec<Vec<RecordBatch>>,
         options: &SpatialJoinOptions,
+        batch_size: usize,
         sql: &str,
     ) -> Result<RecordBatch> {
         // Run spatial join using SpatialJoinExec
@@ -642,6 +722,7 @@ mod tests {
             left_partitions.clone(),
             right_partitions.clone(),
             Some(options.clone()),
+            batch_size,
             sql,
         )
         .await?;
@@ -653,6 +734,7 @@ mod tests {
             left_partitions.clone(),
             right_partitions.clone(),
             None,
+            batch_size,
             sql,
         )
         .await?;
@@ -670,6 +752,7 @@ mod tests {
         left_partitions: Vec<Vec<RecordBatch>>,
         right_partitions: Vec<Vec<RecordBatch>>,
         options: Option<SpatialJoinOptions>,
+        batch_size: usize,
         sql: &str,
     ) -> Result<RecordBatch> {
         let mem_table_left: Arc<dyn TableProvider> =
@@ -680,7 +763,7 @@ mod tests {
         )?);
 
         let is_optimized_spatial_join = options.is_some();
-        let ctx = setup_context(options)?;
+        let ctx = setup_context(options, batch_size)?;
         ctx.register_table("L", Arc::clone(&mem_table_left))?;
         ctx.register_table("R", Arc::clone(&mem_table_right))?;
         let df = ctx.sql(sql).await?;

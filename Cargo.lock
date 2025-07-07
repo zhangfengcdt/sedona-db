@@ -1093,6 +1093,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "c_vec"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdd7a427adc0135366d99db65b36dae9237130997e560ed61118041fb72be6e8"
+
+[[package]]
 name = "cast"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2617,6 +2623,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f611040a2bb37eaa29a78a128d1e92a378a03e0b6e66ae27398d42b1ba9a7841"
 dependencies = [
  "libm",
+]
+
+[[package]]
+name = "geos"
+version = "10.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0473e63acafe4109b096ab8c1e6b8151e1cb25397811525779a9bc7187382a7b"
+dependencies = [
+ "c_vec",
+ "geo-types",
+ "geos-sys",
+ "libc",
+ "num",
+ "wkt 0.10.3",
+]
+
+[[package]]
+name = "geos-sys"
+version = "2.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4dc873d24aefc72aa94c3c1c251afb82beb7be5926002746c0e1f585fef9854c"
+dependencies = [
+ "libc",
+ "pkg-config",
+ "semver",
 ]
 
 [[package]]
@@ -4654,6 +4685,7 @@ dependencies = [
  "geo-types",
  "object_store",
  "parking_lot",
+ "sedona-common",
  "sedona-expr",
  "sedona-functions",
  "sedona-geo",
@@ -4696,6 +4728,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sedona-common"
+version = "0.0.1"
+dependencies = [
+ "datafusion",
+ "datafusion-common",
+ "regex",
+]
+
+[[package]]
 name = "sedona-expr"
 version = "0.0.1"
 dependencies = [
@@ -4730,7 +4771,7 @@ dependencies = [
  "sedona-testing",
  "serde_json",
  "wkb",
- "wkt",
+ "wkt 0.13.0",
 ]
 
 [[package]]
@@ -4752,7 +4793,7 @@ dependencies = [
  "sedona-schema",
  "sedona-testing",
  "wkb",
- "wkt",
+ "wkt 0.13.0",
 ]
 
 [[package]]
@@ -4787,7 +4828,7 @@ dependencies = [
  "serde_with",
  "thiserror 2.0.12",
  "wkb",
- "wkt",
+ "wkt 0.13.0",
 ]
 
 [[package]]
@@ -4853,9 +4894,11 @@ dependencies = [
  "geo-traits 0.2.0",
  "geo-traits-ext",
  "geo-types",
+ "geos",
  "parking_lot",
  "rand 0.8.5",
  "rstest",
+ "sedona-common",
  "sedona-expr",
  "sedona-functions",
  "sedona-geo",
@@ -4864,7 +4907,7 @@ dependencies = [
  "sedona-testing",
  "tokio",
  "wkb",
- "wkt",
+ "wkt 0.13.0",
 ]
 
 [[package]]
@@ -4883,7 +4926,7 @@ dependencies = [
  "sedona-geometry",
  "sedona-schema",
  "wkb",
- "wkt",
+ "wkt 0.13.0",
 ]
 
 [[package]]
@@ -6048,6 +6091,18 @@ dependencies = [
  "geo-traits-ext",
  "geo-types",
  "num_enum",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "wkt"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3c2252781f8927974e8ba6a67c965a759a2b88ea2b1825f6862426bbb1c8f41"
+dependencies = [
+ "geo-types",
+ "log",
+ "num-traits",
  "thiserror 1.0.69",
 ]
 

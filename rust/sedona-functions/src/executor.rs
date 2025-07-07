@@ -67,9 +67,11 @@ impl<'a, 'b> GenericExecutor<'a, 'b> {
     /// array types, this may incur a cast of item-wise conversion overhead.
     pub fn execute_wkb_void<F: FnMut(usize, Option<&Wkb>) -> Result<()>>(
         &self,
-        func: F,
+        mut func: F,
     ) -> Result<()> {
-        self.args[0].iter_as_wkb(&self.arg_types[0], self.num_iterations, func)
+        self.args[0].iter_as_wkb(&self.arg_types[0], self.num_iterations, |i, wkb| {
+            func(i, wkb.as_ref())
+        })
     }
 
     /// Execute a binary geometry function by iterating over [Wkb] scalars in the
@@ -92,13 +94,13 @@ impl<'a, 'b> GenericExecutor<'a, 'b> {
             (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar_value)) => {
                 let wkb1 = scalar_value.scalar_as_wkb()?;
                 array.iter_as_wkb(&self.arg_types[0], self.num_iterations(), |i, wkb0| {
-                    func(i, wkb0, wkb1.as_ref())
+                    func(i, wkb0.as_ref(), wkb1.as_ref())
                 })
             }
             (ColumnarValue::Scalar(scalar_value), ColumnarValue::Array(array)) => {
                 let wkb0 = scalar_value.scalar_as_wkb()?;
                 array.iter_as_wkb(&self.arg_types[1], self.num_iterations(), |i, wkb1| {
-                    func(i, wkb0.as_ref(), wkb1)
+                    func(i, wkb0.as_ref(), wkb1.as_ref())
                 })
             }
             (ColumnarValue::Scalar(scalar_value0), ColumnarValue::Scalar(scalar_value1)) => {
@@ -158,8 +160,8 @@ pub trait IterGeo {
     /// The function will always be called num_iteration types to support
     /// efficient iteration over scalar containers (e.g., so that implementations
     /// can parse the Wkb once and reuse the object).
-    fn iter_as_wkb<F: FnMut(usize, Option<&Wkb>) -> Result<()>>(
-        &self,
+    fn iter_as_wkb<'a, F: FnMut(usize, Option<Wkb<'a>>) -> Result<()>>(
+        &'a self,
         sedona_type: &SedonaType,
         num_iterations: usize,
         func: F,
@@ -174,8 +176,8 @@ trait ScalarGeo {
 }
 
 impl IterGeo for ArrayRef {
-    fn iter_as_wkb<F: FnMut(usize, Option<&Wkb>) -> Result<()>>(
-        &self,
+    fn iter_as_wkb<'a, F: FnMut(usize, Option<Wkb<'a>>) -> Result<()>>(
+        &'a self,
         sedona_type: &SedonaType,
         num_iterations: usize,
         func: F,
@@ -201,8 +203,8 @@ impl IterGeo for ArrayRef {
 }
 
 impl IterGeo for ScalarValue {
-    fn iter_as_wkb<F: FnMut(usize, Option<&Wkb>) -> Result<()>>(
-        &self,
+    fn iter_as_wkb<'a, F: FnMut(usize, Option<Wkb<'a>>) -> Result<()>>(
+        &'a self,
         sedona_type: &SedonaType,
         num_iterations: usize,
         mut func: F,
@@ -217,10 +219,15 @@ impl IterGeo for ScalarValue {
             return internal_err!("Can't iterate over {:?} type as WKB", self);
         }
 
-        let wkb = self.scalar_as_wkb()?;
-        for i in 0..num_iterations {
-            func(i, wkb.as_ref())?;
+        if num_iterations == 0 {
+            return Ok(());
         }
+
+        let wkb = self.scalar_as_wkb()?;
+        for i in 0..(num_iterations - 1) {
+            func(i, wkb.clone())?;
+        }
+        func(num_iterations - 1, wkb)?;
 
         Ok(())
     }
@@ -241,8 +248,8 @@ impl ScalarGeo for ScalarValue {
 }
 
 impl IterGeo for ColumnarValue {
-    fn iter_as_wkb<F: FnMut(usize, Option<&Wkb>) -> Result<()>>(
-        &self,
+    fn iter_as_wkb<'a, F: FnMut(usize, Option<Wkb<'a>>) -> Result<()>>(
+        &'a self,
         sedona_type: &SedonaType,
         num_rows: usize,
         func: F,
@@ -322,14 +329,14 @@ fn iter_wkb_wkb_binary<
 fn iter_wkb_binary<
     'a,
     T: IntoIterator<Item = Option<&'a [u8]>>,
-    F: FnMut(usize, Option<&Wkb>) -> Result<()>,
+    F: FnMut(usize, Option<Wkb<'a>>) -> Result<()>,
 >(
     iterable: T,
     mut func: F,
 ) -> Result<()> {
     for (i, item) in iterable.into_iter().enumerate() {
         let wkb = parse_wkb_item(item)?;
-        func(i, wkb.as_ref())?;
+        func(i, wkb)?;
     }
 
     Ok(())
@@ -399,7 +406,7 @@ mod tests {
         let mut wkt_out = String::new();
         ColumnarValue::Array(Arc::new(wkb_array.clone()))
             .iter_as_wkb(&WKB_GEOMETRY, 3, |i, maybe_geom| {
-                write_to_test_output(&mut wkt_out, i, maybe_geom).unwrap();
+                write_to_test_output(&mut wkt_out, i, maybe_geom.as_ref()).unwrap();
                 Ok(())
             })
             .unwrap();
@@ -423,7 +430,7 @@ mod tests {
         let mut wkt_out = String::new();
         ColumnarValue::Array(Arc::new(wkb_view_array.clone()))
             .iter_as_wkb(&WKB_VIEW_GEOMETRY, 3, |i, maybe_geom| {
-                write_to_test_output(&mut wkt_out, i, maybe_geom).unwrap();
+                write_to_test_output(&mut wkt_out, i, maybe_geom.as_ref()).unwrap();
                 Ok(())
             })
             .unwrap();
@@ -604,7 +611,7 @@ mod tests {
         let mut wkt_out = String::new();
         ColumnarValue::Scalar(binary_scalar)
             .iter_as_wkb(&WKB_GEOMETRY, 1, |i, maybe_geom| {
-                write_to_test_output(&mut wkt_out, i, maybe_geom).unwrap();
+                write_to_test_output(&mut wkt_out, i, maybe_geom.as_ref()).unwrap();
                 Ok(())
             })
             .unwrap();
@@ -621,7 +628,7 @@ mod tests {
         let mut wkt_out = String::new();
         ColumnarValue::Scalar(binary_scalar)
             .iter_as_wkb(&WKB_VIEW_GEOMETRY, 1, |i, maybe_geom| {
-                write_to_test_output(&mut wkt_out, i, maybe_geom).unwrap();
+                write_to_test_output(&mut wkt_out, i, maybe_geom.as_ref()).unwrap();
                 Ok(())
             })
             .unwrap();

@@ -1,0 +1,289 @@
+use std::fmt::Display;
+
+use datafusion::config::{ConfigEntry, ConfigExtension, ConfigField, ExtensionOptions, Visit};
+use datafusion::prelude::SessionConfig;
+use datafusion_common::config_namespace;
+use datafusion_common::Result;
+use regex::Regex;
+
+/// Helper function to register the spatial join optimizer with a session config
+pub fn add_sedona_option_extension(config: SessionConfig) -> SessionConfig {
+    config.with_option_extension(SedonaOptions::default())
+}
+
+config_namespace! {
+    /// Configuration options for Sedona.
+    pub struct SedonaOptions {
+        /// Options for spatial join
+        pub spatial_join: SpatialJoinOptions, default = SpatialJoinOptions::default()
+    }
+}
+
+config_namespace! {
+    /// Configuration options for spatial join.
+    ///
+    /// This struct controls various aspects of how spatial joins are performed,
+    /// including prepared geometry usage and spatial library used for evaluating
+    /// spatial predicates.
+    pub struct SpatialJoinOptions {
+        /// Enable optimized spatial join
+        pub enable: bool, default = true
+
+        /// Spatial library to use for spatial join
+        pub spatial_library: SpatialLibrary, default = SpatialLibrary::Geo
+
+        /// The execution mode determining how prepared geometries are used
+        pub execution_mode: ExecutionMode, default = ExecutionMode::PrepareNone
+    }
+}
+
+impl ConfigExtension for SedonaOptions {
+    const PREFIX: &'static str = "sedona";
+}
+
+impl ExtensionOptions for SedonaOptions {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
+    fn cloned(&self) -> Box<dyn ExtensionOptions> {
+        Box::new(self.clone())
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        <Self as ConfigField>::set(self, key, value)
+    }
+
+    fn entries(&self) -> Vec<ConfigEntry> {
+        struct Visitor(Vec<ConfigEntry>);
+
+        impl Visit for Visitor {
+            fn some<V: Display>(&mut self, key: &str, value: V, description: &'static str) {
+                self.0.push(ConfigEntry {
+                    key: key.to_string(),
+                    value: Some(value.to_string()),
+                    description,
+                })
+            }
+
+            fn none(&mut self, key: &str, description: &'static str) {
+                self.0.push(ConfigEntry {
+                    key: key.to_string(),
+                    value: None,
+                    description,
+                })
+            }
+        }
+
+        let mut v = Visitor(vec![]);
+        self.visit(&mut v, Self::PREFIX, "");
+        v.0
+    }
+}
+
+/// Execution mode for spatial join operations, controlling prepared geometry usage.
+///
+/// Prepared geometries are pre-processed spatial objects that can significantly
+/// improve performance for spatial predicate evaluation when the same geometry
+/// is used multiple times in comparisons.
+///
+/// The choice of execution mode depends on the specific characteristics of your
+/// spatial join workload, as well as the spatial relation predicate between the
+/// two tables. Some of the spatial relation computations cannot be accelerated by
+/// prepared geometries at all (for example, ST_Touches, ST_Crosses, ST_DWithin).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExecutionMode {
+    /// Don't use prepared geometries for spatial predicate evaluation.
+    PrepareNone,
+
+    /// Create prepared geometries for the build side (left/smaller table).
+    PrepareBuild,
+
+    /// Create prepared geometries for the probe side (right/larger table).
+    PrepareProbe,
+
+    /// Automatically choose the best execution mode based on the characteristics of
+    /// first few geometries on the probe side.
+    Speculative(usize),
+}
+
+impl ConfigField for ExecutionMode {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        let value = match self {
+            ExecutionMode::PrepareNone => "none".into(),
+            ExecutionMode::PrepareBuild => "build".into(),
+            ExecutionMode::PrepareProbe => "probe".into(),
+            ExecutionMode::Speculative(n) => format!("auto[{n}]"),
+        };
+        v.some(key, value, description);
+    }
+
+    fn set(&mut self, _key: &str, value: &str) -> Result<()> {
+        let value = value.to_lowercase();
+        let mode = match value.as_str() {
+            "none" => ExecutionMode::PrepareNone,
+            "build" => ExecutionMode::PrepareBuild,
+            "probe" => ExecutionMode::PrepareProbe,
+            _ => {
+                // Match "auto" or "auto[number]" pattern
+                let auto_regex = Regex::new(r"^auto(?:\[(\d+)\])?$").unwrap();
+
+                if let Some(captures) = auto_regex.captures(&value) {
+                    // If there's a captured group (the number), use it; otherwise default to 100
+                    let n = if let Some(number_match) = captures.get(1) {
+                        match number_match.as_str().parse::<usize>() {
+                            Ok(n) => {
+                                if n == 0 {
+                                    return Err(datafusion_common::DataFusionError::Configuration(
+                                        "Invalid number in auto mode: 0 is not allowed".to_string(),
+                                    ));
+                                }
+                                n
+                            }
+                            Err(_) => {
+                                return Err(datafusion_common::DataFusionError::Configuration(
+                                    format!(
+                                        "Invalid number in auto mode: {}",
+                                        number_match.as_str()
+                                    ),
+                                ));
+                            }
+                        }
+                    } else {
+                        100 // Default for plain "auto"
+                    };
+                    ExecutionMode::Speculative(n)
+                } else {
+                    return Err(datafusion_common::DataFusionError::Configuration(
+                        format!("Unknown execution mode: {value}. Expected formats: none, build, probe, auto, auto[number]")
+                    ));
+                }
+            }
+        };
+        *self = mode;
+        Ok(())
+    }
+}
+
+/// The spatial library to use for evaluating spatial predicates
+#[derive(Debug, PartialEq, Clone)]
+pub enum SpatialLibrary {
+    /// Use georust/geo library (https://github.com/georust/geo)
+    Geo,
+
+    /// Use GEOS library via georust/geos (https://github.com/georust/geos)
+    Geos,
+
+    /// Use tiny geometry library (https://github.com/tidwall/tg)
+    Tg,
+}
+
+impl ConfigField for SpatialLibrary {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        let value = match self {
+            SpatialLibrary::Geo => "geo",
+            SpatialLibrary::Geos => "geos",
+            SpatialLibrary::Tg => "tg",
+        };
+        v.some(key, value, description);
+    }
+
+    fn set(&mut self, _key: &str, value: &str) -> Result<()> {
+        let value = value.to_lowercase();
+        let library = match value.as_str() {
+            "geo" => SpatialLibrary::Geo,
+            "geos" => SpatialLibrary::Geos,
+            "tg" => SpatialLibrary::Tg,
+            _ => {
+                return Err(datafusion_common::DataFusionError::Configuration(format!(
+                    "Unknown spatial library: {value}. Expected: geo, geos, tg"
+                )));
+            }
+        };
+        *self = library;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion::config::ConfigField;
+
+    #[test]
+    fn test_execution_mode_parsing_basic_modes() {
+        let mut mode = ExecutionMode::PrepareNone;
+
+        // Test basic modes
+        assert!(mode.set("", "none").is_ok());
+        assert_eq!(mode, ExecutionMode::PrepareNone);
+
+        assert!(mode.set("", "build").is_ok());
+        assert_eq!(mode, ExecutionMode::PrepareBuild);
+
+        assert!(mode.set("", "probe").is_ok());
+        assert_eq!(mode, ExecutionMode::PrepareProbe);
+    }
+
+    #[test]
+    fn test_execution_mode_parsing_auto_modes() {
+        let mut mode = ExecutionMode::PrepareNone;
+
+        // Test auto mode with default value
+        assert!(mode.set("", "auto").is_ok());
+        assert_eq!(mode, ExecutionMode::Speculative(100));
+
+        // Test auto mode with specific values
+        assert!(mode.set("", "auto[10]").is_ok());
+        assert_eq!(mode, ExecutionMode::Speculative(10));
+
+        assert!(mode.set("", "auto[500]").is_ok());
+        assert_eq!(mode, ExecutionMode::Speculative(500));
+
+        assert!(mode.set("", "auto[1]").is_ok());
+        assert_eq!(mode, ExecutionMode::Speculative(1));
+    }
+
+    #[test]
+    fn test_execution_mode_parsing_case_insensitive() {
+        let mut mode = ExecutionMode::PrepareNone;
+
+        // Test case insensitivity
+        assert!(mode.set("", "NONE").is_ok());
+        assert_eq!(mode, ExecutionMode::PrepareNone);
+
+        assert!(mode.set("", "Build").is_ok());
+        assert_eq!(mode, ExecutionMode::PrepareBuild);
+
+        assert!(mode.set("", "PROBE").is_ok());
+        assert_eq!(mode, ExecutionMode::PrepareProbe);
+
+        assert!(mode.set("", "AUTO").is_ok());
+        assert_eq!(mode, ExecutionMode::Speculative(100));
+
+        assert!(mode.set("", "Auto[50]").is_ok());
+        assert_eq!(mode, ExecutionMode::Speculative(50));
+    }
+
+    #[test]
+    fn test_execution_mode_parsing_invalid_formats() {
+        let mut mode = ExecutionMode::PrepareNone;
+
+        // Test invalid modes
+        assert!(mode.set("", "invalid").is_err());
+        assert!(mode.set("", "").is_err());
+        assert!(mode.set("", "auto[0]").is_err());
+        assert!(mode.set("", "auto[]").is_err());
+        assert!(mode.set("", "auto[abc]").is_err());
+        assert!(mode.set("", "auto[10").is_err());
+        assert!(mode.set("", "auto10]").is_err());
+        assert!(mode.set("", "auto[10][20]").is_err());
+        assert!(mode.set("", "auto 10").is_err());
+        assert!(mode.set("", "auto:10").is_err());
+        assert!(mode.set("", "auto(10)").is_err());
+    }
+}

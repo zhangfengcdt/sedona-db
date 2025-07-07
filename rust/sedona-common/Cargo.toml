@@ -1,0 +1,14 @@
+[package]
+name = "sedona-common"
+version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description.workspace = true
+readme.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+regex = { workspace = true }
