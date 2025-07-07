@@ -1,4 +1,5 @@
 pub mod executor;
+mod predicates;
 pub mod register;
 pub mod st_analyze_aggr;
 mod st_area;
@@ -8,10 +9,8 @@ pub mod st_envelope_aggr;
 mod st_geomfromwkb;
 mod st_geomfromwkt;
 pub mod st_intersection_aggr;
-mod st_intersects;
 mod st_length;
 mod st_perimeter;
 mod st_point;
 pub mod st_union_aggr;
-mod st_within;
 mod st_xy;

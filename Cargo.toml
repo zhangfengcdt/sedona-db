@@ -2,6 +2,7 @@
 members = [
     "c/sedona-geoarrow-c",
     "c/sedona-s2geography",
+    "c/sedona-tg",
     "rust/sedona-adbc",
     "rust/sedona-expr",
     "rust/sedona-functions",

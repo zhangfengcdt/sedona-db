@@ -4952,6 +4952,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "sedona-tg"
+version = "0.0.1"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "bindgen 0.71.1",
+ "cc",
+ "criterion",
+ "datafusion-common",
+ "datafusion-expr",
+ "rstest",
+ "sedona",
+ "sedona-expr",
+ "sedona-functions",
+ "sedona-schema",
+ "sedona-testing",
+ "thiserror 2.0.12",
+]
+
+[[package]]
 name = "sedonadb"
 version = "0.1.0"
 dependencies = [
