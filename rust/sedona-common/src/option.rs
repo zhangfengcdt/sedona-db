@@ -32,8 +32,19 @@ config_namespace! {
         /// Spatial library to use for spatial join
         pub spatial_library: SpatialLibrary, default = SpatialLibrary::Geo
 
+        /// Options for configuring the TG spatial library
+        pub tg: TgOptions, default = TgOptions::default()
+
         /// The execution mode determining how prepared geometries are used
         pub execution_mode: ExecutionMode, default = ExecutionMode::PrepareNone
+    }
+}
+
+config_namespace! {
+    /// Configuration options for the TG spatial library
+    pub struct TgOptions {
+        /// The index type to use for the TG spatial library
+        pub index_type: TgIndexType, default = TgIndexType::YStripes
     }
 }
 
@@ -95,7 +106,7 @@ impl ExtensionOptions for SedonaOptions {
 /// spatial join workload, as well as the spatial relation predicate between the
 /// two tables. Some of the spatial relation computations cannot be accelerated by
 /// prepared geometries at all (for example, ST_Touches, ST_Crosses, ST_DWithin).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum ExecutionMode {
     /// Don't use prepared geometries for spatial predicate evaluation.
     PrepareNone,
@@ -114,9 +125,9 @@ pub enum ExecutionMode {
 impl ConfigField for ExecutionMode {
     fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
         let value = match self {
-            ExecutionMode::PrepareNone => "none".into(),
-            ExecutionMode::PrepareBuild => "build".into(),
-            ExecutionMode::PrepareProbe => "probe".into(),
+            ExecutionMode::PrepareNone => "prepare_none".into(),
+            ExecutionMode::PrepareBuild => "prepare_build".into(),
+            ExecutionMode::PrepareProbe => "prepare_probe".into(),
             ExecutionMode::Speculative(n) => format!("auto[{n}]"),
         };
         v.some(key, value, description);
@@ -125,9 +136,9 @@ impl ConfigField for ExecutionMode {
     fn set(&mut self, _key: &str, value: &str) -> Result<()> {
         let value = value.to_lowercase();
         let mode = match value.as_str() {
-            "none" => ExecutionMode::PrepareNone,
-            "build" => ExecutionMode::PrepareBuild,
-            "probe" => ExecutionMode::PrepareProbe,
+            "prepare_none" => ExecutionMode::PrepareNone,
+            "prepare_build" => ExecutionMode::PrepareBuild,
+            "prepare_probe" => ExecutionMode::PrepareProbe,
             _ => {
                 // Match "auto" or "auto[number]" pattern
                 let auto_regex = Regex::new(r"^auto(?:\[(\d+)\])?$").unwrap();
@@ -159,7 +170,7 @@ impl ConfigField for ExecutionMode {
                     ExecutionMode::Speculative(n)
                 } else {
                     return Err(datafusion_common::DataFusionError::Configuration(
-                        format!("Unknown execution mode: {value}. Expected formats: none, build, probe, auto, auto[number]")
+                        format!("Unknown execution mode: {value}. Expected formats: prepare_none, prepare_build, prepare_probe, auto, auto[number]")
                     ));
                 }
             }
@@ -170,7 +181,7 @@ impl ConfigField for ExecutionMode {
 }
 
 /// The spatial library to use for evaluating spatial predicates
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum SpatialLibrary {
     /// Use georust/geo library (https://github.com/georust/geo)
     Geo,
@@ -209,6 +220,41 @@ impl ConfigField for SpatialLibrary {
     }
 }
 
+/// The index type to use for the TG spatial library
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum TgIndexType {
+    /// Natural index
+    Natural,
+
+    /// Y-stripes index
+    YStripes,
+}
+
+impl ConfigField for TgIndexType {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        let value = match self {
+            TgIndexType::Natural => "natural",
+            TgIndexType::YStripes => "ystripes",
+        };
+        v.some(key, value, description);
+    }
+
+    fn set(&mut self, _key: &str, value: &str) -> Result<()> {
+        let value = value.to_lowercase();
+        let index_type = match value.as_str() {
+            "natural" => TgIndexType::Natural,
+            "ystripes" => TgIndexType::YStripes,
+            _ => {
+                return Err(datafusion_common::DataFusionError::Configuration(format!(
+                    "Unknown TG index type: {value}. Expected: natural, ystripes"
+                )));
+            }
+        };
+        *self = index_type;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,13 +265,13 @@ mod tests {
         let mut mode = ExecutionMode::PrepareNone;
 
         // Test basic modes
-        assert!(mode.set("", "none").is_ok());
+        assert!(mode.set("", "prepare_none").is_ok());
         assert_eq!(mode, ExecutionMode::PrepareNone);
 
-        assert!(mode.set("", "build").is_ok());
+        assert!(mode.set("", "prepare_build").is_ok());
         assert_eq!(mode, ExecutionMode::PrepareBuild);
 
-        assert!(mode.set("", "probe").is_ok());
+        assert!(mode.set("", "prepare_probe").is_ok());
         assert_eq!(mode, ExecutionMode::PrepareProbe);
     }
 
@@ -253,13 +299,13 @@ mod tests {
         let mut mode = ExecutionMode::PrepareNone;
 
         // Test case insensitivity
-        assert!(mode.set("", "NONE").is_ok());
+        assert!(mode.set("", "PREPARE_NONE").is_ok());
         assert_eq!(mode, ExecutionMode::PrepareNone);
 
-        assert!(mode.set("", "Build").is_ok());
+        assert!(mode.set("", "PREPARE_BUILD").is_ok());
         assert_eq!(mode, ExecutionMode::PrepareBuild);
 
-        assert!(mode.set("", "PROBE").is_ok());
+        assert!(mode.set("", "PREPARE_PROBE").is_ok());
         assert_eq!(mode, ExecutionMode::PrepareProbe);
 
         assert!(mode.set("", "AUTO").is_ok());
@@ -285,5 +331,31 @@ mod tests {
         assert!(mode.set("", "auto 10").is_err());
         assert!(mode.set("", "auto:10").is_err());
         assert!(mode.set("", "auto(10)").is_err());
+    }
+
+    #[test]
+    fn test_tg_index_type_parsing() {
+        let mut index_type = TgIndexType::YStripes;
+
+        assert!(index_type.set("", "natural").is_ok());
+        assert_eq!(index_type, TgIndexType::Natural);
+
+        assert!(index_type.set("", "Natural").is_ok());
+        assert_eq!(index_type, TgIndexType::Natural);
+
+        assert!(index_type.set("", "ystripes").is_ok());
+        assert_eq!(index_type, TgIndexType::YStripes);
+
+        assert!(index_type.set("", "YStripes").is_ok());
+        assert_eq!(index_type, TgIndexType::YStripes);
+    }
+
+    #[test]
+    fn test_tg_index_type_parsing_invalid_formats() {
+        let mut index_type = TgIndexType::YStripes;
+
+        assert!(index_type.set("", "unindexed").is_err());
+        assert!(index_type.set("", "invalid").is_err());
+        assert!(index_type.set("", "").is_err());
     }
 }

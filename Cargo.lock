@@ -4927,6 +4927,7 @@ dependencies = [
  "sedona-geometry",
  "sedona-schema",
  "sedona-testing",
+ "sedona-tg",
  "tokio",
  "wkb",
  "wkt 0.13.0",

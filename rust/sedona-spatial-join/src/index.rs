@@ -19,18 +19,24 @@ use parking_lot::Mutex;
 use wkb::reader::Wkb;
 
 use crate::{
-    prep_geom_array::{OwnedPreparedGeometry, PreparedGeometryArray},
-    spatial_predicate::{EvaluatedGeometryArray, SpatialPredicate, SpatialPredicateEvaluator},
+    concurrent_reservation::ConcurrentReservation,
+    operand_evaluator::{create_operand_evaluator, EvaluatedGeometryArray, OperandEvaluator},
+    refine::{create_refiner, IndexQueryResultRefiner},
+    spatial_predicate::SpatialPredicate,
     stream::SpatialJoinMetrics,
     utils::need_produce_result_in_final,
 };
 use arrow::array::BooleanBufferBuilder;
-use sedona_common::option::{ExecutionMode, SpatialJoinOptions};
+use sedona_common::option::SpatialJoinOptions;
 
 // Type aliases for better readability
 type SpatialRTree = RTree<f64>;
 type DataIdToBatchPos = Vec<(i32, i32)>;
 type RTreeBuildResult = (SpatialRTree, DataIdToBatchPos);
+
+/// The prealloc size for the refiner reservation. This is used to reduce the frequency of growing
+/// the reservation when updating the refiner memory reservation.
+const REFINER_RESERVATION_PREALLOC_SIZE: usize = 10 * 1024 * 1024; // 10MB
 
 /// Builder for constructing a SpatialIndex from geometry batches.
 ///
@@ -40,6 +46,7 @@ type RTreeBuildResult = (SpatialRTree, DataIdToBatchPos);
 /// 3. Setting up memory tracking and visited bitmaps
 /// 4. Configuring prepared geometries based on execution mode
 pub(crate) struct SpatialIndexBuilder {
+    spatial_predicate: SpatialPredicate,
     options: SpatialJoinOptions,
     join_type: JoinType,
     probe_threads_count: usize,
@@ -49,11 +56,15 @@ pub(crate) struct SpatialIndexBuilder {
     indexed_batches: Vec<IndexedBatch>,
     /// Memory reservation for tracking the memory usage of the spatial index
     reservation: MemoryReservation,
+
+    /// Memory pool for managing the memory usage of the spatial index
+    memory_pool: Arc<dyn MemoryPool>,
 }
 
 impl SpatialIndexBuilder {
     /// Create a new builder with the given configuration.
     pub fn new(
+        spatial_predicate: SpatialPredicate,
         options: SpatialJoinOptions,
         join_type: JoinType,
         probe_threads_count: usize,
@@ -64,12 +75,14 @@ impl SpatialIndexBuilder {
         let reservation = consumer.register(&memory_pool);
 
         Ok(Self {
+            spatial_predicate,
             options,
             join_type,
             probe_threads_count,
             metrics,
             indexed_batches: Vec::new(),
             reservation,
+            memory_pool,
         })
     }
 
@@ -144,18 +157,8 @@ impl SpatialIndexBuilder {
         Ok(Some(Mutex::new(bitmaps)))
     }
 
-    /// Create rtree data index to prepared geometry array mapping when needed
-    fn build_prepared_geometries_array(
-        &mut self,
-        batch_pos_vec: &Vec<(i32, i32)>,
-    ) -> Result<Option<(PreparedGeometryArray, Vec<usize>)>> {
-        if !matches!(
-            self.options.execution_mode,
-            ExecutionMode::PrepareBuild | ExecutionMode::Speculative(_)
-        ) {
-            return Ok(None);
-        }
-
+    /// Create an rtree data index to consecutive index mapping.
+    fn build_geom_idx_vec(&mut self, batch_pos_vec: &Vec<(i32, i32)>) -> Vec<usize> {
         let mut num_geometries = 0;
         let mut batch_idx_offset = Vec::with_capacity(self.indexed_batches.len() + 1);
         batch_idx_offset.push(0);
@@ -164,47 +167,62 @@ impl SpatialIndexBuilder {
             batch_idx_offset.push(num_geometries);
         }
 
-        let prepared_geometries = PreparedGeometryArray::new(num_geometries);
-        let mut prepared_geom_idx_vec = Vec::with_capacity(batch_pos_vec.len());
+        let mut geom_idx_vec = Vec::with_capacity(batch_pos_vec.len());
+        self.reservation.grow(geom_idx_vec.allocated_size());
         for (batch_idx, row_idx) in batch_pos_vec {
             // Convert (batch_idx, row_idx) to a linear, sequential index
             let batch_offset = batch_idx_offset[*batch_idx as usize];
             let prepared_idx = batch_offset + *row_idx as usize;
-            prepared_geom_idx_vec.push(prepared_idx);
+            geom_idx_vec.push(prepared_idx);
         }
 
-        Ok(Some((prepared_geometries, prepared_geom_idx_vec)))
+        geom_idx_vec
     }
 
     /// Finish building and return the completed SpatialIndex.
     pub fn finish(mut self, schema: SchemaRef) -> Result<SpatialIndex> {
         if self.indexed_batches.is_empty() {
             return Ok(SpatialIndex::empty(
+                self.spatial_predicate,
                 schema,
+                self.options,
                 AtomicUsize::new(self.probe_threads_count),
                 self.reservation,
             ));
         }
 
+        let evaluator = create_operand_evaluator(&self.spatial_predicate, self.options.clone());
+        let num_geoms = self
+            .indexed_batches
+            .iter()
+            .map(|batch| batch.batch.num_rows())
+            .sum::<usize>();
+        let refiner = create_refiner(
+            self.options.spatial_library,
+            &self.spatial_predicate,
+            self.options.clone(),
+            num_geoms,
+        );
+        let consumer = MemoryConsumer::new("SpatialJoinRefiner");
+        let refiner_reservation = consumer.register(&self.memory_pool);
+        let refiner_reservation =
+            ConcurrentReservation::try_new(REFINER_RESERVATION_PREALLOC_SIZE, refiner_reservation)
+                .unwrap();
+
         let (rtree, batch_pos_vec) = self.build_rtree()?;
+        let geom_idx_vec = self.build_geom_idx_vec(&batch_pos_vec);
         let visited_left_side = self.build_visited_bitmaps()?;
-        let (prepared_geom_array, prepared_geom_idx_vec) =
-            match self.build_prepared_geometries_array(&batch_pos_vec)? {
-                Some((prepared_geom_array, prepared_geom_idx_vec)) => {
-                    (Some(prepared_geom_array), prepared_geom_idx_vec)
-                }
-                None => (None, Vec::new()),
-            };
 
         Ok(SpatialIndex {
             schema,
+            evaluator,
+            refiner,
+            refiner_reservation,
             rtree,
             data_id_to_batch_pos: batch_pos_vec,
             indexed_batches: self.indexed_batches,
-            prepared_geometries: prepared_geom_array,
-            prepared_geom_idx_vec,
+            geom_idx_vec,
             visited_left_side,
-            options: self.options,
             probe_threads_counter: AtomicUsize::new(self.probe_threads_count),
             reservation: self.reservation,
         })
@@ -213,6 +231,15 @@ impl SpatialIndexBuilder {
 
 pub(crate) struct SpatialIndex {
     schema: SchemaRef,
+
+    /// The spatial predicate evaluator for the spatial predicate.
+    evaluator: Arc<dyn OperandEvaluator>,
+
+    /// The refiner for refining the index query results.
+    refiner: Arc<dyn IndexQueryResultRefiner>,
+
+    /// Memory reservation for tracking the memory usage of the refiner
+    refiner_reservation: ConcurrentReservation,
 
     /// R-tree index for the geometry batches. It takes MBRs as query windows and returns
     /// data indexes. These data indexes should be translated using `data_id_to_batch_pos` to get
@@ -226,16 +253,15 @@ pub(crate) struct SpatialIndex {
     /// An array for translating rtree data index to geometry batch index and row index
     data_id_to_batch_pos: Vec<(i32, i32)>,
 
-    /// Prepared geometries for the build side
-    prepared_geometries: Option<PreparedGeometryArray>,
-    /// An array for translating rtree data index to prepared geometries array index
-    prepared_geom_idx_vec: Vec<usize>,
+    /// An array for translating rtree data index to consecutive index. Each geometry may be indexed by
+    /// multiple boxes, so there could be multiple data indexes for the same geometry. A mapping for
+    /// squashing the index makes it easier for persisting per-geometry auxiliary data for evaluating
+    /// the spatial predicate. This is extensively used by the spatial predicate evaluators for storing
+    /// prepared geometries.
+    geom_idx_vec: Vec<usize>,
 
     /// Shared bitmap builders for visited left indices, one per batch
     visited_left_side: Option<Mutex<Vec<BooleanBufferBuilder>>>,
-
-    /// Options for spatial join execution
-    options: SpatialJoinOptions,
 
     /// Counter of running probe-threads, potentially able to update `bitmap`.
     /// Each time a probe thread finished probing the index, it will decrement the counter.
@@ -281,21 +307,32 @@ pub struct JoinResultMetrics {
 
 impl SpatialIndex {
     fn empty(
+        spatial_predicate: SpatialPredicate,
         schema: SchemaRef,
+        options: SpatialJoinOptions,
         probe_threads_counter: AtomicUsize,
-        reservation: MemoryReservation,
+        mut reservation: MemoryReservation,
     ) -> Self {
-        let rtree_builder = RTreeBuilder::<f64>::new(0);
-        let rtree = rtree_builder.finish::<STRSort>();
+        let evaluator = create_operand_evaluator(&spatial_predicate, options.clone());
+        let refiner = create_refiner(
+            options.spatial_library,
+            &spatial_predicate,
+            options.clone(),
+            0,
+        );
+        let refiner_reservation = reservation.split(0);
+        let refiner_reservation = ConcurrentReservation::try_new(0, refiner_reservation).unwrap();
+        let rtree = RTreeBuilder::<f64>::new(0).finish::<STRSort>();
         Self {
             schema,
+            evaluator,
+            refiner,
+            refiner_reservation,
             rtree,
             data_id_to_batch_pos: Vec::new(),
             indexed_batches: Vec::new(),
-            prepared_geometries: None,
-            prepared_geom_idx_vec: Vec::new(),
+            geom_idx_vec: Vec::new(),
             visited_left_side: None,
-            options: SpatialJoinOptions::default(),
             probe_threads_counter,
             reservation,
         }
@@ -314,12 +351,29 @@ impl SpatialIndex {
         &self.indexed_batches.get_unchecked(batch_idx).batch
     }
 
+    /// Query the spatial index with a probe geometry to find matching build-side geometries.
+    ///
+    /// This method implements a two-phase spatial join query:
+    /// 1. **Filter phase**: Uses the R-tree index with the probe geometry's bounding rectangle
+    ///    to quickly identify candidate geometries that might satisfy the spatial predicate
+    /// 2. **Refinement phase**: Evaluates the exact spatial predicate on candidates to determine
+    ///    actual matches
+    ///
+    /// # Arguments
+    /// * `probe_wkb` - The probe geometry in WKB format
+    /// * `probe_rect` - The minimum bounding rectangle of the probe geometry
+    /// * `distance` - Optional distance parameter for distance-based spatial predicates
+    /// * `build_batch_positions` - Output vector that will be populated with (batch_idx, row_idx)
+    ///   pairs for each matching build-side geometry
+    ///
+    /// # Returns
+    /// * `JoinResultMetrics` containing the number of actual matches (`count`) and the number
+    ///   of candidates from the filter phase (`candidate_count`)
     pub fn query(
         &self,
         probe_wkb: &Wkb,
         probe_rect: &Rect,
         distance: &Option<ColumnarValue>,
-        evaluator: &dyn SpatialPredicateEvaluator,
         build_batch_positions: &mut Vec<(i32, i32)>,
     ) -> Result<JoinResultMetrics> {
         let min = probe_rect.min();
@@ -337,149 +391,48 @@ impl SpatialIndex {
         candidates.sort_unstable();
         candidates.dedup();
 
-        match self.options.execution_mode {
-            ExecutionMode::PrepareBuild => self.refine_prepare_build(
-                probe_wkb,
-                &candidates,
-                evaluator,
-                distance,
-                build_batch_positions,
-            ),
-            ExecutionMode::PrepareProbe => self.refine_prepare_probe(
-                probe_wkb,
-                &candidates,
-                evaluator,
-                distance,
-                build_batch_positions,
-            ),
-            ExecutionMode::PrepareNone => self.refine_prepare_none(
-                probe_wkb,
-                &candidates,
-                evaluator,
-                distance,
-                build_batch_positions,
-            ),
-            ExecutionMode::Speculative(_) => {
-                unimplemented!("ExecutionMode::Speculative for spatial joins is not implemented")
-            }
-        }
+        // Refine the candidates retrieved from the r-tree index by evaluating the actual spatial predicate
+        self.refine(probe_wkb, &candidates, distance, build_batch_positions)
     }
 
-    fn refine_prepare_none(
+    fn refine(
         &self,
         probe_wkb: &Wkb,
         candidates: &[u32],
-        evaluator: &dyn SpatialPredicateEvaluator,
         distance: &Option<ColumnarValue>,
         build_batch_positions: &mut Vec<(i32, i32)>,
     ) -> Result<JoinResultMetrics> {
         let candidate_count = candidates.len();
 
-        let batch_positions = candidates
-            .iter()
-            .map(|c| unsafe { *self.data_id_to_batch_pos.get_unchecked(*c as usize) })
-            .collect::<Vec<_>>();
-
-        let mut num_results = 0;
-
-        for (batch_idx, row_idx) in batch_positions {
+        let mut index_query_results = Vec::with_capacity(candidate_count);
+        for data_idx in candidates {
+            let pos = unsafe { *self.data_id_to_batch_pos.get_unchecked(*data_idx as usize) };
+            let (batch_idx, row_idx) = pos;
             let indexed_batch = &self.indexed_batches[batch_idx as usize];
             let build_wkb = indexed_batch.wkb(row_idx as usize);
             let Some(build_wkb) = build_wkb else {
                 continue;
             };
-            let distance =
-                evaluator.resolve_distance(indexed_batch.distance(), distance, row_idx as usize)?;
-            if evaluator.evaluate_predicate(build_wkb, probe_wkb, distance)? {
-                num_results += 1;
-                build_batch_positions.push((batch_idx, row_idx));
-            }
+            let distance = self.evaluator.resolve_distance(
+                indexed_batch.distance(),
+                distance,
+                row_idx as usize,
+            )?;
+            let geom_idx = self.geom_idx_vec[*data_idx as usize];
+            index_query_results.push(IndexQueryResult {
+                wkb: build_wkb,
+                distance,
+                geom_idx,
+                position: pos,
+            });
         }
 
-        Ok(JoinResultMetrics {
-            count: num_results,
-            candidate_count,
-        })
-    }
+        let results = self.refiner.refine(probe_wkb, &index_query_results)?;
+        let num_results = results.len();
+        build_batch_positions.extend(results);
 
-    fn refine_prepare_probe(
-        &self,
-        probe_wkb: &Wkb,
-        candidates: &[u32],
-        evaluator: &dyn SpatialPredicateEvaluator,
-        distance: &Option<ColumnarValue>,
-        build_batch_positions: &mut Vec<(i32, i32)>,
-    ) -> Result<JoinResultMetrics> {
-        let candidate_count = candidates.len();
-        let batch_positions = candidates
-            .iter()
-            .map(|c| unsafe { *self.data_id_to_batch_pos.get_unchecked(*c as usize) })
-            .collect::<Vec<_>>();
-
-        let mut num_results = 0;
-        let prep_geom = OwnedPreparedGeometry::try_from_wkb(probe_wkb.buf())?;
-
-        for (batch_idx, row_idx) in batch_positions {
-            let indexed_batch = &self.indexed_batches[batch_idx as usize];
-            let build_wkb = indexed_batch.wkb(row_idx as usize);
-            let Some(build_wkb) = build_wkb else {
-                continue;
-            };
-            let distance =
-                evaluator.resolve_distance(indexed_batch.distance(), distance, row_idx as usize)?;
-            let build_geom = geos::Geometry::new_from_wkb(build_wkb.buf())
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            if evaluator.evaluate_predicate_prepare_right(&build_geom, &prep_geom, distance)? {
-                num_results += 1;
-                build_batch_positions.push((batch_idx, row_idx));
-            }
-        }
-
-        Ok(JoinResultMetrics {
-            count: num_results,
-            candidate_count,
-        })
-    }
-
-    fn refine_prepare_build(
-        &self,
-        probe_wkb: &Wkb,
-        candidates: &[u32],
-        evaluator: &dyn SpatialPredicateEvaluator,
-        distance: &Option<ColumnarValue>,
-        build_batch_positions: &mut Vec<(i32, i32)>,
-    ) -> Result<JoinResultMetrics> {
-        let candidate_count = candidates.len();
-        let probe_geom: geos::Geometry = geos::Geometry::new_from_wkb(probe_wkb.buf())
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        let prepared_geometries = self.prepared_geometries.as_ref().unwrap();
-        let mut num_results = 0;
-        for data_index in candidates {
-            let (batch_idx, row_idx) = unsafe {
-                *self
-                    .data_id_to_batch_pos
-                    .get_unchecked(*data_index as usize)
-            };
-            let indexed_batch = &self.indexed_batches[batch_idx as usize];
-            let wkb = indexed_batch.wkb(row_idx as usize);
-            let Some(wkb) = wkb else {
-                continue;
-            };
-
-            let distance =
-                evaluator.resolve_distance(indexed_batch.distance(), distance, row_idx as usize)?;
-
-            let prepared_idx = self.prepared_geom_idx_vec[*data_index as usize];
-            let owned_prep_geom = prepared_geometries.get_or_create(prepared_idx, || {
-                OwnedPreparedGeometry::try_from_wkb(wkb.buf())
-            })?;
-
-            if evaluator.evaluate_predicate_prepare_left(owned_prep_geom, &probe_geom, distance)? {
-                build_batch_positions.push((batch_idx, row_idx));
-                num_results += 1;
-            }
-        }
+        // Update refiner memory reservation
+        self.refiner_reservation.resize(self.refiner.mem_usage())?;
 
         Ok(JoinResultMetrics {
             count: num_results,
@@ -500,6 +453,13 @@ impl SpatialIndex {
     }
 }
 
+pub struct IndexQueryResult<'a, 'b> {
+    pub wkb: &'b Wkb<'a>,
+    pub distance: Option<f64>,
+    pub geom_idx: usize,
+    pub position: (i32, i32),
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn build_index(
     mut build_schema: SchemaRef,
@@ -516,7 +476,9 @@ pub(crate) async fn build_index(
         let consumer = MemoryConsumer::new("SpatialJoinIndex");
         let reservation = consumer.register(&memory_pool);
         return Ok(SpatialIndex::empty(
+            spatial_predicate,
             build_schema,
+            options,
             AtomicUsize::new(probe_threads_count),
             reservation,
         ));
@@ -525,7 +487,7 @@ pub(crate) async fn build_index(
     // Update schema from the first stream
     build_schema = build_streams.first().unwrap().schema();
     let metrics = metrics_vec.first().unwrap().clone();
-    let evaluator = spatial_predicate.evaluator(options.clone());
+    let evaluator = create_operand_evaluator(&spatial_predicate, options.clone());
 
     // Spawn all tasks to scan all build streams concurrently
     let mut join_set = JoinSet::new();
@@ -544,6 +506,7 @@ pub(crate) async fn build_index(
 
     // Create the builder to build the index
     let mut builder = SpatialIndexBuilder::new(
+        spatial_predicate,
         options,
         join_type,
         probe_threads_count,
@@ -567,7 +530,7 @@ pub(crate) async fn build_index(
 
 async fn collect_build_partition(
     mut stream: SendableRecordBatchStream,
-    evaluator: &dyn SpatialPredicateEvaluator,
+    evaluator: &dyn OperandEvaluator,
     metrics: &SpatialJoinMetrics,
     mut reservation: MemoryReservation,
 ) -> Result<(Vec<IndexedBatch>, MemoryReservation)> {
@@ -599,8 +562,11 @@ const RTREE_MEMORY_ESTIMATE_PER_RECT: usize = 60;
 
 #[cfg(test)]
 mod tests {
+    use crate::spatial_predicate::{RelationPredicate, SpatialRelationType};
+
     use super::*;
     use datafusion_execution::memory_pool::GreedyMemoryPool;
+    use datafusion_physical_expr::expressions::Column;
     use sedona_common::option::{ExecutionMode, SpatialJoinOptions};
     use sedona_schema::datatypes::WKB_GEOMETRY;
     use sedona_testing::create::create_array;
@@ -614,9 +580,21 @@ mod tests {
         };
         let metrics = SpatialJoinMetrics::default();
         let schema = Arc::new(arrow_schema::Schema::empty());
+        let spatial_predicate = SpatialPredicate::Relation(RelationPredicate::new(
+            Arc::new(Column::new("geom", 0)),
+            Arc::new(Column::new("geom", 1)),
+            SpatialRelationType::Intersects,
+        ));
 
-        let builder =
-            SpatialIndexBuilder::new(options, JoinType::Inner, 4, memory_pool, metrics).unwrap();
+        let builder = SpatialIndexBuilder::new(
+            spatial_predicate,
+            options,
+            JoinType::Inner,
+            4,
+            memory_pool,
+            metrics,
+        )
+        .unwrap();
 
         // Test finishing with empty data
         let index = builder.finish(schema.clone()).unwrap();
@@ -636,8 +614,21 @@ mod tests {
         };
         let metrics = SpatialJoinMetrics::default();
 
-        let mut builder =
-            SpatialIndexBuilder::new(options, JoinType::Inner, 4, memory_pool, metrics).unwrap();
+        let spatial_predicate = SpatialPredicate::Relation(RelationPredicate::new(
+            Arc::new(Column::new("geom", 0)),
+            Arc::new(Column::new("geom", 1)),
+            SpatialRelationType::Intersects,
+        ));
+
+        let mut builder = SpatialIndexBuilder::new(
+            spatial_predicate,
+            options,
+            JoinType::Inner,
+            4,
+            memory_pool,
+            metrics,
+        )
+        .unwrap();
 
         // Create a simple test geometry batch
         let schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
