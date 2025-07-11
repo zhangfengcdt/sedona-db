@@ -42,7 +42,7 @@ use crate::{exec::create_plan_from_sql, projection::unwrap_stream};
 /// interface for configuring the behaviour of
 pub struct SedonaContext {
     pub ctx: SessionContext,
-    functions: FunctionSet,
+    pub functions: FunctionSet,
 }
 
 impl SedonaContext {

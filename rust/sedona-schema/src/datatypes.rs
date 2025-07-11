@@ -4,7 +4,7 @@ use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common::{internal_err, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use serde_json::Value;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 
 use crate::crs::{deserialize_crs, Crs};
 use crate::extension_type::ExtensionType;
@@ -15,6 +15,40 @@ pub enum SedonaType {
     Arrow(DataType),
     Wkb(Edges, Crs),
     WkbView(Edges, Crs),
+}
+
+impl Display for SedonaType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SedonaType::Arrow(data_type) => Display::fmt(data_type, f),
+            SedonaType::Wkb(edges, crs) => display_geometry("wkb", edges, crs, f),
+            SedonaType::WkbView(edges, crs) => display_geometry("wkb_view", edges, crs, f),
+        }
+    }
+}
+
+fn display_geometry(
+    name: &str,
+    edges: &Edges,
+    crs: &Crs,
+    f: &mut std::fmt::Formatter<'_>,
+) -> std::fmt::Result {
+    match edges {
+        Edges::Planar => {}
+        Edges::Spherical => write!(f, "spherical ")?,
+    }
+
+    write!(f, "{name}")?;
+
+    if let Some(crs) = crs {
+        if let Ok(Some(auth_code)) = crs.to_authority_code() {
+            write!(f, " <{}>", auth_code.to_lowercase())?;
+        } else {
+            write!(f, " <with crs>")?;
+        }
+    }
+
+    Ok(())
 }
 
 /// Edge interpolations
@@ -105,7 +139,7 @@ impl SedonaType {
     pub fn from_extension_type(extension: ExtensionType) -> Result<SedonaType> {
         let (edges, crs) = deserialize_edges_and_crs(&extension.extension_metadata)?;
         if extension.extension_name == "geoarrow.wkb" {
-            physical_type_wkb(edges, crs, extension.storage_type)
+            sedona_type_wkb(edges, crs, extension.storage_type)
         } else {
             internal_err!(
                 "Extension type not implemented: <{}>:{}",
@@ -243,7 +277,7 @@ impl SedonaType {
 // Implementation details for importing/exporting types from/to Arrow + metadata
 
 /// Check a storage type for SedonaType::Wkb
-fn physical_type_wkb(edges: Edges, crs: Crs, storage_type: DataType) -> Result<SedonaType> {
+fn sedona_type_wkb(edges: Edges, crs: Crs, storage_type: DataType) -> Result<SedonaType> {
     match storage_type {
         DataType::Binary => Ok(SedonaType::Wkb(edges, crs)),
         DataType::BinaryView => Ok(SedonaType::WkbView(edges, crs)),
@@ -337,32 +371,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn physical_type_arrow() -> Result<()> {
-        let physical_type = SedonaType::from_data_type(&DataType::Int32)?;
-        assert_eq!(physical_type.data_type(), DataType::Int32);
-        assert_eq!(physical_type, SedonaType::Arrow(DataType::Int32));
-        assert!(physical_type.match_signature(&SedonaType::Arrow(DataType::Int32)));
-        assert!(!physical_type.match_signature(&SedonaType::Arrow(DataType::Utf8)));
-
-        Ok(())
+    fn sedona_type_arrow() {
+        let sedona_type = SedonaType::from_data_type(&DataType::Int32).unwrap();
+        assert_eq!(sedona_type.data_type(), DataType::Int32);
+        assert_eq!(sedona_type, SedonaType::Arrow(DataType::Int32));
+        assert!(sedona_type.match_signature(&SedonaType::Arrow(DataType::Int32)));
+        assert!(!sedona_type.match_signature(&SedonaType::Arrow(DataType::Utf8)));
     }
 
     #[test]
-    fn physical_type_wkb() -> Result<()> {
+    fn sedona_type_wkb() {
         assert_eq!(WKB_GEOMETRY, WKB_GEOMETRY);
 
         assert!(WKB_GEOMETRY.data_type().is_nested());
         assert_eq!(
-            SedonaType::from_data_type(&WKB_GEOMETRY.data_type())?,
+            SedonaType::from_data_type(&WKB_GEOMETRY.data_type()).unwrap(),
             WKB_GEOMETRY
         );
 
         assert!(WKB_GEOMETRY.match_signature(&WKB_GEOMETRY));
-        Ok(())
     }
 
     #[test]
-    fn physical_type_wkb_view() -> Result<()> {
+    fn sedona_type_wkb_view() {
         assert_eq!(WKB_VIEW_GEOMETRY.storage_type(), &DataType::BinaryView);
         assert_eq!(WKB_VIEW_GEOGRAPHY.storage_type(), &DataType::BinaryView);
 
@@ -371,23 +402,43 @@ mod tests {
 
         let data_type = WKB_VIEW_GEOMETRY.data_type();
         assert!(data_type.is_nested());
-        assert_eq!(SedonaType::from_data_type(&data_type)?, WKB_VIEW_GEOMETRY);
-
-        Ok(())
+        assert_eq!(
+            SedonaType::from_data_type(&data_type).unwrap(),
+            WKB_VIEW_GEOMETRY
+        );
     }
 
     #[test]
-    fn physical_type_wkb_geography() -> Result<()> {
+    fn sedona_type_wkb_geography() {
         assert_eq!(WKB_GEOGRAPHY, WKB_GEOGRAPHY);
 
         assert!(WKB_GEOGRAPHY.data_type().is_nested());
         assert_eq!(
-            SedonaType::from_data_type(&WKB_GEOGRAPHY.data_type())?,
+            SedonaType::from_data_type(&WKB_GEOGRAPHY.data_type()).unwrap(),
             WKB_GEOGRAPHY
         );
 
         assert!(WKB_GEOGRAPHY.match_signature(&WKB_GEOGRAPHY));
-        Ok(())
+    }
+
+    #[test]
+    fn sedona_type_to_string() {
+        assert_eq!(SedonaType::Arrow(DataType::Int32).to_string(), "Int32");
+        assert_eq!(WKB_GEOMETRY.to_string(), "wkb");
+        assert_eq!(WKB_GEOGRAPHY.to_string(), "spherical wkb");
+        assert_eq!(WKB_VIEW_GEOMETRY.to_string(), "wkb_view");
+        assert_eq!(WKB_VIEW_GEOGRAPHY.to_string(), "spherical wkb_view");
+        assert_eq!(
+            SedonaType::Wkb(Edges::Planar, lnglat()).to_string(),
+            "wkb <ogc:crs84>"
+        );
+
+        let projjson_value: Value = r#"{}"#.parse().unwrap();
+        let projjson_crs = deserialize_crs(&projjson_value).unwrap();
+        assert_eq!(
+            SedonaType::Wkb(Edges::Planar, projjson_crs).to_string(),
+            "wkb <with crs>"
+        );
     }
 
     #[test]

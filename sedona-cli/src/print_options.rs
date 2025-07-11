@@ -30,6 +30,7 @@ use datafusion::error::Result;
 use datafusion::physical_plan::RecordBatchStream;
 
 use futures::StreamExt;
+use sedona::context::SedonaContext;
 
 #[derive(Debug, Clone, PartialEq, Copy)]
 pub enum MaxRows {
@@ -72,11 +73,14 @@ pub struct PrintOptions {
     pub quiet: bool,
     pub maxrows: MaxRows,
     pub color: bool,
+    pub multi_line_rows: bool,
+    pub ascii: bool,
 }
 
 // Returns the query execution details formatted
 fn get_execution_details_formatted(
     row_count: usize,
+    column_count: usize,
     maxrows: MaxRows,
     query_start_time: Instant,
 ) -> String {
@@ -88,8 +92,9 @@ fn get_execution_details_formatted(
     };
 
     format!(
-        "{} row(s) fetched. {}\nElapsed {:.3} seconds.\n",
+        "{} row(s)/{} column(s) fetched. {}\nElapsed {:.3} seconds.\n",
         row_count,
+        column_count,
         nrows_shown_msg,
         query_start_time.elapsed().as_secs_f64()
     )
@@ -103,15 +108,26 @@ impl PrintOptions {
         batches: &[RecordBatch],
         query_start_time: Instant,
         row_count: usize,
+        ctx: &SedonaContext,
     ) -> Result<()> {
         let stdout = std::io::stdout();
         let mut writer = stdout.lock();
 
-        self.format
-            .print_batches(&mut writer, schema, batches, self.maxrows, true)?;
+        let num_cols = schema.fields().len();
+        self.format.print_batches(
+            &mut writer,
+            schema,
+            batches,
+            self.maxrows,
+            true,
+            self.multi_line_rows,
+            self.ascii,
+            ctx,
+        )?;
 
         let formatted_exec_details = get_execution_details_formatted(
             row_count,
+            num_cols,
             if self.format == PrintFormat::Table {
                 self.maxrows
             } else {
@@ -132,6 +148,7 @@ impl PrintOptions {
         &self,
         mut stream: Pin<Box<dyn RecordBatchStream>>,
         query_start_time: Instant,
+        ctx: &SedonaContext,
     ) -> Result<()> {
         if self.format == PrintFormat::Table {
             return Err(DataFusionError::External(
@@ -143,6 +160,7 @@ impl PrintOptions {
         let mut writer = stdout.lock();
 
         let mut row_count = 0_usize;
+        let column_count = stream.schema().fields().len();
         let mut with_header = true;
 
         while let Some(maybe_batch) = stream.next().await {
@@ -154,12 +172,19 @@ impl PrintOptions {
                 &[batch],
                 MaxRows::Unlimited,
                 with_header,
+                self.multi_line_rows,
+                self.ascii,
+                ctx,
             )?;
             with_header = false;
         }
 
-        let formatted_exec_details =
-            get_execution_details_formatted(row_count, MaxRows::Unlimited, query_start_time);
+        let formatted_exec_details = get_execution_details_formatted(
+            row_count,
+            column_count,
+            MaxRows::Unlimited,
+            query_start_time,
+        );
 
         if !self.quiet {
             writeln!(writer, "{formatted_exec_details}")?;

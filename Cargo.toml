@@ -44,6 +44,7 @@ arrow-schema = { version = "55.1.0" }
 async-trait = { version = "0.1.87" }
 bytes = "1.10"
 chrono = { version = "0.4.38", default-features = false }
+comfy-table = { version = "7.0" }
 criterion = { version = "0.5", features = ["html_reports"] }
 datafusion = { version = "48.0.0", default-features = false }
 datafusion-catalog = { version = "48.0.0" }

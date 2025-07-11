@@ -3,6 +3,7 @@ use crate::{
         st_contains_udf, st_covered_by_udf, st_covers_udf, st_disjoint_udf, st_equals_udf,
         st_intersects_udf, st_touches_udf, st_within_udf,
     },
+    sd_format::sd_format_udf,
     st_analyze_aggr::st_analyze_aggr_udf,
     st_area::st_area_udf,
     st_asbinary::st_asbinary_udf,
@@ -23,6 +24,7 @@ use sedona_expr::function_set::FunctionSet;
 pub fn default_function_set() -> FunctionSet {
     let mut function_set = FunctionSet::new();
 
+    function_set.insert_scalar_udf(sd_format_udf());
     function_set.insert_scalar_udf(st_area_udf());
     function_set.insert_scalar_udf(st_asbinary_udf());
     function_set.insert_scalar_udf(st_astext_udf());

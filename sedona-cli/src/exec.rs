@@ -173,7 +173,7 @@ pub(super) async fn exec_and_print(
             // As the input stream comes, we can generate results.
             // However, memory safety is not guaranteed.
             let stream = execute_stream(physical_plan, task_ctx.clone())?;
-            print_options.print_stream(stream, now).await?;
+            print_options.print_stream(stream, now, ctx).await?;
         } else {
             // Bounded stream; collected results size is limited by the maxrows option
             let schema = physical_plan.schema();
@@ -198,7 +198,7 @@ pub(super) async fn exec_and_print(
             }
             adjusted
                 .into_inner()
-                .print_batches(schema, &results, now, row_count)?;
+                .print_batches(schema, &results, now, row_count, ctx)?;
             reservation.free();
         }
     }
@@ -226,6 +226,7 @@ impl AdjustedPrintOptions {
             LogicalPlan::Explain(_) | LogicalPlan::DescribeTable(_) | LogicalPlan::Analyze(_)
         ) {
             self.inner.maxrows = MaxRows::Unlimited;
+            self.inner.multi_line_rows = true;
         }
         self
     }

@@ -25,9 +25,9 @@ use arrow::csv::writer::WriterBuilder;
 use arrow::datatypes::SchemaRef;
 use arrow::json::{ArrayWriter, LineDelimitedWriter};
 use arrow::record_batch::RecordBatch;
-use arrow::util::pretty::pretty_format_batches_with_options;
-use datafusion::common::format::DEFAULT_FORMAT_OPTIONS;
-use datafusion::error::Result;
+use datafusion::error::{DataFusionError, Result};
+use sedona::context::SedonaContext;
+use sedona::show::{show_batches, DisplayMode, DisplayTableOptions};
 
 /// Allow records to be printed in different formats
 #[derive(Debug, PartialEq, Eq, clap::ValueEnum, Clone, Copy)]
@@ -92,11 +92,11 @@ fn print_batches_with_sep<W: std::io::Write>(
 fn keep_only_maxrows(s: &str, maxrows: usize) -> String {
     let lines: Vec<String> = s.lines().map(String::from).collect();
 
-    assert!(lines.len() >= maxrows + 4); // 4 lines for top and bottom border
+    assert!(lines.len() >= maxrows + 5); // 5 lines for top and bottom border
 
     let last_line = &lines[lines.len() - 1]; // bottom border line
 
-    let spaces = last_line.len().saturating_sub(4);
+    let spaces = last_line.chars().count().saturating_sub(4);
     let dotted_line = format!("| .{:<spaces$}|", "", spaces = spaces);
 
     let mut result = lines[0..(maxrows + 3)].to_vec(); // Keep top border and `maxrows` lines
@@ -110,6 +110,9 @@ fn format_batches_with_maxrows<W: std::io::Write>(
     writer: &mut W,
     batches: &[RecordBatch],
     maxrows: MaxRows,
+    multi_line_rows: bool,
+    ascii: bool,
+    ctx: &SedonaContext,
 ) -> Result<()> {
     match maxrows {
         MaxRows::Limited(maxrows) => {
@@ -131,19 +134,28 @@ fn format_batches_with_maxrows<W: std::io::Write>(
                 }
             }
 
-            let formatted =
-                pretty_format_batches_with_options(&filtered_batches, &DEFAULT_FORMAT_OPTIONS)?;
+            let mut formatted = Vec::new();
+            let options = table_options(multi_line_rows, ascii);
+            show_batches(
+                ctx,
+                &mut formatted,
+                &filtered_batches[0].schema(),
+                filtered_batches,
+                options,
+            )?;
+            let mut formatted_str = String::from_utf8(formatted)
+                .map_err(|e| DataFusionError::Internal(format!("invalid utf-8 in table: {e}")))?;
+
             if over_limit {
-                let mut formatted_str = format!("{formatted}");
                 formatted_str = keep_only_maxrows(&formatted_str, maxrows);
                 writeln!(writer, "{formatted_str}")?;
             } else {
-                writeln!(writer, "{formatted}")?;
+                writeln!(writer, "{formatted_str}")?;
             }
         }
         MaxRows::Unlimited => {
-            let formatted = pretty_format_batches_with_options(batches, &DEFAULT_FORMAT_OPTIONS)?;
-            writeln!(writer, "{formatted}")?;
+            let options = table_options(multi_line_rows, ascii);
+            show_batches(ctx, writer, &batches[0].schema(), batches.to_vec(), options)?;
         }
     }
 
@@ -152,6 +164,7 @@ fn format_batches_with_maxrows<W: std::io::Write>(
 
 impl PrintFormat {
     /// Print the batches to a writer using the specified format
+    #[allow(clippy::too_many_arguments)]
     pub fn print_batches<W: std::io::Write>(
         &self,
         writer: &mut W,
@@ -159,6 +172,9 @@ impl PrintFormat {
         batches: &[RecordBatch],
         maxrows: MaxRows,
         with_header: bool,
+        multi_line_rows: bool,
+        ascii: bool,
+        ctx: &SedonaContext,
     ) -> Result<()> {
         // filter out any empty batches
         let batches: Vec<_> = batches
@@ -167,7 +183,7 @@ impl PrintFormat {
             .cloned()
             .collect();
         if batches.is_empty() {
-            return self.print_empty(writer, schema);
+            return self.print_empty(writer, schema, ascii, ctx);
         }
 
         match self {
@@ -179,7 +195,7 @@ impl PrintFormat {
                 if maxrows == MaxRows::Limited(0) {
                     return Ok(());
                 }
-                format_batches_with_maxrows(writer, &batches, maxrows)
+                format_batches_with_maxrows(writer, &batches, maxrows, multi_line_rows, ascii, ctx)
             }
             Self::Json => batches_to_json!(ArrayWriter, writer, &batches),
             Self::NdJson => batches_to_json!(LineDelimitedWriter, writer, &batches),
@@ -187,19 +203,38 @@ impl PrintFormat {
     }
 
     /// Print when the result batches contain no rows
-    fn print_empty<W: std::io::Write>(&self, writer: &mut W, schema: SchemaRef) -> Result<()> {
+    fn print_empty<W: std::io::Write>(
+        &self,
+        writer: &mut W,
+        schema: SchemaRef,
+        ascii: bool,
+        ctx: &SedonaContext,
+    ) -> Result<()> {
         match self {
             // Print column headers for Table format
             Self::Table if !schema.fields().is_empty() => {
-                let empty_batch = RecordBatch::new_empty(schema);
-                let formatted =
-                    pretty_format_batches_with_options(&[empty_batch], &DEFAULT_FORMAT_OPTIONS)?;
-                writeln!(writer, "{formatted}")?;
+                let empty_batch = RecordBatch::new_empty(schema.clone());
+                let options = table_options(false, ascii);
+                show_batches(ctx, writer, &schema, vec![empty_batch], options)?;
             }
             _ => {}
         }
         Ok(())
     }
+}
+
+fn table_options(multi_line_rows: bool, ascii: bool) -> DisplayTableOptions<'static> {
+    let mut options = DisplayTableOptions::tty();
+    options.arrow_options = options.arrow_options.with_types_info(true);
+    if multi_line_rows {
+        options.max_row_height = usize::MAX;
+    }
+
+    if ascii {
+        options.display_mode = DisplayMode::ASCII;
+    }
+
+    options
 }
 
 #[cfg(test)]
@@ -229,12 +264,12 @@ mod tests {
         }
 
         // output column headers for empty batches when format is Table
-        #[rustfmt::skip]
         let expected = &[
-            "+---+---+---+",
-            "| a | b | c |",
-            "+---+---+---+",
-            "+---+---+---+",
+            "+-------+-------+-------+",
+            "|   a   |   b   |   c   |",
+            "| int32 | int32 | int32 |",
+            "+-------+-------+-------+",
+            "+-------+-------+-------+",
         ];
         PrintBatchesTest::new()
             .with_format(PrintFormat::Table)
@@ -317,13 +352,14 @@ mod tests {
     #[test]
     fn print_table() {
         let expected = &[
-            "+---+---+---+",
-            "| a | b | c |",
-            "+---+---+---+",
-            "| 1 | 4 | 7 |",
-            "| 2 | 5 | 8 |",
-            "| 3 | 6 | 9 |",
-            "+---+---+---+",
+            "+-------+-------+-------+",
+            "|   a   |   b   |   c   |",
+            "| int32 | int32 | int32 |",
+            "+-------+-------+-------+",
+            "|     1 |     4 |     7 |",
+            "|     2 |     5 |     8 |",
+            "|     3 |     6 |     9 |",
+            "+-------+-------+-------+",
         ];
 
         PrintBatchesTest::new()
@@ -397,15 +433,15 @@ mod tests {
 
     #[test]
     fn print_maxrows_unlimited() {
-        #[rustfmt::skip]
-            let expected = &[
-            "+---+",
-            "| a |",
-            "+---+",
-            "| 1 |",
-            "| 2 |",
-            "| 3 |",
-            "+---+",
+        let expected = &[
+            "+-------+",
+            "|   a   |",
+            "| int32 |",
+            "+-------+",
+            "|     1 |",
+            "|     2 |",
+            "|     3 |",
+            "+-------+",
         ];
 
         // should print out entire output with no truncation if unlimited or
@@ -423,16 +459,15 @@ mod tests {
 
     #[test]
     fn print_maxrows_limited_one_batch() {
-        #[rustfmt::skip]
-            let expected = &[
-            "+---+",
-            "| a |",
-            "+---+",
-            "| 1 |",
-            "| . |",
-            "| . |",
-            "| . |",
-            "+---+",
+        let expected = &[
+            "+-------+",
+            "|   a   |",
+            "| int32 |",
+            "+-------+",
+            "| .     |",
+            "| .     |",
+            "| .     |",
+            "+-------+",
         ];
 
         PrintBatchesTest::new()
@@ -445,20 +480,19 @@ mod tests {
 
     #[test]
     fn print_maxrows_limited_multi_batched() {
-        #[rustfmt::skip]
-            let expected = &[
-            "+---+",
-            "| a |",
-            "+---+",
-            "| 1 |",
-            "| 2 |",
-            "| 3 |",
-            "| 1 |",
-            "| 2 |",
-            "| . |",
-            "| . |",
-            "| . |",
-            "+---+",
+        let expected = &[
+            "+-------+",
+            "|   a   |",
+            "| int32 |",
+            "+-------+",
+            "|     1 |",
+            "|     2 |",
+            "|     3 |",
+            "|     1 |",
+            "| .     |",
+            "| .     |",
+            "| .     |",
+            "+-------+",
         ];
 
         PrintBatchesTest::new()
@@ -478,15 +512,15 @@ mod tests {
         let batch = one_column_batch();
         let empty_batch = RecordBatch::new_empty(batch.schema());
 
-        #[rustfmt::skip]
-        let expected =&[
-            "+---+",
-            "| a |",
-            "+---+",
-            "| 1 |",
-            "| 2 |",
-            "| 3 |",
-            "+---+",
+        let expected = &[
+            "+-------+",
+            "|   a   |",
+            "| int32 |",
+            "+-------+",
+            "|     1 |",
+            "|     2 |",
+            "|     3 |",
+            "+-------+",
         ];
 
         PrintBatchesTest::new()
@@ -501,12 +535,12 @@ mod tests {
         let empty_batch = RecordBatch::new_empty(one_column_batch().schema());
 
         // Print column headers for empty batch when format is Table
-        #[rustfmt::skip]
-        let expected =&[
-            "+---+",
-            "| a |",
-            "+---+",
-            "+---+",
+        let expected = &[
+            "+-------+",
+            "|   a   |",
+            "| int32 |",
+            "+-------+",
+            "+-------+",
         ];
 
         PrintBatchesTest::new()
@@ -536,6 +570,7 @@ mod tests {
         batches: Vec<RecordBatch>,
         maxrows: MaxRows,
         with_header: WithHeader,
+        ascii: bool,
         expected: Vec<&'static str>,
     }
 
@@ -556,6 +591,7 @@ mod tests {
                 batches: vec![],
                 maxrows: MaxRows::Unlimited,
                 with_header: WithHeader::Ignored,
+                ascii: true,
                 expected: vec![],
             }
         }
@@ -626,6 +662,7 @@ mod tests {
         }
 
         fn output_with_header(&self, with_header: bool) -> String {
+            let ctx = SedonaContext::new();
             let mut buffer: Vec<u8> = vec![];
             self.format
                 .print_batches(
@@ -634,6 +671,9 @@ mod tests {
                     &self.batches,
                     self.maxrows,
                     with_header,
+                    false,
+                    self.ascii,
+                    &ctx,
                 )
                 .unwrap();
             String::from_utf8(buffer).unwrap()

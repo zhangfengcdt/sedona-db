@@ -1,6 +1,7 @@
 pub mod executor;
 mod predicates;
 pub mod register;
+mod sd_format;
 pub mod st_analyze_aggr;
 mod st_area;
 mod st_asbinary;
