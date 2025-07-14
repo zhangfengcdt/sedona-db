@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
 
 use arrow_array::RecordBatch;
 use async_trait::async_trait;
@@ -11,9 +14,10 @@ use datafusion::{
         SessionStateBuilder,
     },
     prelude::{DataFrame, SessionConfig, SessionContext},
-    sql::parser::DFParser,
+    sql::parser::{DFParser, Statement},
 };
-use datafusion_expr::sqlparser::dialect::dialect_from_str;
+use datafusion_expr::sqlparser::dialect::{dialect_from_str, Dialect};
+use parking_lot::Mutex;
 use sedona_common::option::add_sedona_option_extension;
 use sedona_expr::aggregate_udf::SedonaAccumulatorRef;
 use sedona_expr::{
@@ -31,6 +35,7 @@ use crate::{
     catalog::DynamicObjectStoreCatalog,
     object_storage::ensure_object_store_registered,
     projection::{unwrap_df, wrap_df},
+    show::{show_batches, DisplayTableOptions},
 };
 use crate::{exec::create_plan_from_sql, projection::unwrap_stream};
 
@@ -158,11 +163,10 @@ impl SedonaContext {
     /// statements
     pub async fn multi_sql(&self, sql: &str) -> Result<Vec<DataFrame>> {
         let task_ctx = self.ctx.task_ctx();
-        let dialect = &task_ctx.session_config().options().sql_parser.dialect;
-        let dialect = dialect_from_str(dialect)
-            .ok_or_else(|| plan_datafusion_err!("Unsupported SQL dialect: {dialect}"))?;
+        let dialect_str = &task_ctx.session_config().options().sql_parser.dialect;
+        let dialect = ThreadSafeDialect::try_new(dialect_str)?;
 
-        let statements = DFParser::parse_sql_with_dialect(sql, dialect.as_ref())?;
+        let statements = dialect.parse(sql)?;
         let mut results = Vec::with_capacity(statements.len());
         for statement in statements {
             let plan = create_plan_from_sql(self, statement.clone()).await?;
@@ -270,6 +274,16 @@ pub trait SedonaDataFrame {
     /// "geography", (3) the column named "geom", (4) the column named "geog",
     /// or (5) the first column with a geometry or geography data type.
     fn primary_geometry_column_index(&self) -> Result<Option<usize>>;
+
+    /// Build a table of the first `limit` results in this DataFrame
+    ///
+    /// This will limit and execute the query and build a table using [show_batches].
+    async fn show_sedona<'a>(
+        self,
+        ctx: &SedonaContext,
+        limit: Option<usize>,
+        options: DisplayTableOptions<'a>,
+    ) -> Result<String>;
 }
 
 #[async_trait]
@@ -330,6 +344,47 @@ impl SedonaDataFrame for DataFrame {
         }
 
         Ok(Some(indices[0]))
+    }
+
+    async fn show_sedona<'a>(
+        self,
+        ctx: &SedonaContext,
+        limit: Option<usize>,
+        options: DisplayTableOptions<'a>,
+    ) -> Result<String> {
+        let df = self.limit(0, limit)?;
+        let schema_without_qualifiers = df.schema().clone().strip_qualifiers();
+        let schema = schema_without_qualifiers.as_arrow();
+        let batches = df.collect().await?;
+        let mut out = Vec::new();
+        show_batches(ctx, &mut out, schema, batches, options)?;
+        String::from_utf8(out).map_err(|e| DataFusionError::External(Box::new(e)))
+    }
+}
+
+// Because Dialect/dialect_from_str is not marked as Send, using the async
+// function in certain contexts will fail to compile. Here we use a wrapper
+// to ensure that that the Dialect can be specified and parsed in any async
+// function.
+#[derive(Debug)]
+struct ThreadSafeDialect {
+    inner: Mutex<Box<dyn Dialect>>,
+}
+
+unsafe impl Send for ThreadSafeDialect {}
+
+impl ThreadSafeDialect {
+    pub fn try_new(dialect_str: &str) -> Result<Self> {
+        let dialect = dialect_from_str(dialect_str)
+            .ok_or_else(|| plan_datafusion_err!("Unsupported SQL dialect: {dialect_str}"))?;
+        Ok(Self {
+            inner: dialect.into(),
+        })
+    }
+
+    pub fn parse(&self, sql: &str) -> Result<VecDeque<Statement>> {
+        let dialect = self.inner.lock();
+        DFParser::parse_sql_with_dialect(sql, dialect.as_ref())
     }
 }
 
@@ -487,6 +542,30 @@ mod tests {
             .unwrap();
         assert_eq!(df.geometry_column_indices().unwrap(), vec![0]);
         assert_eq!(df.primary_geometry_column_index().unwrap(), Some(0));
+    }
+
+    #[tokio::test]
+    async fn show() {
+        let ctx = SedonaContext::new();
+        let tbl = ctx
+            .sql("SELECT 1 as one")
+            .await
+            .unwrap()
+            .show_sedona(&ctx, None, DisplayTableOptions::default())
+            .await
+            .unwrap();
+
+        #[rustfmt::skip]
+        assert_eq!(
+            tbl.lines().collect::<Vec<_>>(),
+            vec![
+                "+-----+",
+                "| one |",
+                "+-----+",
+                "|   1 |",
+                "+-----+"
+            ]
+        );
     }
 
     #[tokio::test]

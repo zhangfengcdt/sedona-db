@@ -61,3 +61,8 @@ jobs:
         run: |
           cd python
           python -m pytest -vv
+
+      - name: Run doctests
+        run: |
+          cd python
+          python -m pytest --doctest-modules

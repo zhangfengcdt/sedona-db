@@ -10,9 +10,11 @@ use pyo3::prelude::*;
 use pyo3::types::PyCapsule;
 use sedona::context::SedonaDataFrame;
 use sedona::reader::SedonaStreamReader;
+use sedona::show::{DisplayMode, DisplayTableOptions};
 use sedona_schema::projection::unwrap_schema;
 use tokio::runtime::Runtime;
 
+use crate::context::InternalContext;
 use crate::error::PySedonaError;
 
 #[pyclass]
@@ -43,6 +45,27 @@ impl InternalDataFrame {
             .map(|i| self.inner.schema().field(i).name().to_string())
             .collect::<Vec<_>>();
         Ok(names)
+    }
+
+    fn show<'py>(
+        &self,
+        py: Python<'py>,
+        ctx: &InternalContext,
+        limit: Option<usize>,
+        width_chars: usize,
+        ascii: bool,
+    ) -> Result<String, PySedonaError> {
+        let mut options = DisplayTableOptions::new();
+        options.table_width = width_chars.try_into().unwrap_or(u16::MAX);
+        options.arrow_options = options.arrow_options.with_types_info(true);
+        if !ascii {
+            options.display_mode = DisplayMode::Utf8;
+        }
+
+        Ok(py.allow_threads(|| {
+            self.runtime
+                .block_on(self.inner.clone().show_sedona(&ctx.inner, limit, options))
+        })?)
     }
 
     fn __arrow_c_schema__<'py>(

@@ -64,3 +64,60 @@ def test_dataframe_to_pandas(con):
     pd.testing.assert_frame_equal(
         df_without_geo.to_pandas(), pd.DataFrame({"one": [1]})
     )
+
+
+def test_show(con, capsys):
+    con.sql("SELECT 1 as one").show()
+    expected = """
+┌───────┐
+│  one  │
+│ int64 │
+╞═══════╡
+│     1 │
+└───────┘
+    """.strip()
+    assert capsys.readouterr().out.strip() == expected
+
+    con.sql("SELECT 1 as one").show(ascii=True)
+    expected = """
++-------+
+|  one  |
+| int64 |
++-------+
+|     1 |
++-------+
+    """.strip()
+    assert capsys.readouterr().out.strip() == expected
+
+    # Make sure width parameter can be specified
+    con.sql("SELECT 123456789 as col1, 2 as a_very_long_column_name").show(width=10)
+    expected = """
+┌───────────┬───┐
+│    col1   ┆ … │
+│   int64   ┆   │
+╞═══════════╪═══╡
+│ 123456789 ┆ … │
+└───────────┴───┘
+    """.strip()
+    assert capsys.readouterr().out.strip() == expected
+
+
+def test_repr(con):
+    assert repr(con.sql("SELECT 1 as one")).startswith(
+        "<sedonadb.dataframe.DataFrame object"
+    )
+
+    try:
+        sedonadb.options.interactive = True
+        repr_interactive = repr(con.sql("SELECT 1 as one"))
+        expected = """
+┌───────┐
+│  one  │
+│ int64 │
+╞═══════╡
+│     1 │
+└───────┘
+    """.strip()
+        assert repr_interactive == expected
+    finally:
+        sedonadb.options.interactive = False

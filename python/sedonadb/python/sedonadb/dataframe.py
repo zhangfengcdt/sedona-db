@@ -1,5 +1,7 @@
 from typing import TYPE_CHECKING, Union, Optional
 
+from sedonadb._options import global_options
+
 if TYPE_CHECKING:
     import pandas
     import geopandas
@@ -13,7 +15,8 @@ class DataFrame:
     importing an object, reading a file, or executing SQL.
     """
 
-    def __init__(self, impl):
+    def __init__(self, ctx, impl):
+        self._ctx = ctx
         self._impl = impl
 
     def __arrow_c_schema__(self):
@@ -107,3 +110,56 @@ class DataFrame:
             return GeoDataFrame.from_arrow(table, geometry=geometry)
         else:
             return table.to_pandas()
+
+    def show(
+        self,
+        limit: Optional[int] = 10,
+        width: Optional[int] = None,
+        ascii: bool = False,
+    ) -> str:
+        """Print the first limit rows to the console
+
+        Args:
+            limit: The number of rows to display. Using None will display the
+                entire table which may result in very large output.
+            width: The number of characters to use to display the output.
+                If None, uses [`Options.width'][] or detects the value from the
+                current terminal if available. The default width is 100 characters
+                if a width is not set by another mechanism.
+            ascii: Use True to disable UTF-8 characters in the output.
+
+        Examples:
+
+            ```python
+            >>> import sedonadb
+            >>> con = sedonadb.connect()
+            >>> con.sql("SELECT ST_Point(0, 1) as geometry").show()
+            ┌────────────┐
+            │  geometry  │
+            │     wkb    │
+            ╞════════════╡
+            │ POINT(0 1) │
+            └────────────┘
+
+            ```
+        """
+        width = self._out_width(width)
+        print(self._impl.show(self._ctx, limit, width, ascii), end="")
+
+    def __repr__(self) -> str:
+        if global_options().interactive:
+            width = self._out_width()
+            return self._impl.show(self._ctx, 10, width, ascii=False).strip()
+        else:
+            return super().__repr__()
+
+    def _out_width(self, width=None) -> int:
+        if width is None:
+            width = global_options().width
+
+        if width is None:
+            import shutil
+
+            width, _ = shutil.get_terminal_size(fallback=(100, 24))
+
+        return width

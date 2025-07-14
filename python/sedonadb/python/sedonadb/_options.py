@@ -1,0 +1,52 @@
+from typing import Optional
+
+
+class Options:
+    """Global SedonaDB options"""
+
+    def __init__(self):
+        self._interactive = False
+        self._width = None
+
+    @property
+    def interactive(self) -> bool:
+        """Use interactive mode
+
+        In interactive mode, data frames are shown interactively without explicitly
+        calling `.show()`. This is helpful when exploring data frames but may
+        execute more queries than expected. Defaults to `False`.
+        """
+        return self._interactive
+
+    @interactive.setter
+    def interactive(self, value: bool) -> None:
+        self._interactive = value
+
+    @property
+    def width(self) -> Optional[int]:
+        """Set the terminal width
+
+        Usually the terminal width can be automatically determined; however, in
+        interactive environments like Jupyter notebooks this may not be possible
+        or may be guessed incorrectly. Defaults to `None` (i.e., fall back to the
+        detected value or 100 characters if nothing can be guessed).
+        """
+        return self._width
+
+    @width.setter
+    def width(self, value: Optional[int]):
+        self._width = value
+
+
+def global_options() -> Options:
+    """Access the global options
+
+    Most users should use `sedonadb.options` to access this singleton; however,
+    internal SedonaDB Python code must use this function to avoid a circular
+    dependency.
+    """
+    global _global_options
+    return _global_options
+
+
+_global_options = Options()

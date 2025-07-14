@@ -36,7 +36,9 @@ class SedonaContext:
         if isinstance(table_paths, (str, Path)):
             table_paths = [table_paths]
 
-        return DataFrame(self._impl.read_parquet([str(path) for path in table_paths]))
+        return DataFrame(
+            self._impl, self._impl.read_parquet([str(path) for path in table_paths])
+        )
 
     def sql(self, sql: str) -> DataFrame:
         """Create a [`DataFrame`][] by executing SQL
@@ -56,7 +58,7 @@ class SedonaContext:
 
             ```
         """
-        return DataFrame(self._impl.sql(sql))
+        return DataFrame(self._impl, self._impl.sql(sql))
 
 
 def connect() -> SedonaContext:
