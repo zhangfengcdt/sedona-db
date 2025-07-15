@@ -21,7 +21,7 @@ use sedona_expr::{aggregate_udf::SedonaAccumulator, statistics::GeoStatistics};
 use sedona_geometry::analyze::GeometryAnalysis;
 use sedona_geometry::interval::IntervalTrait;
 use sedona_geometry::types::GeometryTypeAndDimensions;
-use sedona_schema::datatypes::{Edges, SedonaType, WKB_GEOMETRY};
+use sedona_schema::datatypes::SedonaType;
 use wkb::reader::Wkb;
 
 use crate::executor::GenericExecutor;
@@ -80,9 +80,11 @@ impl SedonaAccumulator for STAnalyzeAggr {
     }
 
     fn state_fields(&self, _args: &[SedonaType]) -> Result<Vec<FieldRef>> {
-        Ok(vec![Arc::new(
-            WKB_GEOMETRY.to_storage_field("analyze", true)?,
-        )])
+        Ok(vec![Arc::new(Field::new(
+            "analyze",
+            DataType::Binary,
+            true,
+        ))])
     }
 }
 
@@ -213,7 +215,7 @@ impl STAnalyzeAggr {
 }
 
 #[derive(Debug)]
-struct AnalyzeAccumulator {
+pub struct AnalyzeAccumulator {
     input_type: SedonaType,
     _output_type: SedonaType,
     stats: GeoStatistics,
@@ -228,7 +230,7 @@ impl AnalyzeAccumulator {
         }
     }
 
-    fn update_statistics(&mut self, geom: &Wkb, size_bytes: usize) -> Result<()> {
+    pub fn update_statistics(&mut self, geom: &Wkb, size_bytes: usize) -> Result<()> {
         // Get geometry analysis information
         let analysis = sedona_geometry::analyze::analyze_geometry(geom)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -247,6 +249,10 @@ impl AnalyzeAccumulator {
         self.stats = stats;
 
         Ok(())
+    }
+
+    pub fn finish(self) -> GeoStatistics {
+        self.stats
     }
 
     // Update basic counts (total geometries and size)
@@ -364,7 +370,7 @@ impl Accumulator for AnalyzeAccumulator {
                 "No input arrays provided to accumulator".to_string(),
             ));
         }
-        let arg_types = [SedonaType::Wkb(Edges::Planar, None)];
+        let arg_types = [self.input_type.clone()];
         let args = [ColumnarValue::Array(
             self.input_type.unwrap_array(&values[0])?,
         )];
@@ -451,7 +457,9 @@ mod test {
     use arrow_array::RecordBatch;
     use arrow_json::ArrayWriter;
     use arrow_schema::Schema;
+    use rstest::rstest;
     use sedona_expr::aggregate_udf::AggregateTester;
+    use sedona_schema::datatypes::{WKB_GEOMETRY, WKB_VIEW_GEOMETRY};
     use sedona_testing::create::create_array;
     use serde_json::Value;
 
@@ -478,17 +486,17 @@ mod test {
         json_value[0].clone()
     }
 
-    #[test]
-    fn basic_analyze_cases() {
+    #[rstest]
+    fn basic_analyze_cases(#[values(WKB_GEOMETRY, WKB_VIEW_GEOMETRY)] sedona_type: SedonaType) {
         let mut udaf = st_analyze_aggr_udf();
         udaf.add_kernel(st_analyze_aggr_impl());
 
-        let tester = AggregateTester::new(udaf.into(), vec![WKB_GEOMETRY]);
+        let tester = AggregateTester::new(udaf.into(), vec![sedona_type.clone()]);
 
         // Basic point analysis
         let batches = vec![create_array(
             &[Some("POINT(0 0)"), Some("POINT(1 1)")],
-            &WKB_GEOMETRY,
+            &sedona_type,
         )];
 
         let result = tester.aggregate(batches).unwrap();
@@ -521,12 +529,12 @@ mod test {
         }
     }
 
-    #[test]
-    fn analyze_linestring() {
+    #[rstest]
+    fn analyze_linestring(#[values(WKB_GEOMETRY, WKB_VIEW_GEOMETRY)] sedona_type: SedonaType) {
         let mut udaf = st_analyze_aggr_udf();
         udaf.add_kernel(st_analyze_aggr_impl());
 
-        let tester = AggregateTester::new(udaf.into(), vec![WKB_GEOMETRY]);
+        let tester = AggregateTester::new(udaf.into(), vec![sedona_type.clone()]);
 
         // Create a batch with linestrings
         let batches = vec![create_array(
@@ -534,7 +542,7 @@ mod test {
                 Some("LINESTRING(0 0, 1 1, 2 2)"),
                 Some("LINESTRING(0 0, 0 1, 1 1)"),
             ],
-            &WKB_GEOMETRY,
+            &sedona_type,
         )];
 
         let result = tester.aggregate(batches).unwrap();
@@ -564,12 +572,12 @@ mod test {
         }
     }
 
-    #[test]
-    fn analyze_polygon() {
+    #[rstest]
+    fn analyze_polygon(#[values(WKB_GEOMETRY, WKB_VIEW_GEOMETRY)] sedona_type: SedonaType) {
         let mut udaf = st_analyze_aggr_udf();
         udaf.add_kernel(st_analyze_aggr_impl());
 
-        let tester = AggregateTester::new(udaf.into(), vec![WKB_GEOMETRY]);
+        let tester = AggregateTester::new(udaf.into(), vec![sedona_type.clone()]);
 
         // Create a batch with polygons
         let batches = vec![create_array(
@@ -577,7 +585,7 @@ mod test {
                 Some("POLYGON((0 0, 0 3, 3 3, 3 0, 0 0))"),
                 Some("POLYGON((1 1, 1 2, 2 2, 2 1, 1 1))"),
             ],
-            &WKB_GEOMETRY,
+            &sedona_type,
         )];
 
         let result = tester.aggregate(batches).unwrap();
@@ -607,12 +615,14 @@ mod test {
         }
     }
 
-    #[test]
-    fn analyze_mixed_geometries() {
+    #[rstest]
+    fn analyze_mixed_geometries(
+        #[values(WKB_GEOMETRY, WKB_VIEW_GEOMETRY)] sedona_type: SedonaType,
+    ) {
         let mut udaf = st_analyze_aggr_udf();
         udaf.add_kernel(st_analyze_aggr_impl());
 
-        let tester = AggregateTester::new(udaf.into(), vec![WKB_GEOMETRY]);
+        let tester = AggregateTester::new(udaf.into(), vec![sedona_type.clone()]);
 
         // Create a batch with mixed geometry types
         let batches = vec![create_array(
@@ -622,7 +632,7 @@ mod test {
                 Some("POLYGON((0 0, 0 2, 2 2, 2 0, 0 0))"),
                 Some("MULTIPOINT((1 1), (2 2))"),
             ],
-            &WKB_GEOMETRY,
+            &sedona_type,
         )];
 
         let result = tester.aggregate(batches).unwrap();
@@ -652,15 +662,15 @@ mod test {
         }
     }
 
-    #[test]
-    fn analyze_empty_input() {
+    #[rstest]
+    fn analyze_empty_input(#[values(WKB_GEOMETRY, WKB_VIEW_GEOMETRY)] sedona_type: SedonaType) {
         let mut udaf = st_analyze_aggr_udf();
         udaf.add_kernel(st_analyze_aggr_impl());
 
-        let tester = AggregateTester::new(udaf.into(), vec![WKB_GEOMETRY]);
+        let tester = AggregateTester::new(udaf.into(), vec![sedona_type.clone()]);
 
         // Create an empty batch
-        let batches = vec![create_array(&[None, None], &WKB_GEOMETRY)];
+        let batches = vec![create_array(&[None, None], &sedona_type)];
 
         let result = tester.aggregate(batches).unwrap();
         assert!(matches!(result, ScalarValue::Struct(_)));

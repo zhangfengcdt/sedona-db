@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use datafusion_common::Result;
-use sedona_common::{SpatialJoinOptions, SpatialLibrary};
+use sedona_common::{ExecutionMode, SpatialJoinOptions, SpatialLibrary};
+use sedona_expr::statistics::GeoStatistics;
 use wkb::reader::Wkb;
 
 use crate::{index::IndexQueryResult, spatial_predicate::SpatialPredicate};
@@ -50,8 +51,27 @@ pub(crate) trait IndexQueryResultRefiner: Send + Sync {
     /// # Returns
     /// * `usize` - Current memory usage in bytes
     fn mem_usage(&self) -> usize;
+
+    /// Get the actual execution mode used by the refiner.
+    ///
+    /// # Returns
+    /// * `ExecutionMode` - The actual execution mode used by the refiner
+    fn actual_execution_mode(&self) -> ExecutionMode;
+
+    /// Check if the refiner needs more probe statistics to determine the optimal execution mode.
+    ///
+    /// # Returns
+    /// * `bool` - `true` if the refiner needs more probe statistics, `false` otherwise.
+    fn need_more_probe_stats(&self) -> bool;
+
+    /// Merge the probe statistics into the refiner.
+    ///
+    /// # Arguments
+    /// * `stats` - The probe statistics to merge.
+    fn merge_probe_stats(&self, stats: GeoStatistics);
 }
 
+mod exec_mode_selector;
 pub mod geo;
 pub mod geos;
 pub mod tg;
@@ -68,6 +88,8 @@ pub mod tg;
 /// * `options` - Configuration options including execution mode and optimization settings
 /// * `num_build_geoms` - Total number of build-side geometries, used to size prepared geometry
 ///   caches when using preparation-based execution modes
+/// * `build_stats` - Statistics for the build-side geometries, used to optimize the refine
+///   process.
 ///
 /// # Returns
 /// * `Arc<dyn IndexQueryResultRefiner>` - Thread-safe refiner implementation for the specified library
@@ -76,18 +98,37 @@ pub(crate) fn create_refiner(
     predicate: &SpatialPredicate,
     options: SpatialJoinOptions,
     num_build_geoms: usize,
+    build_stats: GeoStatistics,
 ) -> Arc<dyn IndexQueryResultRefiner> {
     match library {
-        SpatialLibrary::Geo => Arc::new(geo::GeoRefiner::new(predicate, options, num_build_geoms)),
-        SpatialLibrary::Geos => {
-            Arc::new(geos::GeosRefiner::new(predicate, options, num_build_geoms))
-        }
+        SpatialLibrary::Geo => Arc::new(geo::GeoRefiner::new(
+            predicate,
+            options,
+            num_build_geoms,
+            build_stats,
+        )),
+        SpatialLibrary::Geos => Arc::new(geos::GeosRefiner::new(
+            predicate,
+            options,
+            num_build_geoms,
+            build_stats,
+        )),
         SpatialLibrary::Tg => {
-            match tg::TgRefiner::try_new(predicate, options.clone(), num_build_geoms) {
+            match tg::TgRefiner::try_new(
+                predicate,
+                options.clone(),
+                num_build_geoms,
+                build_stats.clone(),
+            ) {
                 Ok(refiner) => Arc::new(refiner),
                 Err(_) => {
                     // TG does not support all spatial predicates. Fallback to Geo if TG fails to initialize
-                    Arc::new(geo::GeoRefiner::new(predicate, options, num_build_geoms))
+                    Arc::new(geo::GeoRefiner::new(
+                        predicate,
+                        options,
+                        num_build_geoms,
+                        build_stats,
+                    ))
                 }
             }
         }

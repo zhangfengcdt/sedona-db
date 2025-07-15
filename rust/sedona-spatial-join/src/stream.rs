@@ -10,12 +10,14 @@ use datafusion_physical_plan::{handle_state, RecordBatchStream, SendableRecordBa
 use futures::stream::StreamExt;
 use futures::{ready, task::Poll};
 use parking_lot::Mutex;
+use sedona_functions::st_analyze_aggr::AnalyzeAccumulator;
+use sedona_schema::datatypes::WKB_GEOMETRY;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
 use crate::index::SpatialIndex;
-use crate::once_fut::OnceFut;
+use crate::once_fut::{OnceAsync, OnceFut};
 use crate::operand_evaluator::{
     create_operand_evaluator, EvaluatedGeometryArray, OperandEvaluator,
 };
@@ -43,7 +45,7 @@ pub(crate) struct SpatialJoinStream {
     /// Maintains the order of the probe side
     probe_side_ordered: bool,
     /// Join execution metrics
-    join_metrics: SpatialJoinMetrics,
+    join_metrics: SpatialJoinProbeMetrics,
     /// Current state of the stream
     state: SpatialJoinStreamState,
     /// Options for the spatial join
@@ -52,7 +54,10 @@ pub(crate) struct SpatialJoinStream {
     /// Target output batch size
     target_output_batch_size: usize,
     /// Once future for the spatial index
-    once_partial_leaf_nodes: OnceFut<SpatialIndex>,
+    once_fut_spatial_index: OnceFut<SpatialIndex>,
+    /// Once async for the spatial index, will be manually disposed by the last finished stream
+    /// to avoid unnecessary memory usage.
+    once_async_spatial_index: Arc<Mutex<Option<OnceAsync<SpatialIndex>>>>,
     /// The spatial index
     spatial_index: Option<Arc<SpatialIndex>>,
     /// The `on` spatial predicate evaluator
@@ -69,10 +74,11 @@ impl SpatialJoinStream {
         probe_stream: SendableRecordBatchStream,
         column_indices: Vec<ColumnIndex>,
         probe_side_ordered: bool,
-        join_metrics: SpatialJoinMetrics,
+        join_metrics: SpatialJoinProbeMetrics,
         options: SpatialJoinOptions,
         target_output_batch_size: usize,
-        once_partial_leaf_nodes: OnceFut<SpatialIndex>,
+        once_fut_spatial_index: OnceFut<SpatialIndex>,
+        once_async_spatial_index: Arc<Mutex<Option<OnceAsync<SpatialIndex>>>>,
     ) -> Self {
         let evaluator = create_operand_evaluator(on, options.clone());
         Self {
@@ -86,24 +92,17 @@ impl SpatialJoinStream {
             state: SpatialJoinStreamState::WaitBuildIndex,
             options,
             target_output_batch_size,
-            once_partial_leaf_nodes,
+            once_fut_spatial_index,
+            once_async_spatial_index,
             spatial_index: None,
             evaluator,
         }
     }
 }
 
-/// Metrics for the spatial join.
+/// Metrics for the probe phase of the spatial join.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct SpatialJoinMetrics {
-    /// Total time for collecting build-side of join
-    pub(crate) build_time: metrics::Time,
-    /// Number of batches consumed by build-side
-    pub(crate) build_input_batches: metrics::Count,
-    /// Number of rows consumed by build-side
-    pub(crate) build_input_rows: metrics::Count,
-    /// Memory used by build-side in bytes
-    pub(crate) build_mem_used: metrics::Gauge,
+pub(crate) struct SpatialJoinProbeMetrics {
     /// Total time for joining probe-side batches to the build-side batches
     pub(crate) join_time: metrics::Time,
     /// Number of batches consumed by probe-side of this operator
@@ -118,16 +117,15 @@ pub(crate) struct SpatialJoinMetrics {
     pub(crate) join_result_candidates: metrics::Count,
     /// Number of join results before filtering
     pub(crate) join_result_count: metrics::Count,
+    /// Memory usage of the refiner in bytes
+    pub(crate) refiner_mem_used: metrics::Gauge,
+    /// Execution mode used for executing the spatial join
+    pub(crate) execution_mode: metrics::Gauge,
 }
 
-impl SpatialJoinMetrics {
+impl SpatialJoinProbeMetrics {
     pub fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
         Self {
-            build_time: MetricBuilder::new(metrics).subset_time("build_time", partition),
-            build_input_batches: MetricBuilder::new(metrics)
-                .counter("build_input_batches", partition),
-            build_input_rows: MetricBuilder::new(metrics).counter("build_input_rows", partition),
-            build_mem_used: MetricBuilder::new(metrics).gauge("build_mem_used", partition),
             join_time: MetricBuilder::new(metrics).subset_time("join_time", partition),
             probe_input_batches: MetricBuilder::new(metrics)
                 .counter("probe_input_batches", partition),
@@ -137,6 +135,8 @@ impl SpatialJoinMetrics {
             join_result_candidates: MetricBuilder::new(metrics)
                 .counter("join_result_candidates", partition),
             join_result_count: MetricBuilder::new(metrics).counter("join_result_count", partition),
+            refiner_mem_used: MetricBuilder::new(metrics).gauge("refiner_mem_used", partition),
+            execution_mode: MetricBuilder::new(metrics).gauge("execution_mode", partition),
         }
     }
 }
@@ -191,7 +191,7 @@ impl SpatialJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
-        let index = ready!(self.once_partial_leaf_nodes.get_shared(cx))?;
+        let index = ready!(self.once_fut_spatial_index.get_shared(cx))?;
         self.spatial_index = Some(index);
         self.state = SpatialJoinStreamState::FetchProbeBatch;
         Poll::Ready(Ok(StatefulStreamResult::Continue))
@@ -203,7 +203,7 @@ impl SpatialJoinStream {
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         let result = self.probe_stream.poll_next_unpin(cx);
         match result {
-            Poll::Ready(Some(Ok(batch))) => match self.create_spatial_join_iterator(&batch) {
+            Poll::Ready(Some(Ok(batch))) => match self.create_spatial_join_iterator(batch) {
                 Ok(iterator) => {
                     self.state = SpatialJoinStreamState::ProcessProbeBatch(iterator);
                     Poll::Ready(Ok(StatefulStreamResult::Continue))
@@ -269,11 +269,27 @@ impl SpatialJoinStream {
             return Poll::Ready(internal_err!("Expected spatial index to be available"));
         };
 
+        let is_last_stream = spatial_index.report_probe_completed();
+        if is_last_stream {
+            // Update the memory used by refiner and execution mode used to the metrics
+            self.join_metrics
+                .refiner_mem_used
+                .set(spatial_index.get_refiner_mem_usage());
+            self.join_metrics
+                .execution_mode
+                .set(spatial_index.get_actual_execution_mode().to_usize());
+
+            // Drop the once async to avoid holding a long-living reference to the spatial index.
+            // The spatial index will be dropped when this stream is dropped.
+            let mut once_async = self.once_async_spatial_index.lock();
+            once_async.take();
+        }
+
         // Initial setup for processing unmatched build batches
         if need_produce_result_in_final(self.join_type) {
             // Only produce left-outer batches if this is the last partition that finished probing.
             // This mechanism is similar to the one in NestedLoopJoinStream.
-            if !spatial_index.report_probe_completed() {
+            if !is_last_stream {
                 self.state = SpatialJoinStreamState::Completed;
                 return Poll::Ready(Ok(StatefulStreamResult::Ready(None)));
             }
@@ -342,7 +358,7 @@ impl SpatialJoinStream {
 
     fn create_spatial_join_iterator(
         &self,
-        probe_batch: &RecordBatch,
+        probe_batch: RecordBatch,
     ) -> Result<SpatialJoinBatchIterator> {
         let num_rows = probe_batch.num_rows();
         self.join_metrics.probe_input_batches.add(1);
@@ -355,13 +371,24 @@ impl SpatialJoinStream {
             .expect("Spatial index should be available");
 
         // Evaluate the probe side geometry expression to get geometry array
-        let geom_array = self.evaluator.evaluate_probe(probe_batch)?;
+        let geom_array = self.evaluator.evaluate_probe(&probe_batch)?;
+
+        // Update the probe side statistics, which may help the spatial index to select a better
+        // execution mode for evaluating the spatial predicate.
+        if spatial_index.need_more_probe_stats() {
+            let mut analyzer = AnalyzeAccumulator::new(WKB_GEOMETRY, WKB_GEOMETRY);
+            for wkb in geom_array.wkbs().iter().flatten() {
+                analyzer.update_statistics(wkb, wkb.buf().len())?;
+            }
+            let stats = analyzer.finish();
+            spatial_index.merge_probe_stats(stats);
+        }
 
         SpatialJoinBatchIterator::new(
-            spatial_index.clone(),
-            probe_batch.clone(),
+            Arc::clone(spatial_index),
+            probe_batch,
             geom_array,
-            Arc::new(self.join_metrics.clone()),
+            self.join_metrics.clone(),
             self.target_output_batch_size,
             self.probe_side_ordered,
         )
@@ -407,7 +434,7 @@ pub(crate) struct SpatialJoinBatchIterator {
     /// Current rect index being processed
     current_rect_idx: usize,
     /// Join metrics for tracking performance
-    join_metrics: Arc<SpatialJoinMetrics>,
+    join_metrics: SpatialJoinProbeMetrics,
     /// Maximum batch size before yielding a result
     max_batch_size: usize,
     /// Maintains the order of the probe side
@@ -425,7 +452,7 @@ impl SpatialJoinBatchIterator {
         spatial_index: Arc<SpatialIndex>,
         probe_batch: RecordBatch,
         geom_array: EvaluatedGeometryArray,
-        join_metrics: Arc<SpatialJoinMetrics>,
+        join_metrics: SpatialJoinProbeMetrics,
         max_batch_size: usize,
         probe_side_ordered: bool,
     ) -> Result<Self> {
@@ -616,7 +643,7 @@ impl SpatialJoinBatchIterator {
         build_indices: &[(i32, i32)],
     ) -> Result<PartialBuildBatch> {
         let schema = self.spatial_index.schema();
-        assemble_partial_build_batch(build_indices, schema, |batch_idx| unsafe {
+        assemble_partial_build_batch(build_indices, schema, |batch_idx| {
             self.spatial_index.get_indexed_batch(batch_idx)
         })
     }
@@ -795,7 +822,7 @@ impl UnmatchedBuildBatchIterator {
 
                 build_batch_from_indices(
                     schema,
-                    unsafe { self.spatial_index.get_indexed_batch(self.current_batch_idx) },
+                    self.spatial_index.get_indexed_batch(self.current_batch_idx),
                     &self.empty_right_batch,
                     &left_side,
                     &right_side,

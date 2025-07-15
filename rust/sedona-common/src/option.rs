@@ -6,6 +6,10 @@ use datafusion_common::config_namespace;
 use datafusion_common::Result;
 use regex::Regex;
 
+/// Default minimum number of analyzed geometries for speculative execution mode to select an
+/// optimal execution mode.
+pub const DEFAULT_SPECULATIVE_THRESHOLD: usize = 1000;
+
 /// Helper function to register the spatial join optimizer with a session config
 pub fn add_sedona_option_extension(config: SessionConfig) -> SessionConfig {
     config.with_option_extension(SedonaOptions::default())
@@ -36,7 +40,7 @@ config_namespace! {
         pub tg: TgOptions, default = TgOptions::default()
 
         /// The execution mode determining how prepared geometries are used
-        pub execution_mode: ExecutionMode, default = ExecutionMode::PrepareNone
+        pub execution_mode: ExecutionMode, default = ExecutionMode::Speculative(DEFAULT_SPECULATIVE_THRESHOLD)
     }
 }
 
@@ -122,6 +126,21 @@ pub enum ExecutionMode {
     Speculative(usize),
 }
 
+impl ExecutionMode {
+    /// Convert the execution mode to a usize value.
+    ///
+    /// This is used to show the execution mode in the metrics. We use a gauge value
+    /// to represent the execution mode.
+    pub fn to_usize(&self) -> usize {
+        match self {
+            ExecutionMode::PrepareNone => 0,
+            ExecutionMode::PrepareBuild => 1,
+            ExecutionMode::PrepareProbe => 2,
+            ExecutionMode::Speculative(_) => 3,
+        }
+    }
+}
+
 impl ConfigField for ExecutionMode {
     fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
         let value = match self {
@@ -165,7 +184,7 @@ impl ConfigField for ExecutionMode {
                             }
                         }
                     } else {
-                        100 // Default for plain "auto"
+                        DEFAULT_SPECULATIVE_THRESHOLD // Default for plain "auto"
                     };
                     ExecutionMode::Speculative(n)
                 } else {
@@ -281,7 +300,7 @@ mod tests {
 
         // Test auto mode with default value
         assert!(mode.set("", "auto").is_ok());
-        assert_eq!(mode, ExecutionMode::Speculative(100));
+        assert_eq!(mode, ExecutionMode::Speculative(1000));
 
         // Test auto mode with specific values
         assert!(mode.set("", "auto[10]").is_ok());
@@ -309,7 +328,7 @@ mod tests {
         assert_eq!(mode, ExecutionMode::PrepareProbe);
 
         assert!(mode.set("", "AUTO").is_ok());
-        assert_eq!(mode, ExecutionMode::Speculative(100));
+        assert_eq!(mode, ExecutionMode::Speculative(1000));
 
         assert!(mode.set("", "Auto[50]").is_ok());
         assert_eq!(mode, ExecutionMode::Speculative(50));
