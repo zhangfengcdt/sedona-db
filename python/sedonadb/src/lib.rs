@@ -6,6 +6,8 @@ use sedona_adbc::AdbcSedonadbDriverInit;
 mod context;
 mod dataframe;
 mod error;
+mod reader;
+mod runtime;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 

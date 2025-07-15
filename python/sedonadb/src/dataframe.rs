@@ -9,13 +9,14 @@ use datafusion::prelude::DataFrame;
 use pyo3::prelude::*;
 use pyo3::types::PyCapsule;
 use sedona::context::SedonaDataFrame;
-use sedona::reader::SedonaStreamReader;
 use sedona::show::{DisplayMode, DisplayTableOptions};
 use sedona_schema::projection::unwrap_schema;
 use tokio::runtime::Runtime;
 
 use crate::context::InternalContext;
 use crate::error::PySedonaError;
+use crate::reader::PySedonaStreamReader;
+use crate::runtime::wait_for_future;
 
 #[pyclass]
 pub struct InternalDataFrame {
@@ -62,10 +63,13 @@ impl InternalDataFrame {
             options.display_mode = DisplayMode::Utf8;
         }
 
-        Ok(py.allow_threads(|| {
-            self.runtime
-                .block_on(self.inner.clone().show_sedona(&ctx.inner, limit, options))
-        })?)
+        let content = wait_for_future(
+            py,
+            &self.runtime,
+            self.inner.clone().show_sedona(&ctx.inner, limit, options),
+        )??;
+
+        Ok(content)
     }
 
     fn __arrow_c_schema__<'py>(
@@ -103,10 +107,12 @@ impl InternalDataFrame {
             }
         }
 
-        let stream = self
-            .runtime
-            .block_on(self.inner.clone().execute_stream_sedona())?;
-        let reader = SedonaStreamReader::new(self.runtime.clone(), stream);
+        let stream = wait_for_future(
+            py,
+            &self.runtime,
+            self.inner.clone().execute_stream_sedona(),
+        )??;
+        let reader = PySedonaStreamReader::new(self.runtime.clone(), stream);
         let reader: Box<dyn RecordBatchReader + Send> = Box::new(reader);
 
         let ffi_stream = FFI_ArrowArrayStream::new(reader);

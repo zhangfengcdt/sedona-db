@@ -5005,6 +5005,7 @@ dependencies = [
  "arrow-schema",
  "datafusion",
  "datafusion-common",
+ "futures",
  "pyo3",
  "sedona",
  "sedona-adbc",

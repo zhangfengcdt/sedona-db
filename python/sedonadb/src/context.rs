@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use sedona::context::SedonaContext;
 use tokio::runtime::Runtime;
 
-use crate::{dataframe::InternalDataFrame, error::PySedonaError};
+use crate::{dataframe::InternalDataFrame, error::PySedonaError, runtime::wait_for_future};
 
 #[pyclass]
 pub struct InternalContext {
@@ -23,8 +23,7 @@ impl InternalContext {
                 PySedonaError::SedonaPython(format!("Failed to build multithreaded runtime: {e}"))
             })?;
 
-        let inner =
-            py.allow_threads(|| runtime.block_on(SedonaContext::new_local_interactive()))?;
+        let inner = wait_for_future(py, &runtime, SedonaContext::new_local_interactive())??;
 
         Ok(Self {
             inner,
@@ -32,20 +31,25 @@ impl InternalContext {
         })
     }
 
-    pub fn read_parquet(
+    pub fn read_parquet<'py>(
         &self,
+        py: Python<'py>,
         table_paths: Vec<String>,
-        py: Python,
     ) -> Result<InternalDataFrame, PySedonaError> {
-        let df = py.allow_threads(|| {
-            self.runtime
-                .block_on(self.inner.read_parquet(table_paths, Default::default()))
-        })?;
+        let df = wait_for_future(
+            py,
+            &self.runtime,
+            self.inner.read_parquet(table_paths, Default::default()),
+        )??;
         Ok(InternalDataFrame::new(df, self.runtime.clone()))
     }
 
-    pub fn sql(&self, query: &str, py: Python) -> Result<InternalDataFrame, PySedonaError> {
-        let df = py.allow_threads(|| self.runtime.block_on(self.inner.sql(query)))?;
+    pub fn sql<'py>(
+        &self,
+        py: Python<'py>,
+        query: &str,
+    ) -> Result<InternalDataFrame, PySedonaError> {
+        let df = wait_for_future(py, &self.runtime, self.inner.sql(query))??;
         Ok(InternalDataFrame::new(df, self.runtime.clone()))
     }
 
