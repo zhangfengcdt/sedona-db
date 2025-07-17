@@ -101,12 +101,7 @@ pub(crate) fn create_refiner(
     build_stats: GeoStatistics,
 ) -> Arc<dyn IndexQueryResultRefiner> {
     match library {
-        SpatialLibrary::Geo => Arc::new(geo::GeoRefiner::new(
-            predicate,
-            options,
-            num_build_geoms,
-            build_stats,
-        )),
+        SpatialLibrary::Geo => Arc::new(geo::GeoRefiner::new(predicate, options, build_stats)),
         SpatialLibrary::Geos => Arc::new(geos::GeosRefiner::new(
             predicate,
             options,
@@ -123,12 +118,7 @@ pub(crate) fn create_refiner(
                 Ok(refiner) => Arc::new(refiner),
                 Err(_) => {
                     // TG does not support all spatial predicates. Fallback to Geo if TG fails to initialize
-                    Arc::new(geo::GeoRefiner::new(
-                        predicate,
-                        options,
-                        num_build_geoms,
-                        build_stats,
-                    ))
+                    Arc::new(geo::GeoRefiner::new(predicate, options, build_stats))
                 }
             }
         }

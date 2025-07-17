@@ -43,6 +43,10 @@ pub struct Geom {
     inner: *mut tg_geom,
 }
 
+/// Safety: tg is thread-safe, so we mark it as Send + Sync.
+unsafe impl Send for Geom {}
+unsafe impl Sync for Geom {}
+
 impl Drop for Geom {
     fn drop(&mut self) {
         if self.inner.is_null() {

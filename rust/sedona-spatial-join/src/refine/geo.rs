@@ -1,7 +1,4 @@
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    OnceLock,
-};
+use std::sync::OnceLock;
 
 use datafusion_common::{internal_err, Result};
 use geo_generic_alg::{Contains, Distance, Euclidean, Intersects, Relate, Within};
@@ -12,7 +9,6 @@ use wkb::reader::Wkb;
 
 use crate::{
     index::IndexQueryResult,
-    init_once_array::InitOnceArray,
     refine::{
         exec_mode_selector::{
             create_exec_mode_selector, get_or_update_execution_mode, ExecModeSelector, SelectorFunc,
@@ -25,9 +21,6 @@ use crate::{
 /// A refiner that uses the geo library to evaluate spatial predicates.
 pub(crate) struct GeoRefiner {
     evaluator: Box<dyn GeoPredicateEvaluator>,
-    prepared_geoms:
-        InitOnceArray<Option<geo_generic_alg::PreparedGeometry<'static, geo_types::Geometry>>>,
-    mem_usage: AtomicUsize,
     exec_mode: OnceLock<ExecutionMode>,
     exec_mode_selector: Option<ExecModeSelector<SelectorFunc>>,
 }
@@ -36,11 +29,11 @@ impl GeoRefiner {
     pub fn new(
         predicate: &SpatialPredicate,
         options: SpatialJoinOptions,
-        num_build_geoms: usize,
         build_stats: GeoStatistics,
     ) -> Self {
         let evaluator = create_evaluator(predicate);
         let exec_mode = OnceLock::new();
+
         if matches!(options.execution_mode, ExecutionMode::Speculative(_)) {
             // Automatically select the execution mode based on spatial predicate
             if matches!(predicate, SpatialPredicate::Distance(_)) {
@@ -51,15 +44,6 @@ impl GeoRefiner {
             exec_mode.set(options.execution_mode).unwrap();
         }
 
-        let prepared_geom_array_size =
-            if matches!(exec_mode.get(), Some(ExecutionMode::PrepareBuild) | None) {
-                num_build_geoms
-            } else {
-                0
-            };
-
-        let prepared_geoms = InitOnceArray::new(prepared_geom_array_size);
-        let mem_usage = prepared_geoms.allocated_size();
         let exec_mode_selector = if exec_mode.get().is_none() {
             create_exec_mode_selector(build_stats, options.execution_mode, select_optimal_mode)
         } else {
@@ -67,8 +51,6 @@ impl GeoRefiner {
         };
         Self {
             evaluator,
-            prepared_geoms,
-            mem_usage: AtomicUsize::new(mem_usage),
             exec_mode,
             exec_mode_selector,
         }
@@ -85,46 +67,6 @@ impl GeoRefiner {
                 .evaluator
                 .evaluate(index_result.wkb, probe, index_result.distance)?
             {
-                build_batch_positions.push(index_result.position);
-            }
-        }
-        Ok(build_batch_positions)
-    }
-
-    fn refine_prepare_build(
-        &self,
-        probe: &Wkb<'_>,
-        index_query_results: &[IndexQueryResult],
-    ) -> Result<Vec<(i32, i32)>> {
-        let mut build_batch_positions = Vec::with_capacity(index_query_results.len());
-        let Some(probe_geom) = probe.try_to_geometry() else {
-            return Ok(Vec::new());
-        };
-
-        for index_result in index_query_results {
-            let (prepared_geom, is_newly_created) =
-                self.prepared_geoms
-                    .get_or_create(index_result.geom_idx, || {
-                        let Some(build_geom) = index_result.wkb.try_to_geometry() else {
-                            return Ok(None);
-                        };
-                        let prepared_geom = geo_generic_alg::PreparedGeometry::from(build_geom);
-                        Ok(Some(prepared_geom))
-                    })?;
-            let Some(prepared_geom) = prepared_geom else {
-                continue;
-            };
-            if is_newly_created {
-                // TODO: This ia a rough estimate of the memory usage of the prepared geometry and
-                // may not be accurate.
-                let prep_geom_size = index_result.wkb.buf().len() * 4;
-                self.mem_usage.fetch_add(prep_geom_size, Ordering::Relaxed);
-            }
-            if self.evaluator.evaluate_prepare_build(
-                prepared_geom,
-                &probe_geom,
-                index_result.distance,
-            )? {
                 build_batch_positions.push(index_result.position);
             }
         }
@@ -155,22 +97,14 @@ impl GeoRefiner {
     }
 }
 
-fn select_optimal_mode(build_stats: &GeoStatistics, probe_stats: &GeoStatistics) -> ExecutionMode {
-    let build_mean_points_per_geometry = build_stats.mean_points_per_geometry().unwrap_or(0.0);
+fn select_optimal_mode(_build_stats: &GeoStatistics, probe_stats: &GeoStatistics) -> ExecutionMode {
+    // We only support PrepareProbe and PrepareNone. Only the stats from the probe side is used to
+    // select the execution mode.
     let probe_mean_points_per_geometry = probe_stats.mean_points_per_geometry().unwrap_or(0.0);
-    let max_mean_points_per_geometry =
-        build_mean_points_per_geometry.max(probe_mean_points_per_geometry);
-    if max_mean_points_per_geometry <= 50.0 {
-        // If the mean points per geometry is less than 50, the geometries are not complex enough to
-        // benefit from prepared geometries.
+    if probe_mean_points_per_geometry <= 50.0 {
         ExecutionMode::PrepareNone
     } else {
-        // Choose a more complex side to prepare the geometries
-        if build_mean_points_per_geometry > probe_mean_points_per_geometry {
-            ExecutionMode::PrepareBuild
-        } else {
-            ExecutionMode::PrepareProbe
-        }
+        ExecutionMode::PrepareProbe
     }
 }
 
@@ -183,7 +117,12 @@ impl IndexQueryResultRefiner for GeoRefiner {
         let exec_mode = self.actual_execution_mode();
         match exec_mode {
             ExecutionMode::PrepareNone => self.refine_prepare_none(probe, index_query_results),
-            ExecutionMode::PrepareBuild => self.refine_prepare_build(probe, index_query_results),
+            ExecutionMode::PrepareBuild => {
+                // Prepare build mode is not implemented for geo, because geo's prepared geometry
+                // is not thread-safe and runs slowly, we suggest using other libraries that have
+                // faster prepared geometry, such as tg or GEOS.
+                self.refine_prepare_none(probe, index_query_results)
+            }
             ExecutionMode::PrepareProbe => self.refine_prepare_probe(probe, index_query_results),
             ExecutionMode::Speculative(_) => {
                 internal_err!(
@@ -194,7 +133,7 @@ impl IndexQueryResultRefiner for GeoRefiner {
     }
 
     fn mem_usage(&self) -> usize {
-        self.mem_usage.load(Ordering::Relaxed)
+        0
     }
 
     fn actual_execution_mode(&self) -> ExecutionMode {
@@ -218,13 +157,6 @@ impl IndexQueryResultRefiner for GeoRefiner {
 
 trait GeoPredicateEvaluator: Send + Sync {
     fn evaluate(&self, build: &Wkb, probe: &Wkb, distance: Option<f64>) -> Result<bool>;
-
-    fn evaluate_prepare_build(
-        &self,
-        build: &geo_generic_alg::PreparedGeometry<'static, geo_types::Geometry>,
-        probe: &geo_types::Geometry,
-        distance: Option<f64>,
-    ) -> Result<bool>;
 
     fn evaluate_prepare_probe(
         &self,
@@ -258,15 +190,6 @@ impl GeoPredicateEvaluator for GeoIntersects {
         Ok(build.intersects(probe))
     }
 
-    fn evaluate_prepare_build(
-        &self,
-        build: &geo_generic_alg::PreparedGeometry<'static, geo_types::Geometry>,
-        probe: &geo_types::Geometry,
-        _distance: Option<f64>,
-    ) -> Result<bool> {
-        Ok(build.relate(probe).is_intersects())
-    }
-
     fn evaluate_prepare_probe(
         &self,
         build: &Wkb,
@@ -293,15 +216,6 @@ impl GeoPredicateEvaluator for GeoContains {
         Ok(build_geom.contains(&probe_geom))
     }
 
-    fn evaluate_prepare_build(
-        &self,
-        build: &geo_generic_alg::PreparedGeometry<'static, geo_types::Geometry>,
-        probe: &geo_types::Geometry,
-        _distance: Option<f64>,
-    ) -> Result<bool> {
-        Ok(build.relate(probe).is_contains())
-    }
-
     fn evaluate_prepare_probe(
         &self,
         build: &Wkb,
@@ -326,15 +240,6 @@ impl GeoPredicateEvaluator for GeoWithin {
             return Ok(false);
         };
         Ok(build_geom.is_within(&probe_geom))
-    }
-
-    fn evaluate_prepare_build(
-        &self,
-        build: &geo_generic_alg::PreparedGeometry<'static, geo_types::Geometry>,
-        probe: &geo_types::Geometry,
-        _distance: Option<f64>,
-    ) -> Result<bool> {
-        Ok(build.relate(probe).is_within())
     }
 
     fn evaluate_prepare_probe(
@@ -365,20 +270,6 @@ impl GeoPredicateEvaluator for GeoDistance {
         };
         let euc = Euclidean;
         let dist = euc.distance(&build_geom, &probe_geom);
-        Ok(dist <= distance)
-    }
-
-    fn evaluate_prepare_build(
-        &self,
-        build: &geo_generic_alg::PreparedGeometry<'static, geo_types::Geometry>,
-        probe: &geo_types::Geometry,
-        distance: Option<f64>,
-    ) -> Result<bool> {
-        let Some(distance) = distance else {
-            return Ok(false);
-        };
-        let euc = Euclidean;
-        let dist = euc.distance(build.geometry(), probe);
         Ok(dist <= distance)
     }
 
@@ -415,15 +306,6 @@ macro_rules! impl_relate_evaluator {
                     return Ok(false);
                 };
                 Ok(build_geom.relate(&probe_geom).$geo_method())
-            }
-
-            fn evaluate_prepare_build(
-                &self,
-                build: &geo_generic_alg::PreparedGeometry<'static, geo_types::Geometry>,
-                probe: &geo_types::Geometry,
-                _distance: Option<f64>,
-            ) -> Result<bool> {
-                Ok(build.relate(probe).$geo_method())
             }
 
             fn evaluate_prepare_probe(
@@ -500,7 +382,7 @@ mod tests {
             ..Default::default()
         };
 
-        let refiner = GeoRefiner::new(&predicate, options, 100, build_stats);
+        let refiner = GeoRefiner::new(&predicate, options, build_stats);
 
         // Distance predicate should immediately select PrepareNone
         assert_eq!(refiner.actual_execution_mode(), ExecutionMode::PrepareNone);
@@ -516,7 +398,7 @@ mod tests {
             ..Default::default()
         };
 
-        let refiner = GeoRefiner::new(&predicate, options, 100, build_stats);
+        let refiner = GeoRefiner::new(&predicate, options, build_stats);
 
         // Intersects predicate should need probe stats to determine execution mode
         assert!(refiner.need_more_probe_stats());
@@ -534,7 +416,7 @@ mod tests {
             ..Default::default()
         };
 
-        let refiner = GeoRefiner::new(&predicate, options, 100, build_stats);
+        let refiner = GeoRefiner::new(&predicate, options, build_stats);
 
         // Merge probe stats with simple geometries (20 points per geometry)
         let probe_stats = create_geo_stats(50, 1000); // 20 points per geometry
@@ -545,7 +427,7 @@ mod tests {
     }
 
     #[test]
-    fn test_geo_refiner_intersects_with_complex_geometries_prefer_build() {
+    fn test_geo_refiner_intersects_ignore_build_complexity() {
         let predicate = create_relation_predicate(SpatialRelationType::Intersects);
         let build_stats = create_geo_stats(100, 8000); // 80 points per geometry (complex)
         let options = SpatialJoinOptions {
@@ -553,14 +435,14 @@ mod tests {
             ..Default::default()
         };
 
-        let refiner = GeoRefiner::new(&predicate, options, 100, build_stats);
+        let refiner = GeoRefiner::new(&predicate, options, build_stats);
 
         // Merge probe stats with simpler geometries (30 points per geometry)
         let probe_stats = create_geo_stats(50, 1500); // 30 points per geometry
         refiner.merge_probe_stats(probe_stats);
 
-        // Build side has more complex geometries (80 > 30), should select PrepareBuild
-        assert_eq!(refiner.actual_execution_mode(), ExecutionMode::PrepareBuild);
+        // Build side has more complex geometries (80 > 30), but we still select PrepareNone
+        assert_eq!(refiner.actual_execution_mode(), ExecutionMode::PrepareNone);
     }
 
     #[test]
@@ -572,7 +454,7 @@ mod tests {
             ..Default::default()
         };
 
-        let refiner = GeoRefiner::new(&predicate, options, 100, build_stats);
+        let refiner = GeoRefiner::new(&predicate, options, build_stats);
 
         // Merge probe stats with more complex geometries (80 points per geometry)
         let probe_stats = create_geo_stats(50, 4000); // 80 points per geometry
@@ -591,7 +473,7 @@ mod tests {
             ..Default::default()
         };
 
-        let refiner = GeoRefiner::new(&predicate, options, 100, build_stats);
+        let refiner = GeoRefiner::new(&predicate, options, build_stats);
 
         // Non-speculative mode should immediately select the specified mode
         assert_eq!(refiner.actual_execution_mode(), ExecutionMode::PrepareBuild);
@@ -620,7 +502,7 @@ mod tests {
                 ..Default::default()
             };
 
-            let refiner = GeoRefiner::new(&predicate, options, 100, build_stats);
+            let refiner = GeoRefiner::new(&predicate, options, build_stats);
 
             // All relation types should need probe stats for GeoRefiner
             // Because GeoRefiner doesn't have predicate-specific optimizations
@@ -646,43 +528,12 @@ mod tests {
         let simple_probe_stats = create_geo_stats(50, 1500); // 30 points per geometry
 
         let result = select_optimal_mode(&complex_build_stats, &simple_probe_stats);
-        assert_eq!(result, ExecutionMode::PrepareBuild);
+        assert_eq!(result, ExecutionMode::PrepareNone);
 
         let simple_build_stats = create_geo_stats(100, 3000); // 30 points per geometry
         let complex_probe_stats = create_geo_stats(50, 4000); // 80 points per geometry
 
         let result = select_optimal_mode(&simple_build_stats, &complex_probe_stats);
         assert_eq!(result, ExecutionMode::PrepareProbe);
-    }
-
-    #[test]
-    fn test_geo_refiner_prepared_geom_array_sizing() {
-        let predicate = create_relation_predicate(SpatialRelationType::Intersects);
-        let build_stats = create_geo_stats(100, 1000);
-        let num_build_geoms = 500;
-
-        // Test PrepareBuild mode - should allocate array for all build geometries
-        let options = SpatialJoinOptions {
-            execution_mode: ExecutionMode::PrepareBuild,
-            ..Default::default()
-        };
-        let refiner = GeoRefiner::new(&predicate, options, num_build_geoms, build_stats.clone());
-        assert!(refiner.prepared_geoms.len() == num_build_geoms);
-
-        // Test PrepareProbe mode - should not allocate array for build geometries
-        let options = SpatialJoinOptions {
-            execution_mode: ExecutionMode::PrepareProbe,
-            ..Default::default()
-        };
-        let refiner = GeoRefiner::new(&predicate, options, num_build_geoms, build_stats.clone());
-        assert!(refiner.prepared_geoms.is_empty());
-
-        // Test PrepareNone mode - should not allocate array for build geometries
-        let options = SpatialJoinOptions {
-            execution_mode: ExecutionMode::PrepareNone,
-            ..Default::default()
-        };
-        let refiner = GeoRefiner::new(&predicate, options, num_build_geoms, build_stats);
-        assert!(refiner.prepared_geoms.is_empty());
     }
 }
