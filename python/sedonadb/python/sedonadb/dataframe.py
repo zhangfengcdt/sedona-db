@@ -19,6 +19,81 @@ class DataFrame:
         self._ctx = ctx
         self._impl = impl
 
+    def head(self, n: int = 5) -> "DataFrame":
+        """Limit result to the first n rows
+
+        Note that this is non-deterministic for many queries.
+
+        Args:
+            n: The number of rows to return
+
+        Examples:
+
+            ```
+            >>> import sedonadb
+            >>> con = sedonadb.connect()
+            >>> df = con.sql("SELECT * FROM (VALUES ('one'), ('two'), ('three')) AS t(val)")
+            >>> df.head(1).show()
+            ┌──────┐
+            │  val │
+            │ utf8 │
+            ╞══════╡
+            │ one  │
+            └──────┘
+        """
+        return self.limit(n)
+
+    def limit(self, n: Optional[int], /, *, offset: int = 0) -> "DataFrame":
+        """Limit result to n rows starting at offset
+
+        Note that this is non-deterministic for many queries.
+
+        Args:
+            n: The number of rows to return
+            offset: The number of rows to skip (optional)
+
+        Examples:
+
+            ```
+            >>> import sedonadb
+            >>> con = sedonadb.connect()
+            >>> df = con.sql("SELECT * FROM (VALUES ('one'), ('two'), ('three')) AS t(val)")
+            >>> df.limit(1).show()
+            ┌──────┐
+            │  val │
+            │ utf8 │
+            ╞══════╡
+            │ one  │
+            └──────┘
+
+            >>> df.limit(1, offset=2).show()
+            ┌───────┐
+            │  val  │
+            │  utf8 │
+            ╞═══════╡
+            │ three │
+            └───────┘
+
+            ```
+        """
+        return DataFrame(self._ctx, self._impl.limit(n, offset))
+
+    def count(self) -> int:
+        """Compute the number of rows in this DataFrame
+
+        Examples:
+
+            ```
+            >>> import sedonadb
+            >>> con = sedonadb.connect()
+            >>> df = con.sql("SELECT * FROM (VALUES ('one'), ('two'), ('three')) AS t(val)")
+            >>> df.count()
+            3
+
+            ```
+        """
+        return self._impl.count()
+
     def __arrow_c_schema__(self):
         """ArrowSchema PyCapsule interface
 

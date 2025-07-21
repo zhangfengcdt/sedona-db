@@ -6,6 +6,31 @@ import pytest
 import sedonadb
 
 
+def test_head_limit(con):
+    df = con.sql("SELECT * FROM (VALUES ('one'), ('two'), ('three')) AS t(val)")
+
+    pd.testing.assert_frame_equal(
+        df.head(1).to_pandas(), pd.DataFrame({"val": ["one"]})
+    )
+
+    pd.testing.assert_frame_equal(
+        df.limit(1).to_pandas(), pd.DataFrame({"val": ["one"]})
+    )
+
+    pd.testing.assert_frame_equal(
+        df.limit(1, offset=2).to_pandas(), pd.DataFrame({"val": ["three"]})
+    )
+
+    pd.testing.assert_frame_equal(
+        df.limit(None, offset=1).to_pandas(), pd.DataFrame({"val": ["two", "three"]})
+    )
+
+
+def test_count(con):
+    df = con.sql("SELECT * FROM (VALUES ('one'), ('two'), ('three')) AS t(val)")
+    assert df.count() == 3
+
+
 def test_dataframe_to_arrow(con):
     df = con.sql("SELECT 1 as one, ST_GeomFromWKT('POINT (0 1)') as geom")
     expected_schema = pa.schema(

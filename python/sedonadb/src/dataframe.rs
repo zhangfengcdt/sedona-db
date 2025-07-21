@@ -48,6 +48,23 @@ impl InternalDataFrame {
         Ok(names)
     }
 
+    fn limit(
+        &self,
+        limit: Option<usize>,
+        offset: usize,
+    ) -> Result<InternalDataFrame, PySedonaError> {
+        let inner = self.inner.clone().limit(offset, limit)?;
+        Ok(InternalDataFrame::new(inner, self.runtime.clone()))
+    }
+
+    fn count<'py>(&self, py: Python<'py>) -> Result<usize, PySedonaError> {
+        Ok(wait_for_future(
+            py,
+            &self.runtime,
+            self.inner.clone().count(),
+        )??)
+    }
+
     fn show<'py>(
         &self,
         py: Python<'py>,
