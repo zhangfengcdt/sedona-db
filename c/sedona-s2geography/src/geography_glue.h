@@ -1,4 +1,6 @@
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -24,6 +26,27 @@ const char* SedonaGeographyGlueS2GeometryVersion(void);
 const char* SedonaGeographyGlueAbseilVersion(void);
 
 double SedonaGeographyGlueTestLinkage(void);
+
+struct SedonaGeographyArrowUdf {
+  int (*init)(struct SedonaGeographyArrowUdf* self, struct ArrowSchema* arg_schema,
+              const char* options, struct ArrowSchema* out);
+  int (*execute)(struct SedonaGeographyArrowUdf* self, struct ArrowArray** args,
+                 int64_t n_args, struct ArrowArray* out);
+  const char* (*get_last_error)(struct SedonaGeographyArrowUdf* self);
+  void (*release)(struct SedonaGeographyArrowUdf* self);
+
+  void* private_data;
+};
+
+#define DECLARE_UDF_IMPL(name) \
+  void SedonaGeographyInitUdf##name(struct SedonaGeographyArrowUdf* out)
+
+DECLARE_UDF_IMPL(Length);
+DECLARE_UDF_IMPL(Intersects);
+DECLARE_UDF_IMPL(Centroid);
+DECLARE_UDF_IMPL(InterpolateNormalized);
+
+#undef DECLARE_UDF_IMPL
 
 #ifdef __cplusplus
 }

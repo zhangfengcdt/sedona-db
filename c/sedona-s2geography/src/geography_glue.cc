@@ -1,12 +1,15 @@
 
 #include "geography_glue.h"
 
+#include <cstdint>
+
 #include "absl/base/config.h"
 
 #include <geoarrow/geoarrow.h>
 #include <nanoarrow/nanoarrow.h>
 #include <openssl/opensslv.h>
 #include <s2geography.h>
+#include <s2geography/arrow_udf/arrow_udf.h>
 
 #include <s2/s2earth.h>
 
@@ -49,3 +52,45 @@ double SedonaGeographyGlueTestLinkage(void) {
 
   return S2Earth::RadiusMeters() * s2_distance(index1, index2);
 }
+
+struct UdfExporter {
+  static void Export(std::unique_ptr<s2geography::arrow_udf::ArrowUDF> udf,
+                     struct SedonaGeographyArrowUdf* out) {
+    out->private_data = udf.release();
+    out->init = &CInit;
+    out->execute = &CExecute;
+    out->get_last_error = &CLastError;
+    out->release = &CRelease;
+  }
+
+  static int CInit(struct SedonaGeographyArrowUdf* self, struct ArrowSchema* arg_schema,
+                   const char* options, struct ArrowSchema* out) {
+    auto udf = reinterpret_cast<s2geography::arrow_udf::ArrowUDF*>(self->private_data);
+    return udf->Init(arg_schema, options, out);
+  }
+  static int CExecute(struct SedonaGeographyArrowUdf* self, struct ArrowArray** args,
+                      int64_t n_args, struct ArrowArray* out) {
+    auto udf = reinterpret_cast<s2geography::arrow_udf::ArrowUDF*>(self->private_data);
+    return udf->Execute(args, n_args, out);
+  }
+  static const char* CLastError(struct SedonaGeographyArrowUdf* self) {
+    auto udf = reinterpret_cast<s2geography::arrow_udf::ArrowUDF*>(self->private_data);
+    return udf->GetLastError();
+  }
+
+  static void CRelease(struct SedonaGeographyArrowUdf* self) {
+    auto udf = reinterpret_cast<s2geography::arrow_udf::ArrowUDF*>(self->private_data);
+    delete udf;
+    self->private_data = nullptr;
+  }
+};
+
+#define INIT_UDF_IMPL(name)                                                \
+  void SedonaGeographyInitUdf##name(struct SedonaGeographyArrowUdf* out) { \
+    return UdfExporter::Export(s2geography::arrow_udf::name(), out);       \
+  }
+
+INIT_UDF_IMPL(Length);
+INIT_UDF_IMPL(Intersects);
+INIT_UDF_IMPL(Centroid);
+INIT_UDF_IMPL(InterpolateNormalized);

@@ -30,6 +30,7 @@ fn main() {
     parse_cmake_linker_flags(&dst);
 
     // Generate bindings from the header
+    println!("cargo::rerun-if-changed=src/geography_glue.h");
     let bindings = bindgen::Builder::default()
         .header("src/geography_glue.h")
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))

@@ -118,6 +118,10 @@ impl SedonaContext {
         #[cfg(feature = "geo")]
         out.register_aggregate_kernels(sedona_geo::register::aggregate_kernels().into_iter())?;
 
+        // Register s2geography scalar kernels if built with s2geography support
+        #[cfg(feature = "s2geography")]
+        out.register_scalar_kernels(sedona_s2geography::register::scalar_kernels().into_iter())?;
+
         Ok(out)
     }
 

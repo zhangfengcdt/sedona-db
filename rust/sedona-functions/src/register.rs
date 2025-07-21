@@ -66,4 +66,5 @@ pub mod stubs {
         st_intersects_udf, st_touches_udf, st_within_udf,
     };
     pub use crate::st_area::st_area_udf;
+    pub use crate::st_length::st_length_udf;
 }

@@ -18,6 +18,7 @@ gcp = ["object_store/gcp"]
 geo = ["dep:sedona-geo"]
 http = ["object_store/http"]
 spatial-join = ["dep:sedona-spatial-join"]
+s2geography = ["dep:sedona-s2geography"]
 
 [dev-dependencies]
 sedona-testing = { path = "../sedona-testing" }
@@ -48,5 +49,6 @@ sedona-geo = { path = "../sedona-geo", optional = true }
 sedona-geoparquet = { path = "../sedona-geoparquet" }
 sedona-schema = { path = "../sedona-schema" }
 sedona-spatial-join = { path = "../sedona-spatial-join", optional = true }
+sedona-s2geography = { path = "../../c/sedona-s2geography", optional = true }
 tokio = { workspace = true }
 url = { workspace = true }

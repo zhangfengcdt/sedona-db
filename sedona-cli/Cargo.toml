@@ -33,6 +33,10 @@ result_large_err = "allow"
 [package.metadata.docs.rs]
 all-features = true
 
+[features]
+default = []
+s2geography = ["sedona/s2geography"]
+
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
@@ -54,5 +58,5 @@ futures = { workspace = true }
 mimalloc = { version = "0.1", default-features = false }
 regex = { workspace = true }
 rustyline = "15.0"
-sedona = { path = "../rust/sedona", features = ["aws", "gcp", "http"] }
+sedona = { path = "../rust/sedona", features = ["aws", "gcp", "http", "s2geography"] }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot", "signal"] }

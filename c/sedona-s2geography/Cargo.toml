@@ -31,3 +31,4 @@ sedona-expr = { path = "../../rust/sedona-expr" }
 sedona-functions = { path = "../../rust/sedona-functions" }
 sedona-schema = { path = "../../rust/sedona-schema" }
 thiserror = { workspace = true }
+paste = "1.0.15"
