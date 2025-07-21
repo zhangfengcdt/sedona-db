@@ -19,7 +19,7 @@ use sedona_geometry::{
     interval::{Interval, IntervalTrait},
     wkb_factory::{wkb_linestring, wkb_point, wkb_polygon},
 };
-use sedona_schema::datatypes::{Edges, SedonaType, WKB_GEOMETRY};
+use sedona_schema::datatypes::{SedonaType, WKB_GEOMETRY};
 
 /// ST_Envelope_Aggr() aggregate UDF implementation
 ///
@@ -159,7 +159,7 @@ impl BoundsAccumulator2D {
 impl Accumulator for BoundsAccumulator2D {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         Self::check_update_input_len(values, 1, "update_batch")?;
-        let arg_types = [SedonaType::Wkb(Edges::Planar, None)];
+        let arg_types = [self.input_type.clone()];
         let args = [ColumnarValue::Array(
             self.input_type.unwrap_array(&values[0])?,
         )];
@@ -187,7 +187,7 @@ impl Accumulator for BoundsAccumulator2D {
         Self::check_update_input_len(states, 1, "merge_batch")?;
         let array = &states[0];
         let args = [ColumnarValue::Array(array.clone())];
-        let arg_types = [SedonaType::Wkb(Edges::Planar, None)];
+        let arg_types = [WKB_GEOMETRY.clone()];
         let executor = GenericExecutor::new(&arg_types, &args);
         self.execute_update(executor)?;
         Ok(())
@@ -197,7 +197,9 @@ impl Accumulator for BoundsAccumulator2D {
 #[cfg(test)]
 mod test {
     use datafusion_expr::AggregateUDF;
+    use rstest::rstest;
     use sedona_expr::aggregate_udf::AggregateTester;
+    use sedona_schema::datatypes::WKB_VIEW_GEOMETRY;
     use sedona_testing::{
         compare::assert_scalar_equal,
         create::{create_array, create_scalar},
@@ -212,20 +214,20 @@ mod test {
         assert!(udf.documentation().is_some());
     }
 
-    #[test]
-    fn udf() {
-        let tester = AggregateTester::new(st_envelope_aggr_udf().into(), vec![WKB_GEOMETRY]);
+    #[rstest]
+    fn udf(#[values(WKB_GEOMETRY, WKB_VIEW_GEOMETRY)] sedona_type: SedonaType) {
+        let tester = AggregateTester::new(st_envelope_aggr_udf().into(), vec![sedona_type.clone()]);
         assert_eq!(tester.return_type().unwrap(), WKB_GEOMETRY);
 
         // Finite input with nulls
         let batches = vec![
             create_array(
                 &[Some("POINT (0 1)"), None, Some("POINT (2 3)")],
-                &WKB_GEOMETRY,
+                &sedona_type,
             ),
             create_array(
                 &[Some("POINT (4 5)"), None, Some("POINT (6 7)")],
-                &WKB_GEOMETRY,
+                &sedona_type,
             ),
         ];
 
@@ -243,7 +245,7 @@ mod test {
         // All coordinates empty
         assert_scalar_equal(
             &tester
-                .aggregate(vec![create_array(&[Some("POINT EMPTY")], &WKB_GEOMETRY)])
+                .aggregate(vec![create_array(&[Some("POINT EMPTY")], &sedona_type)])
                 .unwrap(),
             &create_scalar(None, &WKB_GEOMETRY),
         );
@@ -251,7 +253,7 @@ mod test {
         // Degenerate output: point
         assert_scalar_equal(
             &tester
-                .aggregate(vec![create_array(&[Some("POINT (0 1)")], &WKB_GEOMETRY)])
+                .aggregate(vec![create_array(&[Some("POINT (0 1)")], &sedona_type)])
                 .unwrap(),
             &create_scalar(Some("POINT (0 1)"), &WKB_GEOMETRY),
         );
@@ -261,7 +263,7 @@ mod test {
             &tester
                 .aggregate(vec![create_array(
                     &[Some("MULTIPOINT (0 2, 0 1)")],
-                    &WKB_GEOMETRY,
+                    &sedona_type,
                 )])
                 .unwrap(),
             &create_scalar(Some("LINESTRING (0 1, 0 2)"), &WKB_GEOMETRY),
@@ -272,7 +274,7 @@ mod test {
             &tester
                 .aggregate(vec![create_array(
                     &[Some("MULTIPOINT (1 1, 0 1)")],
-                    &WKB_GEOMETRY,
+                    &sedona_type,
                 )])
                 .unwrap(),
             &create_scalar(Some("LINESTRING (0 1, 1 1)"), &WKB_GEOMETRY),
