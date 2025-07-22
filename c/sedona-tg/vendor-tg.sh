@@ -1,5 +1,5 @@
 
-TG_REF=efbb5b704d0df5ae3d23bf325683e0248ee9b6d8
+TG_REF=e136401cd6870008eb7d12a2a165fdc27d18d5ef
 
 curl -L https://github.com/tidwall/tg/raw/${TG_REF}/tg.c \
     -o src/tg/tg.c

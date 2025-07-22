@@ -273,4 +273,62 @@ mod test {
         test_predicate::<Touches>("POLYGON ((0 0, 5 0, 0 5, 0 0))", "POINT (0 0)", true);
         test_predicate::<Touches>("POLYGON ((0 0, 5 0, 0 5, 0 0))", "POINT (1 1)", false);
     }
+
+    #[test]
+    fn intersects() {
+        let wkt1 = "POLYGON(\
+            (-118.2936175 34.026516,-118.2935834 34.026516,-118.2935834 34.0264634,\
+            -118.2935834 34.0263308,-118.2935834 34.0262071,-118.2935834 34.0260835,\
+            -118.2935834 34.0259598,-118.2935835 34.02592,-118.2934886 34.02592,\
+            -118.2934886 34.0259073,-118.2934259 34.0259073,-118.2934259 34.02592,\
+            -118.2933447 34.0259205,-118.2933443 34.0260829,-118.2933442 34.0262066,\
+            -118.2933442 34.0263303,-118.2933442 34.0264637,-118.2933442 34.0264907,\
+            -118.2933259 34.0264907,-118.2933259 34.0265669,-118.2933035 34.0265669,\
+            -118.2931745 34.0265669,-118.2931745 34.0265216,-118.2931693 34.0265191,\
+            -118.2931876 34.0263539,-118.2931384 34.0263608,-118.2929819 34.0263827,\
+            -118.2929795 34.0264157,-118.292977 34.0266764,-118.2929762 34.026758,\
+            -118.2929659 34.026758,-118.2929658 34.0267856,-118.2931085 34.0267856,\
+            -118.2931085 34.0267629,-118.2931722 34.0267629,-118.2931722 34.0267683,\
+            -118.293303 34.0267683,-118.2934675 34.0267684,-118.2934675 34.0267859,\
+            -118.2934684 34.0267859,-118.2935959 34.0267859,-118.2935959 34.0267078,\
+            -118.2936175 34.0267078,-118.2936175 34.0265897,-118.2936175 34.026516))";
+        let wkt2 = "POINT(-118.2934684 34.0267859)";
+        let geom1 = Geom::parse_wkt(wkt1, IndexType::Default).unwrap();
+        let geom2 = Geom::parse_wkt(wkt2, IndexType::Default).unwrap();
+        let intersects = Intersects::evaluate(&geom1, &geom2);
+        assert!(intersects);
+
+        let geom1 = Geom::parse_wkt(wkt1, IndexType::YStripes).unwrap();
+        let geom2 = Geom::parse_wkt(wkt2, IndexType::Default).unwrap();
+        let intersects = Intersects::evaluate(&geom1, &geom2);
+        assert!(intersects);
+    }
+
+    #[test]
+    fn intersects_touch_top_edge() {
+        let mut pts = vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        for i in (0..100).rev() {
+            let y = i as f64 / 100.0;
+            pts.push((0.0, y));
+        }
+
+        let wkt = format!(
+            "POLYGON(({}))",
+            pts.iter()
+                .map(|(x, y)| format!("{x} {y}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+
+        let geom = Geom::parse_wkt(&wkt, IndexType::Default).unwrap();
+        let geom2 = Geom::parse_wkt("POINT (0.5 1)", IndexType::Default).unwrap();
+        let intersects = Intersects::evaluate(&geom, &geom2);
+        assert!(intersects);
+
+        // This used to be problematic: https://github.com/tidwall/tg/issues/16
+        let geom = Geom::parse_wkt(&wkt, IndexType::YStripes).unwrap();
+        let geom2 = Geom::parse_wkt("POINT (0.5 1)", IndexType::Default).unwrap();
+        let intersects = Intersects::evaluate(&geom, &geom2);
+        assert!(intersects);
+    }
 }
