@@ -10,6 +10,9 @@ use regex::Regex;
 /// optimal execution mode.
 pub const DEFAULT_SPECULATIVE_THRESHOLD: usize = 1000;
 
+/// Default minimum number of points per geometry to use prepared geometries for the build side.
+pub const DEFAULT_MIN_POINTS_FOR_BUILD_PREPARATION: usize = 50;
+
 /// Helper function to register the spatial join optimizer with a session config
 pub fn add_sedona_option_extension(config: SessionConfig) -> SessionConfig {
     config.with_option_extension(SedonaOptions::default())
@@ -36,11 +39,22 @@ config_namespace! {
         /// Spatial library to use for spatial join
         pub spatial_library: SpatialLibrary, default = SpatialLibrary::Geo
 
+        /// Options for configuring the GEOS spatial library
+        pub geos: GeosOptions, default = GeosOptions::default()
+
         /// Options for configuring the TG spatial library
         pub tg: TgOptions, default = TgOptions::default()
 
         /// The execution mode determining how prepared geometries are used
         pub execution_mode: ExecutionMode, default = ExecutionMode::Speculative(DEFAULT_SPECULATIVE_THRESHOLD)
+    }
+}
+
+config_namespace! {
+    /// Configuration options for the GEOS spatial library
+    pub struct GeosOptions {
+        /// The minimum number of points per geometry to use prepared geometries for the build side.
+        pub min_points_for_build_preparation: usize, default = DEFAULT_MIN_POINTS_FOR_BUILD_PREPARATION
     }
 }
 

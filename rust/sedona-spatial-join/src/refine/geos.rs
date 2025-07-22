@@ -1,6 +1,6 @@
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    OnceLock,
+    Arc, OnceLock,
 };
 
 use datafusion_common::{internal_err, DataFusionError, Result};
@@ -14,13 +14,85 @@ use crate::{
     index::IndexQueryResult,
     init_once_array::InitOnceArray,
     refine::{
-        exec_mode_selector::{
-            create_exec_mode_selector, get_or_update_execution_mode, ExecModeSelector, SelectorFunc,
-        },
+        exec_mode_selector::{get_or_update_execution_mode, ExecModeSelector, SelectOptimalMode},
         IndexQueryResultRefiner,
     },
-    spatial_predicate::{SpatialPredicate, SpatialRelationType},
+    spatial_predicate::{RelationPredicate, SpatialPredicate, SpatialRelationType},
 };
+
+/// GEOS-specific optimal mode selector that chooses the best execution mode
+/// based on geometry complexity statistics.
+struct GeosOptimalModeSelector {
+    predicate: SpatialPredicate,
+    min_points_for_build_preparation: f64,
+}
+
+impl GeosOptimalModeSelector {
+    /// Both PrepareBuild and PrepareProbe works for ST_Intersects. We select PrepareBuild when the
+    /// build side is more complex than the probe side and the build side is complex enough.
+    /// This is because using prepared geometries on the build side has large overhead, using it
+    /// on not so complex geometries will not worth it.
+    fn select_intersects(&self, build_mean_points: f64, probe_mean_points: f64) -> ExecutionMode {
+        if build_mean_points > probe_mean_points
+            && build_mean_points >= self.min_points_for_build_preparation
+        {
+            ExecutionMode::PrepareBuild
+        } else {
+            ExecutionMode::PrepareProbe
+        }
+    }
+
+    /// We may use PrepareBuild to evaluate the spatial predicate faster, but only when the build side
+    /// is complex enough. Otherwise the overhead of using prepared geometries on the build side may
+    /// not worth it. We don't select PrepareProbe here because it does not work with ST_Contains and
+    /// ST_Covers.
+    fn select_contains_covers(&self, build_mean_points: f64) -> ExecutionMode {
+        if build_mean_points >= self.min_points_for_build_preparation {
+            ExecutionMode::PrepareBuild
+        } else {
+            ExecutionMode::PrepareNone
+        }
+    }
+}
+
+impl SelectOptimalMode for GeosOptimalModeSelector {
+    fn select(&self, build_stats: &GeoStatistics, probe_stats: &GeoStatistics) -> ExecutionMode {
+        let build_mean_points = build_stats.mean_points_per_geometry().unwrap_or(0.0);
+        let probe_mean_points = probe_stats.mean_points_per_geometry().unwrap_or(0.0);
+        if matches!(
+            &self.predicate,
+            SpatialPredicate::Relation(RelationPredicate {
+                relation_type: SpatialRelationType::Intersects,
+                ..
+            })
+        ) {
+            self.select_intersects(build_mean_points, probe_mean_points)
+        } else {
+            self.select_without_probe_stats(build_stats)
+                .unwrap_or(ExecutionMode::PrepareNone)
+        }
+    }
+
+    fn select_without_probe_stats(&self, build_stats: &GeoStatistics) -> Option<ExecutionMode> {
+        match &self.predicate {
+            SpatialPredicate::Distance(_) => Some(ExecutionMode::PrepareNone),
+            SpatialPredicate::Relation(predicate) => match predicate.relation_type {
+                SpatialRelationType::Intersects => {
+                    // Need probe side statistics to determine optimal execution mode.
+                    None
+                }
+                SpatialRelationType::Contains | SpatialRelationType::Covers => {
+                    let build_mean_points = build_stats.mean_points_per_geometry().unwrap_or(0.0);
+                    Some(self.select_contains_covers(build_mean_points))
+                }
+                SpatialRelationType::Within | SpatialRelationType::CoveredBy => {
+                    Some(ExecutionMode::PrepareProbe)
+                }
+                _ => Some(ExecutionMode::PrepareNone),
+            },
+        }
+    }
+}
 
 /// A refiner that uses the GEOS library to evaluate spatial predicates.
 pub(crate) struct GeosRefiner {
@@ -28,7 +100,7 @@ pub(crate) struct GeosRefiner {
     prepared_geoms: InitOnceArray<Option<OwnedPreparedGeometry>>,
     mem_usage: AtomicUsize,
     exec_mode: OnceLock<ExecutionMode>,
-    exec_mode_selector: Option<ExecModeSelector<SelectorFunc>>,
+    exec_mode_selector: Option<ExecModeSelector>,
 }
 
 /// A wrapper around a GEOS Geometry and its corresponding PreparedGeometry.
@@ -105,34 +177,25 @@ impl GeosRefiner {
         let evaluator: Box<dyn GeosPredicateEvaluator> = create_evaluator(predicate);
 
         let exec_mode = OnceLock::new();
-        if matches!(options.execution_mode, ExecutionMode::Speculative(_)) {
-            // Automatically select the execution mode based on spatial predicate
-            match predicate {
-                SpatialPredicate::Distance(_) => {
-                    exec_mode.set(ExecutionMode::PrepareNone).unwrap();
+        let exec_mode_selector = match options.execution_mode {
+            ExecutionMode::Speculative(n) => {
+                let selector = GeosOptimalModeSelector {
+                    predicate: predicate.clone(),
+                    min_points_for_build_preparation: options.geos.min_points_for_build_preparation
+                        as f64,
+                };
+                if let Some(mode) = selector.select_without_probe_stats(&build_stats) {
+                    exec_mode.set(mode).unwrap();
+                    None
+                } else {
+                    Some(ExecModeSelector::new(build_stats, n, Arc::new(selector)))
                 }
-                SpatialPredicate::Relation(predicate) => {
-                    match predicate.relation_type {
-                        SpatialRelationType::Intersects => {
-                            // Both PrepareBuild and PrepareProbe can be used for intersects predicate.
-                            // We need statistics from the probe side to select the optimal execution mode.
-                        }
-                        SpatialRelationType::Contains | SpatialRelationType::Covers => {
-                            exec_mode.set(ExecutionMode::PrepareBuild).unwrap();
-                        }
-                        SpatialRelationType::Within | SpatialRelationType::CoveredBy => {
-                            exec_mode.set(ExecutionMode::PrepareProbe).unwrap();
-                        }
-                        _ => {
-                            // Other predicates cannot be accelerated by prepared geometries.
-                            exec_mode.set(ExecutionMode::PrepareNone).unwrap();
-                        }
-                    }
-                }
-            };
-        } else {
-            exec_mode.set(options.execution_mode).unwrap();
-        }
+            }
+            _ => {
+                exec_mode.set(options.execution_mode).unwrap();
+                None
+            }
+        };
 
         let prepared_geom_array_size =
             if matches!(exec_mode.get(), Some(ExecutionMode::PrepareBuild) | None) {
@@ -143,11 +206,6 @@ impl GeosRefiner {
 
         let prepared_geoms = InitOnceArray::new(prepared_geom_array_size);
         let mem_usage = prepared_geoms.allocated_size();
-        let exec_mode_selector = if exec_mode.get().is_none() {
-            create_exec_mode_selector(build_stats, options.execution_mode, select_optimal_mode)
-        } else {
-            None
-        };
 
         Self {
             evaluator,
@@ -232,16 +290,6 @@ impl GeosRefiner {
             }
         }
         Ok(build_batch_positions)
-    }
-}
-
-fn select_optimal_mode(build_stats: &GeoStatistics, probe_stats: &GeoStatistics) -> ExecutionMode {
-    // Choose a more complex side to prepare the geometries. GEOS prepared geometries are usually
-    // faster even if the geometries are simple, so we never select PrepareNone.
-    if build_stats.mean_points_per_geometry() > probe_stats.mean_points_per_geometry() {
-        ExecutionMode::PrepareBuild
-    } else {
-        ExecutionMode::PrepareProbe
     }
 }
 
@@ -482,6 +530,7 @@ impl_geos_evaluator!(GeosCoveredBy, covered_by);
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
     use sedona_testing::create::make_wkb;
 
     use super::*;
@@ -562,7 +611,7 @@ mod tests {
     }
 
     #[test]
-    fn test_geos_refiner_intersects_predicate_needs_stats() {
+    fn test_geos_refiner_intersects_needs_stats() {
         let predicate = create_relation_predicate(SpatialRelationType::Intersects);
         let build_stats = create_geo_stats(100, 1000);
         let options = SpatialJoinOptions {
@@ -579,41 +628,40 @@ mod tests {
         assert_eq!(refiner.actual_execution_mode(), ExecutionMode::PrepareProbe);
     }
 
-    #[test]
-    fn test_geos_refiner_contains_predicate_immediate_selection() {
-        let predicate = create_relation_predicate(SpatialRelationType::Contains);
+    #[rstest]
+    #[case(SpatialRelationType::Contains)]
+    #[case(SpatialRelationType::Covers)]
+    fn test_geos_refiner_contains_predicate_immediate_selection(
+        #[case] relation_type: SpatialRelationType,
+    ) {
+        let predicate = create_relation_predicate(relation_type);
         let build_stats = create_geo_stats(100, 1000);
         let options = SpatialJoinOptions {
             execution_mode: ExecutionMode::Speculative(DEFAULT_SPECULATIVE_THRESHOLD),
             ..Default::default()
         };
 
+        let refiner = GeosRefiner::new(&predicate, options.clone(), 100, build_stats);
+
+        // Contains predicate should immediately select PrepareNone, since build side is not complex enough
+        assert_eq!(refiner.actual_execution_mode(), ExecutionMode::PrepareNone);
+        assert!(!refiner.need_more_probe_stats());
+
+        let build_stats = create_geo_stats(100, 8000);
         let refiner = GeosRefiner::new(&predicate, options, 100, build_stats);
 
-        // Contains predicate should immediately select PrepareBuild
+        // Contains predicate should immediately select PrepareBuild, since build side is complex enough
         assert_eq!(refiner.actual_execution_mode(), ExecutionMode::PrepareBuild);
         assert!(!refiner.need_more_probe_stats());
     }
 
-    #[test]
-    fn test_geos_refiner_covers_predicate_immediate_selection() {
-        let predicate = create_relation_predicate(SpatialRelationType::Covers);
-        let build_stats = create_geo_stats(100, 1000);
-        let options = SpatialJoinOptions {
-            execution_mode: ExecutionMode::Speculative(DEFAULT_SPECULATIVE_THRESHOLD),
-            ..Default::default()
-        };
-
-        let refiner = GeosRefiner::new(&predicate, options, 100, build_stats);
-
-        // Covers predicate should immediately select PrepareBuild
-        assert_eq!(refiner.actual_execution_mode(), ExecutionMode::PrepareBuild);
-        assert!(!refiner.need_more_probe_stats());
-    }
-
-    #[test]
-    fn test_geos_refiner_within_predicate_immediate_selection() {
-        let predicate = create_relation_predicate(SpatialRelationType::Within);
+    #[rstest]
+    #[case(SpatialRelationType::Within)]
+    #[case(SpatialRelationType::CoveredBy)]
+    fn test_geos_refiner_within_predicate_immediate_selection(
+        #[case] relation_type: SpatialRelationType,
+    ) {
+        let predicate = create_relation_predicate(relation_type);
         let build_stats = create_geo_stats(100, 1000);
         let options = SpatialJoinOptions {
             execution_mode: ExecutionMode::Speculative(DEFAULT_SPECULATIVE_THRESHOLD),
@@ -627,9 +675,15 @@ mod tests {
         assert!(!refiner.need_more_probe_stats());
     }
 
-    #[test]
-    fn test_geos_refiner_covered_by_predicate_immediate_selection() {
-        let predicate = create_relation_predicate(SpatialRelationType::CoveredBy);
+    #[rstest]
+    #[case(SpatialRelationType::Touches)]
+    #[case(SpatialRelationType::Crosses)]
+    #[case(SpatialRelationType::Overlaps)]
+    #[case(SpatialRelationType::Equals)]
+    fn test_geos_refiner_other_predicates_immediate_selection(
+        #[case] relation_type: SpatialRelationType,
+    ) {
+        let predicate = create_relation_predicate(relation_type);
         let build_stats = create_geo_stats(100, 1000);
         let options = SpatialJoinOptions {
             execution_mode: ExecutionMode::Speculative(DEFAULT_SPECULATIVE_THRESHOLD),
@@ -638,41 +692,16 @@ mod tests {
 
         let refiner = GeosRefiner::new(&predicate, options, 100, build_stats);
 
-        // CoveredBy predicate should immediately select PrepareProbe
-        assert_eq!(refiner.actual_execution_mode(), ExecutionMode::PrepareProbe);
-        assert!(!refiner.need_more_probe_stats());
-    }
-
-    #[test]
-    fn test_geos_refiner_other_predicates_immediate_selection() {
-        let other_predicates = vec![
-            SpatialRelationType::Touches,
-            SpatialRelationType::Crosses,
-            SpatialRelationType::Overlaps,
-            SpatialRelationType::Equals,
-        ];
-
-        for relation_type in other_predicates {
-            let predicate = create_relation_predicate(relation_type);
-            let build_stats = create_geo_stats(100, 1000);
-            let options = SpatialJoinOptions {
-                execution_mode: ExecutionMode::Speculative(DEFAULT_SPECULATIVE_THRESHOLD),
-                ..Default::default()
-            };
-
-            let refiner = GeosRefiner::new(&predicate, options, 100, build_stats);
-
-            // Other predicates should immediately select PrepareNone
-            assert_eq!(
-                refiner.actual_execution_mode(),
-                ExecutionMode::PrepareNone,
-                "Failed for relation type: {relation_type:?}"
-            );
-            assert!(
-                !refiner.need_more_probe_stats(),
-                "Failed for relation type: {relation_type:?}"
-            );
-        }
+        // Other predicates should immediately select PrepareNone
+        assert_eq!(
+            refiner.actual_execution_mode(),
+            ExecutionMode::PrepareNone,
+            "Failed for relation type: {relation_type:?}"
+        );
+        assert!(
+            !refiner.need_more_probe_stats(),
+            "Failed for relation type: {relation_type:?}"
+        );
     }
 
     #[test]
@@ -729,22 +758,77 @@ mod tests {
         assert!(!refiner.need_more_probe_stats());
     }
 
-    #[test]
-    fn test_geos_refiner_select_optimal_mode_function() {
-        // Test the select_optimal_mode function directly
-        let build_stats = create_geo_stats(100, 1000); // 10 points per geometry
-        let probe_stats = create_geo_stats(50, 1500); // 30 points per geometry
+    #[rstest]
+    // Intersects predicate scenarios
+    #[case(
+        SpatialRelationType::Intersects,
+        100, 3000, // 30 points per geometry
+        50, 4000,  // 80 points per geometry
+        ExecutionMode::PrepareProbe
+    )]
+    #[case(
+        SpatialRelationType::Intersects,
+        100, 8000, // 80 points per geometry (>= 50)
+        50, 1500,  // 30 points per geometry
+        ExecutionMode::PrepareBuild
+    )]
+    #[case(
+        SpatialRelationType::Intersects,
+        100, 4000, // 40 points per geometry (< 50)
+        50, 1500,  // 30 points per geometry
+        ExecutionMode::PrepareProbe
+    )]
+    #[case(
+        SpatialRelationType::Intersects,
+        100, 5000, // 50 points per geometry
+        50, 2500,  // 50 points per geometry
+        ExecutionMode::PrepareProbe // Default when not build > probe
+    )]
+    // Contains predicate scenarios
+    #[case(
+        SpatialRelationType::Contains,
+        100, 8000, // 80 points per geometry (>= 50)
+        50, 1500,  // 30 points per geometry (irrelevant)
+        ExecutionMode::PrepareBuild
+    )]
+    #[case(
+        SpatialRelationType::Contains,
+        100, 4000, // 40 points per geometry (< 50)
+        50, 8000,  // 160 points per geometry (irrelevant)
+        ExecutionMode::PrepareNone
+    )]
+    // Covers predicate scenarios
+    #[case(
+        SpatialRelationType::Covers,
+        100, 6000, // 60 points per geometry (>= 50)
+        50, 1000,  // 20 points per geometry (irrelevant)
+        ExecutionMode::PrepareBuild
+    )]
+    #[case(
+        SpatialRelationType::Covers,
+        100, 3000, // 30 points per geometry (< 50)
+        50, 8000,  // 160 points per geometry (irrelevant)
+        ExecutionMode::PrepareNone
+    )]
+    fn test_geos_refiner_select_optimal_mode(
+        #[case] predicate_type: SpatialRelationType,
+        #[case] build_geom_count: i64,
+        #[case] build_points: i64,
+        #[case] probe_geom_count: i64,
+        #[case] probe_points: i64,
+        #[case] expected_mode: ExecutionMode,
+    ) {
+        let predicate = create_relation_predicate(predicate_type);
 
-        // GEOS never selects PrepareNone, should select based on which side is more complex
-        let result = select_optimal_mode(&build_stats, &probe_stats);
-        assert_eq!(result, ExecutionMode::PrepareProbe);
+        let selector = GeosOptimalModeSelector {
+            predicate: predicate.clone(),
+            min_points_for_build_preparation: 50.0,
+        };
 
-        // Complex geometries should select based on which side is more complex
-        let complex_build_stats = create_geo_stats(100, 8000); // 80 points per geometry
-        let simple_probe_stats = create_geo_stats(50, 1500); // 30 points per geometry
-
-        let result = select_optimal_mode(&complex_build_stats, &simple_probe_stats);
-        assert_eq!(result, ExecutionMode::PrepareBuild);
+        let build_stats = create_geo_stats(build_geom_count, build_points);
+        let probe_stats = create_geo_stats(probe_geom_count, probe_points);
+        let result = selector.select(&build_stats, &probe_stats);
+        assert_eq!(result, expected_mode);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use datafusion_common::{internal_err, Result};
 use geo_generic_alg::{Contains, Distance, Euclidean, Intersects, Relate, Within};
@@ -10,19 +10,49 @@ use wkb::reader::Wkb;
 use crate::{
     index::IndexQueryResult,
     refine::{
-        exec_mode_selector::{
-            create_exec_mode_selector, get_or_update_execution_mode, ExecModeSelector, SelectorFunc,
-        },
+        exec_mode_selector::{get_or_update_execution_mode, ExecModeSelector, SelectOptimalMode},
         IndexQueryResultRefiner,
     },
     spatial_predicate::{SpatialPredicate, SpatialRelationType},
 };
 
+/// Geo-specific optimal mode selector that chooses the best execution mode
+/// based on probe-side geometry complexity.
+struct GeoOptimalModeSelector {
+    predicate: SpatialPredicate,
+}
+
+impl SelectOptimalMode for GeoOptimalModeSelector {
+    fn select(&self, _build_stats: &GeoStatistics, probe_stats: &GeoStatistics) -> ExecutionMode {
+        match self.predicate {
+            SpatialPredicate::Distance(_) => ExecutionMode::PrepareNone,
+            SpatialPredicate::Relation(_) => {
+                // We only support PrepareProbe and PrepareNone. Only the stats from the probe side is used to
+                // select the execution mode.
+                let probe_mean_points_per_geometry =
+                    probe_stats.mean_points_per_geometry().unwrap_or(0.0);
+                if probe_mean_points_per_geometry <= 50.0 {
+                    ExecutionMode::PrepareNone
+                } else {
+                    ExecutionMode::PrepareProbe
+                }
+            }
+        }
+    }
+
+    fn select_without_probe_stats(&self, _build_stats: &GeoStatistics) -> Option<ExecutionMode> {
+        match self.predicate {
+            SpatialPredicate::Distance(_) => Some(ExecutionMode::PrepareNone),
+            _ => None,
+        }
+    }
+}
+
 /// A refiner that uses the geo library to evaluate spatial predicates.
 pub(crate) struct GeoRefiner {
     evaluator: Box<dyn GeoPredicateEvaluator>,
     exec_mode: OnceLock<ExecutionMode>,
-    exec_mode_selector: Option<ExecModeSelector<SelectorFunc>>,
+    exec_mode_selector: Option<ExecModeSelector>,
 }
 
 impl GeoRefiner {
@@ -32,23 +62,26 @@ impl GeoRefiner {
         build_stats: GeoStatistics,
     ) -> Self {
         let evaluator = create_evaluator(predicate);
+
         let exec_mode = OnceLock::new();
-
-        if matches!(options.execution_mode, ExecutionMode::Speculative(_)) {
-            // Automatically select the execution mode based on spatial predicate
-            if matches!(predicate, SpatialPredicate::Distance(_)) {
-                // Distance predicate cannot be optimized by prepared geometries
-                exec_mode.set(ExecutionMode::PrepareNone).unwrap();
+        let exec_mode_selector = match options.execution_mode {
+            ExecutionMode::Speculative(n) => {
+                let selector = GeoOptimalModeSelector {
+                    predicate: predicate.clone(),
+                };
+                if let Some(mode) = selector.select_without_probe_stats(&build_stats) {
+                    exec_mode.set(mode).unwrap();
+                    None
+                } else {
+                    Some(ExecModeSelector::new(build_stats, n, Arc::new(selector)))
+                }
             }
-        } else {
-            exec_mode.set(options.execution_mode).unwrap();
-        }
-
-        let exec_mode_selector = if exec_mode.get().is_none() {
-            create_exec_mode_selector(build_stats, options.execution_mode, select_optimal_mode)
-        } else {
-            None
+            _ => {
+                exec_mode.set(options.execution_mode).unwrap();
+                None
+            }
         };
+
         Self {
             evaluator,
             exec_mode,
@@ -94,17 +127,6 @@ impl GeoRefiner {
             }
         }
         Ok(build_batch_positions)
-    }
-}
-
-fn select_optimal_mode(_build_stats: &GeoStatistics, probe_stats: &GeoStatistics) -> ExecutionMode {
-    // We only support PrepareProbe and PrepareNone. Only the stats from the probe side is used to
-    // select the execution mode.
-    let probe_mean_points_per_geometry = probe_stats.mean_points_per_geometry().unwrap_or(0.0);
-    if probe_mean_points_per_geometry <= 50.0 {
-        ExecutionMode::PrepareNone
-    } else {
-        ExecutionMode::PrepareProbe
     }
 }
 
@@ -518,22 +540,25 @@ mod tests {
         // Test the select_optimal_mode function directly
         let build_stats = create_geo_stats(100, 1000); // 10 points per geometry
         let probe_stats = create_geo_stats(50, 1000); // 20 points per geometry
+        let selector = GeoOptimalModeSelector {
+            predicate: create_relation_predicate(SpatialRelationType::Intersects),
+        };
 
         // Simple geometries (max 20 < 50 threshold) should select PrepareNone
-        let result = select_optimal_mode(&build_stats, &probe_stats);
+        let result = selector.select(&build_stats, &probe_stats);
         assert_eq!(result, ExecutionMode::PrepareNone);
 
         // Complex geometries should select based on which side is more complex
         let complex_build_stats = create_geo_stats(100, 8000); // 80 points per geometry
         let simple_probe_stats = create_geo_stats(50, 1500); // 30 points per geometry
 
-        let result = select_optimal_mode(&complex_build_stats, &simple_probe_stats);
+        let result = selector.select(&complex_build_stats, &simple_probe_stats);
         assert_eq!(result, ExecutionMode::PrepareNone);
 
         let simple_build_stats = create_geo_stats(100, 3000); // 30 points per geometry
         let complex_probe_stats = create_geo_stats(50, 4000); // 80 points per geometry
 
-        let result = select_optimal_mode(&simple_build_stats, &complex_probe_stats);
+        let result = selector.select(&simple_build_stats, &complex_probe_stats);
         assert_eq!(result, ExecutionMode::PrepareProbe);
     }
 }

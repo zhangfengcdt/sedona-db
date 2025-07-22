@@ -2,7 +2,7 @@ use std::{
     marker::PhantomData,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        OnceLock,
+        Arc, OnceLock,
     },
 };
 
@@ -16,13 +16,103 @@ use crate::{
     index::IndexQueryResult,
     init_once_array::InitOnceArray,
     refine::{
-        exec_mode_selector::{
-            create_exec_mode_selector, get_or_update_execution_mode, ExecModeSelector, SelectorFunc,
-        },
+        exec_mode_selector::{get_or_update_execution_mode, ExecModeSelector, SelectOptimalMode},
         IndexQueryResultRefiner,
     },
-    spatial_predicate::{SpatialPredicate, SpatialRelationType},
+    spatial_predicate::{RelationPredicate, SpatialPredicate, SpatialRelationType},
 };
+
+/// TG-specific optimal mode selector that chooses the best execution mode
+/// based on geometry complexity and TG library characteristics.
+struct TgOptimalModeSelector {
+    predicate: SpatialPredicate,
+}
+
+impl TgOptimalModeSelector {
+    fn select_intersects(
+        &self,
+        build_stats: &GeoStatistics,
+        probe_stats: &GeoStatistics,
+    ) -> ExecutionMode {
+        let build_mean_points_per_geometry = build_stats.mean_points_per_geometry().unwrap_or(0.0);
+        let probe_mean_points_per_geometry = probe_stats.mean_points_per_geometry().unwrap_or(0.0);
+
+        let max_mean_points_per_geometry =
+            build_mean_points_per_geometry.max(probe_mean_points_per_geometry);
+        if max_mean_points_per_geometry <= 32.0 {
+            // If the mean points per geometry is less than 32, the geometries are not complex enough to
+            // benefit from prepared geometries. TG itself will skip creating index for such geometries.
+            // Please refer to `default_index_spread` in tg.c for more details.
+            //
+            // We select PrepareProbe here because we want TG to automatically figure out whether to create
+            // index for each individual probe geometry. We don't use PrepareBuild because it will take
+            // lots of memory storing not-prepared geometries, while it does not trade much for the
+            // performance.
+            ExecutionMode::PrepareProbe
+        } else {
+            // Choose a more complex side to prepare the geometries
+            if build_mean_points_per_geometry > probe_mean_points_per_geometry {
+                ExecutionMode::PrepareBuild
+            } else {
+                ExecutionMode::PrepareProbe
+            }
+        }
+    }
+
+    fn select_contains_covers(&self, build_stats: &GeoStatistics) -> ExecutionMode {
+        let build_mean_points = build_stats.mean_points_per_geometry().unwrap_or(0.0);
+        if build_mean_points >= 32.0 {
+            ExecutionMode::PrepareBuild
+        } else {
+            ExecutionMode::PrepareNone
+        }
+    }
+}
+
+impl SelectOptimalMode for TgOptimalModeSelector {
+    fn select(&self, build_stats: &GeoStatistics, probe_stats: &GeoStatistics) -> ExecutionMode {
+        if matches!(
+            &self.predicate,
+            SpatialPredicate::Relation(RelationPredicate {
+                relation_type: SpatialRelationType::Intersects,
+                ..
+            })
+        ) {
+            self.select_intersects(build_stats, probe_stats)
+        } else {
+            self.select_without_probe_stats(build_stats)
+                .unwrap_or(ExecutionMode::PrepareNone)
+        }
+    }
+
+    fn select_without_probe_stats(&self, build_stats: &GeoStatistics) -> Option<ExecutionMode> {
+        match &self.predicate {
+            SpatialPredicate::Distance(_) => Some(ExecutionMode::PrepareNone),
+            SpatialPredicate::Relation(predicate) => {
+                match predicate.relation_type {
+                    SpatialRelationType::Intersects => {
+                        // Both PrepareBuild and PrepareProbe can be used for intersects predicate.
+                        // We need statistics from the probe side to select the optimal execution mode.
+                        None
+                    }
+                    SpatialRelationType::Contains | SpatialRelationType::Covers => {
+                        // PrepareBuild is the only execution mode that works for Contains and Covers.
+                        // However, it needs additional memory so it is not always beneficial to
+                        // use it.
+                        Some(self.select_contains_covers(build_stats))
+                    }
+                    SpatialRelationType::Within | SpatialRelationType::CoveredBy => {
+                        Some(ExecutionMode::PrepareProbe)
+                    }
+                    _ => {
+                        // Other predicates cannot be accelerated by prepared geometries.
+                        Some(ExecutionMode::PrepareNone)
+                    }
+                }
+            }
+        }
+    }
+}
 
 /// A refiner that uses the tiny geometry library to evaluate spatial predicates.
 pub(crate) struct TgRefiner {
@@ -31,7 +121,7 @@ pub(crate) struct TgRefiner {
     index_type: tg::IndexType,
     mem_usage: AtomicUsize,
     exec_mode: OnceLock<ExecutionMode>,
-    exec_mode_selector: Option<ExecModeSelector<SelectorFunc>>,
+    exec_mode_selector: Option<ExecModeSelector>,
 }
 
 impl TgRefiner {
@@ -48,33 +138,22 @@ impl TgRefiner {
         };
 
         let exec_mode = OnceLock::new();
-        if matches!(options.execution_mode, ExecutionMode::Speculative(_)) {
-            // Automatically select the execution mode based on spatial predicate
-            match predicate {
-                SpatialPredicate::Distance(_) => {
-                    exec_mode.set(ExecutionMode::PrepareNone).unwrap();
-                }
-                SpatialPredicate::Relation(predicate) => {
-                    match predicate.relation_type {
-                        SpatialRelationType::Intersects => {
-                            // Both PrepareBuild and PrepareProbe can be used for intersects predicate.
-                            // We need statistics from the probe side to select the optimal execution mode.
-                        }
-                        SpatialRelationType::Contains | SpatialRelationType::Covers => {
-                            exec_mode.set(ExecutionMode::PrepareBuild).unwrap();
-                        }
-                        SpatialRelationType::Within | SpatialRelationType::CoveredBy => {
-                            exec_mode.set(ExecutionMode::PrepareProbe).unwrap();
-                        }
-                        _ => {
-                            // Other predicates cannot be accelerated by prepared geometries.
-                            exec_mode.set(ExecutionMode::PrepareNone).unwrap();
-                        }
-                    }
+        let exec_mode_selector = match options.execution_mode {
+            ExecutionMode::Speculative(n) => {
+                let selector = TgOptimalModeSelector {
+                    predicate: predicate.clone(),
+                };
+                if let Some(mode) = selector.select_without_probe_stats(&build_stats) {
+                    exec_mode.set(mode).unwrap();
+                    None
+                } else {
+                    Some(ExecModeSelector::new(build_stats, n, Arc::new(selector)))
                 }
             }
-        } else {
-            exec_mode.set(options.execution_mode).unwrap();
+            _ => {
+                exec_mode.set(options.execution_mode).unwrap();
+                None
+            }
         };
 
         let prepared_geom_array_size =
@@ -86,8 +165,6 @@ impl TgRefiner {
 
         let prepared_geoms = InitOnceArray::new(prepared_geom_array_size);
         let mem_usage = prepared_geoms.allocated_size();
-        let exec_mode_selector =
-            create_exec_mode_selector(build_stats, options.execution_mode, select_optimal_mode);
         Ok(Self {
             evaluator,
             prepared_geoms,
@@ -147,31 +224,6 @@ impl TgRefiner {
             }
         }
         Ok(build_batch_positions)
-    }
-}
-
-fn select_optimal_mode(build_stats: &GeoStatistics, probe_stats: &GeoStatistics) -> ExecutionMode {
-    let build_mean_points_per_geometry = build_stats.mean_points_per_geometry().unwrap_or(0.0);
-    let probe_mean_points_per_geometry = probe_stats.mean_points_per_geometry().unwrap_or(0.0);
-    let max_mean_points_per_geometry =
-        build_mean_points_per_geometry.max(probe_mean_points_per_geometry);
-    if max_mean_points_per_geometry <= 32.0 {
-        // If the mean points per geometry is less than 32, the geometries are not complex enough to
-        // benefit from prepared geometries. TG itself will skip creating index for such geometries.
-        // Please refer to `default_index_spread` in tg.c for more details.
-        //
-        // We select PrepareProbe here because we want TG to automatically figure out whether to create
-        // index for each individual probe geometry. We don't use PrepareBuild because it will take
-        // lots of memory storing not-prepared geometries, while it does not trade much for the
-        // performance.
-        ExecutionMode::PrepareProbe
-    } else {
-        // Choose a more complex side to prepare the geometries
-        if build_mean_points_per_geometry > probe_mean_points_per_geometry {
-            ExecutionMode::PrepareBuild
-        } else {
-            ExecutionMode::PrepareProbe
-        }
     }
 }
 
@@ -359,9 +411,16 @@ mod tests {
             ..Default::default()
         };
 
+        let refiner = TgRefiner::try_new(&predicate, options.clone(), 100, build_stats).unwrap();
+
+        // Contains predicate should immediately select PrepareNone, since build side is not complex enough
+        assert_eq!(refiner.actual_execution_mode(), ExecutionMode::PrepareNone);
+        assert!(!refiner.need_more_probe_stats());
+
+        let build_stats = create_geo_stats(100, 8000);
         let refiner = TgRefiner::try_new(&predicate, options, 100, build_stats).unwrap();
 
-        // Contains predicate should immediately select PrepareBuild
+        // Contains predicate should immediately select PrepareBuild, since build side is complex enough
         assert_eq!(refiner.actual_execution_mode(), ExecutionMode::PrepareBuild);
         assert!(!refiner.need_more_probe_stats());
     }
@@ -375,9 +434,16 @@ mod tests {
             ..Default::default()
         };
 
+        let refiner = TgRefiner::try_new(&predicate, options.clone(), 100, build_stats).unwrap();
+
+        // Covers predicate should immediately select PrepareNone, since build side is not complex enough
+        assert_eq!(refiner.actual_execution_mode(), ExecutionMode::PrepareNone);
+        assert!(!refiner.need_more_probe_stats());
+
+        let build_stats = create_geo_stats(100, 8000);
         let refiner = TgRefiner::try_new(&predicate, options, 100, build_stats).unwrap();
 
-        // Covers predicate should immediately select PrepareBuild
+        // Covers predicate should immediately select PrepareBuild, since build side is complex enough
         assert_eq!(refiner.actual_execution_mode(), ExecutionMode::PrepareBuild);
         assert!(!refiner.need_more_probe_stats());
     }
@@ -492,22 +558,25 @@ mod tests {
         // Test the select_optimal_mode function directly
         let build_stats = create_geo_stats(100, 1000); // 10 points per geometry
         let probe_stats = create_geo_stats(50, 1000); // 20 points per geometry
+        let selector = TgOptimalModeSelector {
+            predicate: create_relation_predicate(SpatialRelationType::Intersects),
+        };
 
         // Simple geometries (max 20 < 32 threshold) should select PrepareProbe
-        let result = select_optimal_mode(&build_stats, &probe_stats);
+        let result = selector.select(&build_stats, &probe_stats);
         assert_eq!(result, ExecutionMode::PrepareProbe);
 
         // Complex geometries should select based on which side is more complex
         let complex_build_stats = create_geo_stats(100, 8000); // 80 points per geometry
         let simple_probe_stats = create_geo_stats(50, 1500); // 30 points per geometry
 
-        let result = select_optimal_mode(&complex_build_stats, &simple_probe_stats);
+        let result = selector.select(&complex_build_stats, &simple_probe_stats);
         assert_eq!(result, ExecutionMode::PrepareBuild);
 
         let simple_build_stats = create_geo_stats(100, 3000); // 30 points per geometry
         let complex_probe_stats = create_geo_stats(50, 4000); // 80 points per geometry
 
-        let result = select_optimal_mode(&simple_build_stats, &complex_probe_stats);
+        let result = selector.select(&simple_build_stats, &complex_probe_stats);
         assert_eq!(result, ExecutionMode::PrepareProbe);
     }
 
