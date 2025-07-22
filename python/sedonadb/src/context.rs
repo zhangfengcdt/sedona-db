@@ -4,7 +4,10 @@ use pyo3::prelude::*;
 use sedona::context::SedonaContext;
 use tokio::runtime::Runtime;
 
-use crate::{dataframe::InternalDataFrame, error::PySedonaError, runtime::wait_for_future};
+use crate::{
+    dataframe::InternalDataFrame, error::PySedonaError,
+    import_from::import_table_provider_from_any, runtime::wait_for_future,
+};
 
 #[pyclass]
 pub struct InternalContext {
@@ -31,6 +34,26 @@ impl InternalContext {
         })
     }
 
+    pub fn view<'py>(
+        &self,
+        py: Python<'py>,
+        name: &str,
+    ) -> Result<InternalDataFrame, PySedonaError> {
+        let df = wait_for_future(py, &self.runtime, self.inner.ctx.table(name))??;
+        Ok(InternalDataFrame::new(df, self.runtime.clone()))
+    }
+
+    pub fn create_data_frame<'py>(
+        &self,
+        py: Python<'py>,
+        obj: &Bound<PyAny>,
+        requested_schema: Option<&Bound<PyAny>>,
+    ) -> Result<InternalDataFrame, PySedonaError> {
+        let provider = import_table_provider_from_any(py, obj, requested_schema)?;
+        let df = self.inner.ctx.read_table(provider)?;
+        Ok(InternalDataFrame::new(df, self.runtime.clone()))
+    }
+
     pub fn read_parquet<'py>(
         &self,
         py: Python<'py>,
@@ -53,7 +76,7 @@ impl InternalContext {
         Ok(InternalDataFrame::new(df, self.runtime.clone()))
     }
 
-    fn deregister_table(&self, table_ref: &str) -> Result<(), PySedonaError> {
+    pub fn drop_view(&self, table_ref: &str) -> Result<(), PySedonaError> {
         self.inner.ctx.deregister_table(table_ref)?;
         Ok(())
     }

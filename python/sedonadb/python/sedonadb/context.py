@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Union, Iterable
 
 from sedonadb._lib import InternalContext
-from sedonadb.dataframe import DataFrame
+from sedonadb.dataframe import DataFrame, _create_data_frame
 
 
 class SedonaContext:
@@ -15,6 +15,54 @@ class SedonaContext:
 
     def __init__(self):
         self._impl = InternalContext()
+
+    def create_data_frame(self, obj, schema=None) -> DataFrame:
+        return _create_data_frame(self._impl, obj, schema)
+
+    def view(self, name: str) -> DataFrame:
+        """Create a [`DataFrame`][] from a named view
+
+        Refer to a named view registered with this context.
+
+        Args:
+            name: The name of the view
+
+        Examples:
+
+            ```python
+            >>> import sedonadb
+            >>> con = sedonadb.connect()
+            >>> con.sql("SELECT ST_Point(0, 1) as geom").to_view("foofy")
+            >>> con.view("foofy").show()
+            ┌────────────┐
+            │    geom    │
+            │     wkb    │
+            ╞════════════╡
+            │ POINT(0 1) │
+            └────────────┘
+            >>> con.drop_view("foofy")
+
+            ```
+        """
+        return DataFrame(self._impl, self._impl.view(name))
+
+    def drop_view(self, name: str) -> None:
+        """Remove a named view
+
+        Args:
+            name: The name of the view
+
+        Examples:
+
+            ```python
+            >>> import sedonadb
+            >>> con = sedonadb.connect()
+            >>> con.sql("SELECT ST_Point(0, 1) as geom").to_view("foofy")
+            >>> con.drop_view("foofy")
+
+            ```
+        """
+        self._impl.drop_view(name)
 
     def read_parquet(self, table_paths: Union[str, Path, Iterable[str]]) -> DataFrame:
         """Create a [`DataFrame`][] from one or more Parquet files

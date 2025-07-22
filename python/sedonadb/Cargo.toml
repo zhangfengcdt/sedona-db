@@ -12,8 +12,10 @@ crate-type = ["cdylib"]
 adbc_core = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-array = { workspace = true }
+async-trait = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
+datafusion-ffi = { workspace = true }
 futures = { workspace = true }
 pyo3 = "0.24.0"
 sedona = { path = "../../rust/sedona", features = ["aws", "gcp", "http"] }

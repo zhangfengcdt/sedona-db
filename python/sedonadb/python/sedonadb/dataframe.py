@@ -117,6 +117,61 @@ class DataFrame:
         """
         return self._impl.__arrow_c_stream__(requested_schema=requested_schema)
 
+    def to_view(self, name: str, overwrite: bool = False):
+        """Create a view based on the query represented by this object
+
+        Registers this logical plan as a named view with the underlying context
+        such that it can be referred to in SQL.
+
+        Args:
+            name: The name to which this query should be referred
+            overwrite: Use `True` to overwrite an existing view of this name
+
+        Examples:
+
+            ```python
+            import sedonadb
+            con = sedonadb.connect()
+            con.sql("SELECT ST_Point(0, 1) as geom").to_view("foofy")
+            con.view("foofy").show()
+            ┌────────────┐
+            │    geom    │
+            │     wkb    │
+            ╞════════════╡
+            │ POINT(0 1) │
+            └────────────┘
+
+            ```
+        """
+        self._impl.to_view(self._ctx, name, overwrite)
+
+    def collect(self) -> "DataFrame":
+        """Collect a data frame into memory
+
+        Executes the logical plan represented by this object and returns a
+        DataFrame representing it.
+
+        Examples:
+
+            ```python
+            >>> import sedonadb
+            >>> con = sedonadb.connect()
+            >>> con.sql("SELECT ST_Point(0, 1) as geom").collect().show()
+            ┌────────────┐
+            │    geom    │
+            │     wkb    │
+            ╞════════════╡
+            │ POINT(0 1) │
+            └────────────┘
+
+            ```
+
+        """
+        return DataFrame(self._ctx, self._impl.collect(self._ctx))
+
+    def __datafusion_table_provider__(self):
+        return self._impl.__datafusion_table_provider__()
+
     def to_arrow_table(self, schema=None) -> "pyarrow.Table":
         """Execute and collect results as a PyArrow Table
 
@@ -218,23 +273,79 @@ class DataFrame:
 
             ```
         """
-        width = self._out_width(width)
+        width = _out_width(width)
         print(self._impl.show(self._ctx, limit, width, ascii), end="")
 
     def __repr__(self) -> str:
         if global_options().interactive:
-            width = self._out_width()
+            width = _out_width()
             return self._impl.show(self._ctx, 10, width, ascii=False).strip()
         else:
             return super().__repr__()
 
-    def _out_width(self, width=None) -> int:
-        if width is None:
-            width = global_options().width
 
-        if width is None:
-            import shutil
+def _out_width(width=None) -> int:
+    if width is None:
+        width = global_options().width
 
-            width, _ = shutil.get_terminal_size(fallback=(100, 24))
+    if width is None:
+        import shutil
 
-        return width
+        width, _ = shutil.get_terminal_size(fallback=(100, 24))
+
+    return width
+
+
+def _create_data_frame(ctx_impl, obj, schema) -> DataFrame:
+    """Create a DataFrame (internal)
+
+    This is defined here because we need it in future dataframe methods like
+    inner_join() (as well as context methods like create_data_frame()). This
+    handles interpreting an arbitrary object as a DataFrame.
+    """
+    # If we're dealing with an anonymous data frame on the same context,
+    # just return it. Otherwise, fall back to the default interpretation
+    # (which uses __datafusion_table_provider__).
+    if isinstance(obj, DataFrame) and obj._ctx is ctx_impl and schema is None:
+        return obj
+
+    # We special case a few object types where collecting the __arrow_c_stream__
+    # up front provides a better user experience. These are objects where the
+    # cost of converting to Arrow is cheap and it makes more sense to do it once.
+    # This includes geopandas/pandas DataFrames, pyarrow tables, and Polars tables.
+    type_name = _qualified_type_name(obj)
+    if type_name in SPECIAL_CASED_SCANS:
+        return SPECIAL_CASED_SCANS[type_name](ctx_impl, obj, schema)
+
+    # The default implementation handles objects that implement
+    # __datafusion_table_provider__ or __arrow_c_stream__. For objects implementing
+    # __arrow_c_stream__, this currently will only work for a single scan (i.e.,
+    # the returned data frame can't be previewed before the query is computed).
+    return _scan_default(ctx_impl, obj, schema)
+
+
+def _scan_default(ctx_impl, obj, schema):
+    impl = ctx_impl.create_data_frame(obj, schema)
+    return DataFrame(ctx_impl, impl)
+
+
+def _scan_collected_default(ctx_impl, obj, schema):
+    return _scan_default(ctx_impl, obj, schema).collect()
+
+
+def _scan_geopandas(ctx_impl, obj, schema):
+    return _scan_collected_default(
+        ctx_impl, obj.to_arrow(geometry_encoding="WKB"), schema
+    )
+
+
+def _qualified_type_name(obj):
+    return f"{type(obj).__module__}.{type(obj).__name__}"
+
+
+SPECIAL_CASED_SCANS = {
+    "pyarrow.lib.Table": _scan_collected_default,
+    "pandas.core.frame.DataFrame": _scan_collected_default,
+    "geopandas.geodataframe.GeoDataFrame": _scan_geopandas,
+    "polars.dataframe.frame.DataFrame": _scan_collected_default,
+}

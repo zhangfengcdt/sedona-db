@@ -5,7 +5,9 @@ use arrow_array::ffi::FFI_ArrowSchema;
 use arrow_array::ffi_stream::FFI_ArrowArrayStream;
 use arrow_array::RecordBatchReader;
 use arrow_schema::Schema;
+use datafusion::catalog::MemTable;
 use datafusion::prelude::DataFrame;
+use datafusion_ffi::table_provider::FFI_TableProvider;
 use pyo3::prelude::*;
 use pyo3::types::PyCapsule;
 use sedona::context::SedonaDataFrame;
@@ -15,6 +17,7 @@ use tokio::runtime::Runtime;
 
 use crate::context::InternalContext;
 use crate::error::PySedonaError;
+use crate::import_from::check_pycapsule;
 use crate::reader::PySedonaStreamReader;
 use crate::runtime::wait_for_future;
 
@@ -65,6 +68,33 @@ impl InternalDataFrame {
         )??)
     }
 
+    fn to_view(
+        &self,
+        ctx: &InternalContext,
+        table_ref: &str,
+        overwrite: bool,
+    ) -> Result<(), PySedonaError> {
+        let provider = self.inner.clone().into_view();
+        if overwrite && ctx.inner.ctx.table_exist(table_ref)? {
+            ctx.drop_view(table_ref)?;
+        }
+
+        ctx.inner.ctx.register_table(table_ref, provider)?;
+        Ok(())
+    }
+
+    fn collect<'py>(&self, py: Python<'py>, ctx: &InternalContext) -> Result<Self, PySedonaError> {
+        let schema = self.inner.schema();
+        let partitions =
+            wait_for_future(py, &self.runtime, self.inner.clone().collect_partitioned())??;
+        let provider = MemTable::try_new(schema.as_arrow().clone().into(), partitions)?;
+
+        Ok(Self::new(
+            ctx.inner.ctx.read_table(Arc::new(provider))?,
+            self.runtime.clone(),
+        ))
+    }
+
     fn show<'py>(
         &self,
         py: Python<'py>,
@@ -89,8 +119,19 @@ impl InternalDataFrame {
         Ok(content)
     }
 
+    fn __datafusion_table_provider__<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> Result<Bound<'py, PyCapsule>, PySedonaError> {
+        let name = cr"datafusion_table_provider".into();
+        let provider = self.inner.clone().into_view();
+        let ffi_provider =
+            FFI_TableProvider::new(provider, true, Some(self.runtime.handle().clone()));
+        Ok(PyCapsule::new(py, ffi_provider, Some(name))?)
+    }
+
     fn __arrow_c_schema__<'py>(
-        &'py mut self,
+        &self,
         py: Python<'py>,
     ) -> Result<Bound<'py, PyCapsule>, PySedonaError> {
         let schema_capsule_name = CString::new("arrow_schema").unwrap();
@@ -101,20 +142,14 @@ impl InternalDataFrame {
 
     #[pyo3(signature = (requested_schema=None))]
     fn __arrow_c_stream__<'py>(
-        &'py mut self,
+        &self,
         py: Python<'py>,
         #[allow(unused_variables)] requested_schema: Option<Bound<'py, PyCapsule>>,
     ) -> Result<Bound<'py, PyCapsule>, PySedonaError> {
         if let Some(requested_capsule) = requested_schema {
-            let schema_capsule_name = CString::new("arrow_schema").unwrap();
-            if requested_capsule.name()? != Some(&schema_capsule_name) {
-                return Err(PySedonaError::SedonaPython(
-                    "Expected capsule with name 'arrow_schema'".to_string(),
-                ));
-            }
-
-            let ffi_schema: &FFI_ArrowSchema = unsafe { requested_capsule.reference() };
-            let requested_schema = Schema::try_from(ffi_schema)?;
+            let contents = check_pycapsule(&requested_capsule, "arrow_schema")?;
+            let ffi_schema = unsafe { FFI_ArrowSchema::from_raw(contents as _) };
+            let requested_schema = Schema::try_from(&ffi_schema)?;
             let actual_schema = self.inner.schema().as_arrow();
             if requested_schema != unwrap_schema(actual_schema) {
                 // Eventually we can support this by inserting a cast

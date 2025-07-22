@@ -1,0 +1,105 @@
+use std::{
+    ffi::{c_void, CString},
+    sync::Arc,
+};
+
+use arrow_array::{
+    ffi::FFI_ArrowSchema,
+    ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream},
+    RecordBatchReader,
+};
+use arrow_schema::Schema;
+use datafusion::catalog::TableProvider;
+use datafusion_ffi::table_provider::{FFI_TableProvider, ForeignTableProvider};
+use pyo3::{
+    types::{PyAnyMethods, PyCapsule, PyCapsuleMethods},
+    Bound, PyAny, Python,
+};
+use sedona::record_batch_reader_provider::RecordBatchReaderProvider;
+
+use crate::error::PySedonaError;
+
+pub fn import_table_provider_from_any<'py>(
+    py: Python<'py>,
+    obj: &Bound<PyAny>,
+    requested_schema: Option<&Bound<PyAny>>,
+) -> Result<Arc<dyn TableProvider>, PySedonaError> {
+    if obj.hasattr("__datafusion_table_provider__")? {
+        let provider = import_ffi_table_provider(obj)?;
+        Ok(provider)
+    } else if obj.hasattr("__arrow_c_stream__")? {
+        let reader = import_arrow_array_stream(py, obj, requested_schema)?;
+        Ok(Arc::new(RecordBatchReaderProvider::new(reader)))
+    } else {
+        return Err(PySedonaError::SedonaPython(
+            "Can't create SedonaDB table from object".to_string(),
+        ));
+    }
+}
+
+pub fn import_ffi_table_provider(
+    obj: &Bound<PyAny>,
+) -> Result<Arc<dyn TableProvider>, PySedonaError> {
+    let capsule = obj.getattr("__datafusion_table_provider__")?.call0()?;
+    let contents =
+        check_pycapsule(&capsule, "datafusion_table_provider")? as *mut FFI_TableProvider;
+    let provider = ForeignTableProvider::from(unsafe { contents.as_ref().unwrap() });
+    Ok(Arc::new(provider))
+}
+
+pub fn import_arrow_array_stream<'py>(
+    py: Python<'py>,
+    obj: &Bound<PyAny>,
+    requested_schema: Option<&Bound<PyAny>>,
+) -> Result<Box<dyn RecordBatchReader + Send>, PySedonaError> {
+    let capsule = if let Some(requested_schema) = requested_schema {
+        let schema = import_arrow_schema(requested_schema)?;
+        let ffi_schema = FFI_ArrowSchema::try_from(schema)?;
+        let ffi_schema_capsule =
+            PyCapsule::new(py, ffi_schema, Some(CString::new("arrow_schema").unwrap()))?;
+
+        obj.getattr("__arrow_c_stream__")?
+            .call1((ffi_schema_capsule,))?
+    } else {
+        obj.getattr("__arrow_c_stream__")?.call0()?
+    };
+
+    let stream = unsafe {
+        FFI_ArrowArrayStream::from_raw(check_pycapsule(&capsule, "arrow_array_stream")? as _)
+    };
+
+    let stream_reader = ArrowArrayStreamReader::try_new(stream)?;
+    Ok(Box::new(stream_reader))
+}
+
+pub fn import_arrow_schema(obj: &Bound<PyAny>) -> Result<Schema, PySedonaError> {
+    let capsule = obj.getattr("__arrow_c_schema__")?.call0()?;
+    let schema =
+        unsafe { FFI_ArrowSchema::from_raw(check_pycapsule(&capsule, "arrow_schema")? as _) };
+
+    Ok(Schema::try_from(&schema)?)
+}
+
+pub fn check_pycapsule(obj: &Bound<PyAny>, name: &str) -> Result<*mut c_void, PySedonaError> {
+    let capsule = obj
+        .downcast::<PyCapsule>()
+        .map_err(|e| PySedonaError::SedonaPython(e.to_string()))?;
+
+    let actual_name = capsule
+        .name()?
+        .map(|obj| obj.to_string_lossy().to_string())
+        .unwrap_or("<unnamed>".to_string());
+    if actual_name != name {
+        return Err(PySedonaError::SedonaPython(format!(
+            "Expected PyCapsule with name '{name}' but got PyCapsule with name '{actual_name}'"
+        )));
+    }
+
+    if capsule.pointer().is_null() {
+        return Err(PySedonaError::SedonaPython(format!(
+            "PyCapsule with name '{name}' is NULL"
+        )));
+    }
+
+    Ok(capsule.pointer())
+}

@@ -5,4 +5,5 @@ pub mod ffi;
 mod object_storage;
 mod projection;
 pub mod reader;
+pub mod record_batch_reader_provider;
 pub mod show;

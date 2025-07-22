@@ -6,6 +6,134 @@ import pytest
 import sedonadb
 
 
+def test_dataframe_from_dataframe(con):
+    # DataFrame from DataFrame on the same context with no schema
+    # should be just a Python reference
+    df = con.sql("SELECT ST_Point(0, 1) as geom")
+    assert con.create_data_frame(df) is df
+
+    # On a separate context the table should still be collected the same
+    # but should be a separate Python reference. This also has the effect
+    # of testing the __datafusion_table_provider__ interface.
+    new_con = sedonadb.connect()
+    new_df = new_con.create_data_frame(df)
+    assert new_df is not df
+    pd.testing.assert_frame_equal(df.to_pandas(), new_df.to_pandas())
+
+
+def test_dataframe_from_table(con):
+    tab = pa.table(
+        {
+            "not_geom": [1, 2, 3],
+            "geom": ga.array(["POINT (0 1)", "POINT (2 3)", "POINT (4 5)"]),
+        }
+    )
+
+    df = con.create_data_frame(tab)
+
+    # Ensure that we can collect once
+    assert df.to_arrow_table() == tab
+
+    # ...and ensure we can collect again
+    assert df.to_arrow_table() == tab
+
+
+def test_dataframe_from_pandas(con):
+    pd_df = pd.DataFrame({"col1": [1, 2, 3]})
+
+    df = con.create_data_frame(pd_df)
+
+    # Ensure that we can collect once
+    pd.testing.assert_frame_equal(df.to_pandas(), pd_df)
+
+    # ...and ensure we can collect again
+    pd.testing.assert_frame_equal(df.to_pandas(), pd_df)
+
+
+def test_dataframe_from_geopandas(con):
+    gpd_df = geopandas.GeoDataFrame(
+        {"geometry": geopandas.GeoSeries.from_wkt(["POINT (0 1)"], crs="OGC:CRS84")}
+    )
+
+    df = con.create_data_frame(gpd_df)
+
+    # Ensure that we can collect once
+    geopandas.testing.assert_geodataframe_equal(df.to_pandas(), gpd_df)
+
+    # ...and ensure we can collect again
+    geopandas.testing.assert_geodataframe_equal(df.to_pandas(), gpd_df)
+
+
+def test_dataframe_from_polars(con):
+    pl = pytest.importorskip("polars")
+
+    pl_df = pl.DataFrame({"col1": [1, 2, 3]})
+
+    df = con.create_data_frame(pl_df)
+
+    # Ensure that we can collect once
+    pd.testing.assert_frame_equal(df.to_pandas(), pd.DataFrame({"col1": [1, 2, 3]}))
+
+    # ...and ensure we can collect again
+    pd.testing.assert_frame_equal(df.to_pandas(), pd.DataFrame({"col1": [1, 2, 3]}))
+
+
+def test_dataframe_from_array_stream(con):
+    tab = pa.table(
+        {
+            "not_geom": [1, 2, 3],
+            "geom": ga.array(["POINT (0 1)", "POINT (2 3)", "POINT (4 5)"]),
+        }
+    )
+
+    # Ensure we're working from a stateful reader that can only be consumed
+    # exactly once
+    one_way_stream = pa.RecordBatchReader.from_stream(tab)
+    df = con.create_data_frame(one_way_stream)
+    assert pa.schema(df) == tab.schema
+
+    # Ensure that we can collect once
+    assert df.to_arrow_table() == tab
+
+    # Ensure that we exhausted the reader
+    assert list(one_way_stream) == []
+
+    with pytest.raises(
+        sedonadb._lib.SedonaError,
+        match="Can't scan RecordBatchReader provider more than once.",
+    ):
+        # Ensure we can't collect again
+        df.to_arrow_table()
+
+
+def test_collect(con):
+    df = con.sql("SELECT 1 as one")
+    pd.testing.assert_frame_equal(df.collect().to_pandas(), df.to_pandas())
+
+
+def test_to_view(con):
+    try:
+        df = con.sql("SELECT 1 as one")
+        df.to_view("foofy")
+        pd.testing.assert_frame_equal(
+            con.sql("SELECT * FROM foofy").to_pandas(), df.to_pandas()
+        )
+
+        new_df = con.sql("SELECT 2 as two")
+        with pytest.raises(
+            sedonadb._lib.SedonaError, match="The table foofy already exist"
+        ):
+            new_df.to_view("foofy")
+
+        new_df.to_view("foofy", overwrite=True)
+        pd.testing.assert_frame_equal(
+            con.sql("SELECT * FROM foofy").to_pandas(), new_df.to_pandas()
+        )
+
+    finally:
+        con.drop_view("foofy")
+
+
 def test_head_limit(con):
     df = con.sql("SELECT * FROM (VALUES ('one'), ('two'), ('three')) AS t(val)")
 

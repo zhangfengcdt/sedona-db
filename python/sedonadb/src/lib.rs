@@ -6,6 +6,7 @@ use sedona_adbc::AdbcSedonadbDriverInit;
 mod context;
 mod dataframe;
 mod error;
+mod import_from;
 mod reader;
 mod runtime;
 
