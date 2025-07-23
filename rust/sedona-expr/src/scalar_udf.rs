@@ -3,8 +3,7 @@ use std::sync::Arc;
 use std::{any::Any, fmt::Debug};
 
 use arrow_schema::{DataType, Field};
-use datafusion_common::error::Result;
-use datafusion_common::not_impl_err;
+use datafusion_common::{internal_err, not_impl_err, plan_err, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -72,12 +71,50 @@ impl ArgMatcher {
     /// Calculate a return type given input types
     ///
     /// Returns Some(physical_type) if this kernel applies to the input types or
-    /// None otherwise.
+    /// None otherwise. This function also checks that all input arguments have
+    /// compatible CRSes and if so, applies the CRS to the output type.
     pub fn match_args(&self, args: &[SedonaType]) -> Result<Option<SedonaType>> {
-        if self.matches(args) {
-            Ok(Some(self.out_type.clone()))
-        } else {
-            Ok(None)
+        if !self.matches(args) {
+            return Ok(None);
+        }
+
+        let geometry_arg_crses = args
+            .iter()
+            .filter(|arg_type| IsGeometryOrGeography {}.match_type(arg_type))
+            .map(|arg_type| match arg_type {
+                SedonaType::Wkb(_, crs) | SedonaType::WkbView(_, crs) => crs.clone(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        if geometry_arg_crses.is_empty() {
+            return Ok(Some(self.out_type.clone()));
+        }
+
+        let out_crs = geometry_arg_crses[0].clone();
+        for this_crs in geometry_arg_crses.into_iter().skip(1) {
+            if out_crs != this_crs {
+                let hint = "Use ST_Transform() or ST_SetSRID() to ensure arguments are compatible.";
+
+                return match (out_crs, this_crs) {
+                    (None, Some(rhs_crs)) => {
+                        plan_err!("Mismatched CRS arguments: None vs {rhs_crs}\n{hint}")
+                    }
+                    (Some(lhs_crs), None) => {
+                        plan_err!("Mismatched CRS arguments: {lhs_crs} vs None\n{hint}")
+                    }
+                    (Some(lhs_crs), Some(rhs_crs)) => {
+                        plan_err!("Mismatched CRS arguments: {lhs_crs} vs {rhs_crs}\n{hint}")
+                    }
+                    _ => internal_err!("None vs. None should be considered equal"),
+                };
+            }
+        }
+
+        match &self.out_type {
+            SedonaType::Wkb(edges, _) => Ok(Some(SedonaType::Wkb(*edges, out_crs))),
+            SedonaType::WkbView(edges, _) => Ok(Some(SedonaType::WkbView(*edges, out_crs))),
+            _ => Ok(Some(self.out_type.clone())),
         }
     }
 
@@ -449,7 +486,10 @@ impl ScalarUDFImpl for SedonaScalarUDF {
 mod tests {
     use datafusion_common::scalar::ScalarValue;
 
-    use sedona_schema::datatypes::{WKB_GEOGRAPHY, WKB_GEOMETRY};
+    use sedona_schema::{
+        crs::lnglat,
+        datatypes::{WKB_GEOGRAPHY, WKB_GEOMETRY},
+    };
 
     use super::*;
 
@@ -540,7 +580,7 @@ mod tests {
     }
 
     #[test]
-    fn simple_udf() -> Result<()> {
+    fn simple_udf() {
         // UDF with two implementations: one that matches any geometry and one that
         // matches a specific arrow type.
         let kernel_geo = SimpleSedonaScalarKernel::new_ref(
@@ -570,19 +610,20 @@ mod tests {
 
         // Calling with a geo type should return a Null type
         let wkb_arrow = WKB_GEOMETRY.data_type();
-        let wkb_dummy_val =
-            WKB_GEOMETRY.wrap_arg(&ColumnarValue::Scalar(ScalarValue::Binary(None)))?;
+        let wkb_dummy_val = WKB_GEOMETRY
+            .wrap_arg(&ColumnarValue::Scalar(ScalarValue::Binary(None)))
+            .unwrap();
 
         assert_eq!(
-            udf.return_type(std::slice::from_ref(&wkb_arrow))?,
+            udf.return_type(std::slice::from_ref(&wkb_arrow)).unwrap(),
             DataType::Null
         );
         assert_eq!(
-            udf.coerce_types(std::slice::from_ref(&wkb_arrow))?,
+            udf.coerce_types(std::slice::from_ref(&wkb_arrow)).unwrap(),
             vec![wkb_arrow.clone()]
         );
 
-        if let ColumnarValue::Scalar(scalar) = udf.invoke_batch(&[wkb_dummy_val], 5)? {
+        if let ColumnarValue::Scalar(scalar) = udf.invoke_batch(&[wkb_dummy_val], 5).unwrap() {
             assert_eq!(scalar, ScalarValue::Null);
         } else {
             panic!("Unexpected batch result");
@@ -592,16 +633,16 @@ mod tests {
         let bool_arrow = DataType::Boolean;
         let bool_dummy_val = ColumnarValue::Scalar(ScalarValue::Boolean(None));
         assert_eq!(
-            udf.coerce_types(std::slice::from_ref(&bool_arrow))?,
+            udf.coerce_types(std::slice::from_ref(&bool_arrow)).unwrap(),
             vec![bool_arrow.clone()]
         );
 
         assert_eq!(
-            udf.return_type(std::slice::from_ref(&bool_arrow))?,
+            udf.return_type(std::slice::from_ref(&bool_arrow)).unwrap(),
             DataType::Boolean
         );
 
-        if let ColumnarValue::Scalar(scalar) = udf.invoke_batch(&[bool_dummy_val], 5)? {
+        if let ColumnarValue::Scalar(scalar) = udf.invoke_batch(&[bool_dummy_val], 5).unwrap() {
             assert_eq!(scalar, ScalarValue::Boolean(None));
         } else {
             panic!("Unexpected batch result");
@@ -626,11 +667,9 @@ mod tests {
 
         // Now, calling with a Boolean should result in a Utf8
         assert_eq!(
-            udf.return_type(std::slice::from_ref(&bool_arrow))?,
+            udf.return_type(std::slice::from_ref(&bool_arrow)).unwrap(),
             DataType::Utf8
         );
-
-        Ok(())
     }
 
     #[test]
@@ -647,6 +686,61 @@ mod tests {
         assert_eq!(
             err.message(),
             "Implementation for stubby([]) was not registered"
+        );
+    }
+
+    #[test]
+    fn crs_propagation() {
+        let geom_lnglat = SedonaType::Wkb(Edges::Planar, lnglat()).data_type();
+
+        let predicate_stub = SedonaScalarUDF::new_stub(
+            "stubby",
+            ArgMatcher::new(
+                vec![ArgMatcher::is_geometry(), ArgMatcher::is_geometry()],
+                SedonaType::Arrow(DataType::Boolean),
+            ),
+            Volatility::Immutable,
+            None,
+        );
+
+        // None CRS to None CRS is OK
+        assert_eq!(
+            predicate_stub
+                .return_type(&[WKB_GEOMETRY.data_type(), WKB_GEOMETRY.data_type()])
+                .unwrap(),
+            DataType::Boolean
+        );
+
+        // lnglat + lnglat is OK
+        assert_eq!(
+            predicate_stub
+                .return_type(&[geom_lnglat.clone(), geom_lnglat.clone()])
+                .unwrap(),
+            DataType::Boolean
+        );
+
+        // Non-equal CRSes should error
+        let err = predicate_stub
+            .return_type(&[WKB_GEOMETRY.data_type(), geom_lnglat.clone()])
+            .unwrap_err();
+        assert!(err.message().starts_with("Mismatched CRS arguments"));
+
+        // When geometry is output, it should match the crses of the inputs
+        let geom_out_stub = SedonaScalarUDF::new_stub(
+            "stubby",
+            ArgMatcher::new(
+                vec![ArgMatcher::is_geometry(), ArgMatcher::is_geometry()],
+                WKB_GEOMETRY,
+            ),
+            Volatility::Immutable,
+            None,
+        );
+
+        assert_eq!(
+            geom_out_stub
+                .return_type(&[geom_lnglat.clone(), geom_lnglat.clone()])
+                .unwrap(),
+            geom_lnglat.clone()
         );
     }
 }

@@ -6,7 +6,7 @@ use datafusion_expr::ColumnarValue;
 use serde_json::Value;
 use std::fmt::{Debug, Display};
 
-use crate::crs::{deserialize_crs, Crs};
+use crate::crs::{deserialize_crs, CoordinateReferenceSystem, Crs};
 use crate::extension_type::ExtensionType;
 
 /// Data types supported by Sedona that resolve to a concrete Arrow DataType
@@ -41,14 +41,22 @@ fn display_geometry(
     write!(f, "{name}")?;
 
     if let Some(crs) = crs {
-        if let Ok(Some(auth_code)) = crs.to_authority_code() {
-            write!(f, " <{}>", auth_code.to_lowercase())?;
-        } else {
-            write!(f, " <with crs>")?;
-        }
+        write!(f, " <{}>", &crs)?;
     }
 
     Ok(())
+}
+
+impl Display for dyn CoordinateReferenceSystem + Send + Sync {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Ok(Some(auth_code)) = self.to_authority_code() {
+            write!(f, "{}", auth_code.to_lowercase())
+        } else {
+            // We can probably try harder to get compact output out of more
+            // types of CRSes
+            write!(f, "{{...}}")
+        }
+    }
 }
 
 /// Edge interpolations
@@ -58,7 +66,7 @@ fn display_geometry(
 /// we consider the edge interpolation as a parameter of the physical type. This maps to
 /// the concept of "edges" in GeoArrow and "algorithm" in Parquet and Iceberg (where the
 /// planar case would be resolved to a geometry instead of a geography).
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Edges {
     Planar,
     Spherical,
@@ -437,7 +445,7 @@ mod tests {
         let projjson_crs = deserialize_crs(&projjson_value).unwrap();
         assert_eq!(
             SedonaType::Wkb(Edges::Planar, projjson_crs).to_string(),
-            "wkb <with crs>"
+            "wkb <{...}>"
         );
     }
 
