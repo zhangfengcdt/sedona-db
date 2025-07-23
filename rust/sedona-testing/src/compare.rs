@@ -7,7 +7,9 @@ use datafusion_common::{
     ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
-use sedona_schema::datatypes::SedonaType;
+use sedona_schema::datatypes::{SedonaType, WKB_GEOMETRY};
+
+use crate::create::create_scalar;
 
 /// Assert two [`ColumnarValue`]s are equal
 ///
@@ -79,6 +81,14 @@ pub fn assert_array_equal(actual: &ArrayRef, expected: &ArrayRef) {
             unreachable!()
         }
     }
+}
+
+/// Assert a [`ScalarValue`] is a WKB_GEOMETRY scalar corresponding to the given WKT
+///
+/// Panics if the values' are not equal, generating reasonable failure messages for geometry
+/// arrays where the default failure message would otherwise be uninformative.
+pub fn assert_scalar_equal_wkb_geometry(actual: &ScalarValue, expected_wkt: Option<&str>) {
+    assert_scalar_equal(actual, &create_scalar(expected_wkt, &WKB_GEOMETRY));
 }
 
 /// Assert two [`ScalarValue`]s are equal

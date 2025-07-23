@@ -17,6 +17,7 @@ arrow-schema = { workspace = true }
 arrow-cast = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-physical-expr = { workspace = true }
 geo-traits = { workspace = true }
 geo-types = { workspace = true }
 parquet = { workspace = true, features = ["arrow", "snap", "zstd"] }

@@ -4968,6 +4968,7 @@ dependencies = [
  "arrow-schema",
  "datafusion-common",
  "datafusion-expr",
+ "datafusion-physical-expr",
  "geo-traits 0.2.0",
  "geo-types",
  "parquet",

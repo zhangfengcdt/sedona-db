@@ -211,95 +211,64 @@ impl Accumulator for IntersectionAccumulator {
 mod test {
     use super::*;
     use rstest::rstest;
-    use sedona_expr::aggregate_udf::AggregateTester;
     use sedona_functions::st_intersection_aggr::st_intersection_aggr_udf;
     use sedona_schema::datatypes::WKB_VIEW_GEOMETRY;
-    use sedona_testing::{
-        compare::assert_scalar_equal,
-        create::{create_array, create_scalar},
-    };
+    use sedona_testing::{compare::assert_scalar_equal_wkb_geometry, testers::AggregateUdfTester};
 
     #[rstest]
     fn polygon_polygon_cases(#[values(WKB_GEOMETRY, WKB_VIEW_GEOMETRY)] sedona_type: SedonaType) {
         let mut udaf = st_intersection_aggr_udf();
         udaf.add_kernel(st_intersection_aggr_impl());
 
-        let tester = AggregateTester::new(udaf.into(), vec![sedona_type.clone()]);
+        let tester = AggregateUdfTester::new(udaf.into(), vec![sedona_type.clone()]);
         assert_eq!(tester.return_type().unwrap(), WKB_GEOMETRY);
 
         // Basic polygon intersection
         let batches = vec![
-            create_array(&[Some("POLYGON((0 0, 2 0, 2 2, 0 2, 0 0))")], &sedona_type),
-            create_array(&[Some("POLYGON((1 1, 3 1, 3 3, 1 3, 1 1))")], &sedona_type),
+            vec![Some("POLYGON((0 0, 2 0, 2 2, 0 2, 0 0))")],
+            vec![Some("POLYGON((1 1, 3 1, 3 3, 1 3, 1 1))")],
         ];
-
-        assert_scalar_equal(
-            &tester.aggregate(batches).unwrap(),
-            &create_scalar(
-                Some("MULTIPOLYGON(((1 1, 2 1, 2 2, 1 2, 1 1)))"),
-                &WKB_GEOMETRY,
-            ),
+        assert_scalar_equal_wkb_geometry(
+            &tester.aggregate_wkt(batches).unwrap(),
+            Some("MULTIPOLYGON(((1 1, 2 1, 2 2, 1 2, 1 1)))"),
         );
 
         // Empty input
-        assert_scalar_equal(
-            &tester.aggregate(vec![]).unwrap(),
-            &create_scalar(None, &WKB_GEOMETRY),
-        );
+        assert_scalar_equal_wkb_geometry(&tester.aggregate_wkt(vec![]).unwrap(), None);
 
         // Single polygon input
-        let single_polygon = vec![create_array(
-            &[Some("POLYGON((0 0, 2 0, 2 2, 0 2, 0 0))")],
-            &sedona_type,
-        )];
-        assert_scalar_equal(
-            &tester.aggregate(single_polygon).unwrap(),
-            &create_scalar(
-                Some("MULTIPOLYGON(((0 0, 2 0, 2 2, 0 2, 0 0)))"),
-                &WKB_GEOMETRY,
-            ),
+        assert_scalar_equal_wkb_geometry(
+            &tester
+                .aggregate_wkt(vec![vec![Some("POLYGON((0 0, 2 0, 2 2, 0 2, 0 0))")]])
+                .unwrap(),
+            Some("MULTIPOLYGON(((0 0, 2 0, 2 2, 0 2, 0 0)))"),
         );
 
         // Non-intersecting polygons
         let non_intersecting = vec![
-            create_array(&[Some("POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))")], &sedona_type),
-            create_array(&[Some("POLYGON((2 2, 3 2, 3 3, 2 3, 2 2))")], &sedona_type),
+            vec![Some("POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))")],
+            vec![Some("POLYGON((2 2, 3 2, 3 3, 2 3, 2 2))")],
         ];
-        assert_scalar_equal(
-            &tester.aggregate(non_intersecting).unwrap(),
-            &create_scalar(None, &WKB_GEOMETRY),
-        );
+        assert_scalar_equal_wkb_geometry(&tester.aggregate_wkt(non_intersecting).unwrap(), None);
 
         // Input with nulls
         let nulls_input = vec![
-            create_array(
-                &[Some("POLYGON((0 0, 2 0, 2 2, 0 2, 0 0))"), None],
-                &sedona_type,
-            ),
-            create_array(
-                &[Some("POLYGON((1 1, 3 1, 3 3, 1 3, 1 1))"), None],
-                &sedona_type,
-            ),
+            vec![Some("POLYGON((0 0, 2 0, 2 2, 0 2, 0 0))"), None],
+            vec![Some("POLYGON((1 1, 3 1, 3 3, 1 3, 1 1))"), None],
         ];
-        assert_scalar_equal(
-            &tester.aggregate(nulls_input).unwrap(),
-            &create_scalar(
-                Some("MULTIPOLYGON(((1 1, 2 1, 2 2, 1 2, 1 1)))"),
-                &WKB_GEOMETRY,
-            ),
+        assert_scalar_equal_wkb_geometry(
+            &tester.aggregate_wkt(nulls_input).unwrap(),
+            Some("MULTIPOLYGON(((1 1, 2 1, 2 2, 1 2, 1 1)))"),
         );
 
         // Fully contained polygon
         let contained = vec![
-            create_array(&[Some("POLYGON((0 0, 3 0, 3 3, 0 3, 0 0))")], &sedona_type),
-            create_array(&[Some("POLYGON((1 1, 2 1, 2 2, 1 2, 1 1))")], &sedona_type),
+            vec![Some("POLYGON((0 0, 3 0, 3 3, 0 3, 0 0))")],
+            vec![Some("POLYGON((1 1, 2 1, 2 2, 1 2, 1 1))")],
         ];
-        assert_scalar_equal(
-            &tester.aggregate(contained).unwrap(),
-            &create_scalar(
-                Some("MULTIPOLYGON(((1 1, 2 1, 2 2, 1 2, 1 1)))"),
-                &WKB_GEOMETRY,
-            ),
+        assert_scalar_equal_wkb_geometry(
+            &tester.aggregate_wkt(contained).unwrap(),
+            Some("MULTIPOLYGON(((1 1, 2 1, 2 2, 1 2, 1 1)))"),
         );
     }
 
@@ -310,58 +279,44 @@ mod test {
         let mut udaf = st_intersection_aggr_udf();
         udaf.add_kernel(st_intersection_aggr_impl());
 
-        let tester = AggregateTester::new(udaf.into(), vec![sedona_type.clone()]);
+        let tester = AggregateUdfTester::new(udaf.into(), vec![sedona_type.clone()]);
 
         // Polygon intersecting with MultiPolygon (should return intersection)
         let poly_and_multi = vec![
-            create_array(&[Some("POLYGON((0 0, 3 0, 3 3, 0 3, 0 0))")], &sedona_type),
-            create_array(
-                &[Some(
-                    "MULTIPOLYGON(((1 1, 2 1, 2 2, 1 2, 1 1)), ((4 4, 5 4, 5 5, 4 5, 4 4)))",
-                )],
-                &sedona_type,
-            ),
+            vec![Some("POLYGON((0 0, 3 0, 3 3, 0 3, 0 0))")],
+            vec![Some(
+                "MULTIPOLYGON(((1 1, 2 1, 2 2, 1 2, 1 1)), ((4 4, 5 4, 5 5, 4 5, 4 4)))",
+            )],
         ];
-        assert_scalar_equal(
-            &tester.aggregate(poly_and_multi).unwrap(),
-            &create_scalar(
-                Some("MULTIPOLYGON(((1 1, 2 1, 2 2, 1 2, 1 1)))"),
-                &WKB_GEOMETRY,
-            ),
+        assert_scalar_equal_wkb_geometry(
+            &tester.aggregate_wkt(poly_and_multi).unwrap(),
+            Some("MULTIPOLYGON(((1 1, 2 1, 2 2, 1 2, 1 1)))"),
         );
 
         // Polygon with non-overlapping MultiPolygon (should return None)
         let poly_and_nonoverlap_multi = vec![
-            create_array(&[Some("POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))")], &sedona_type),
-            create_array(
-                &[Some(
-                    "MULTIPOLYGON(((2 2, 3 2, 3 3, 2 3, 2 2)), ((4 4, 5 4, 5 5, 4 5, 4 4)))",
-                )],
-                &sedona_type,
-            ),
+            vec![Some("POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))")],
+            vec![Some(
+                "MULTIPOLYGON(((2 2, 3 2, 3 3, 2 3, 2 2)), ((4 4, 5 4, 5 5, 4 5, 4 4)))",
+            )],
         ];
-        assert_scalar_equal(
-            &tester.aggregate(poly_and_nonoverlap_multi).unwrap(),
-            &create_scalar(None, &WKB_GEOMETRY),
+        assert_scalar_equal_wkb_geometry(
+            &tester.aggregate_wkt(poly_and_nonoverlap_multi).unwrap(),
+            None,
         );
 
-        // MultiPolygon with MultiPolygon (should return intersection of first polygons)
+        // MultiPolygon with MultiPolygon (should return intersection of inputs)
         let multi_and_multi = vec![
-            create_array(
-                &[Some("MULTIPOLYGON(((0 0, 3 0, 3 3, 0 3, 0 0)), ((10 10, 12 10, 12 12, 10 12, 10 10)))")],
-                &sedona_type,
-            ),
-            create_array(
-                &[Some("MULTIPOLYGON(((1 1, 2 1, 2 2, 1 2, 1 1)), ((11 11, 12 11, 12 12, 11 12, 11 11)))")],
-                &sedona_type,
-            ),
+            vec![Some(
+                "MULTIPOLYGON(((0 0, 3 0, 3 3, 0 3, 0 0)), ((10 10, 12 10, 12 12, 10 12, 10 10)))",
+            )],
+            vec![Some(
+                "MULTIPOLYGON(((1 1, 2 1, 2 2, 1 2, 1 1)), ((11 11, 12 11, 12 12, 11 12, 11 11)))",
+            )],
         ];
-        assert_scalar_equal(
-            &tester.aggregate(multi_and_multi).unwrap(),
-            &create_scalar(
-                Some("MULTIPOLYGON(((1 1,2 1,2 2,1 2,1 1)),((11 11,12 11,12 12,11 12,11 11)))"),
-                &WKB_GEOMETRY,
-            ),
+        assert_scalar_equal_wkb_geometry(
+            &tester.aggregate_wkt(multi_and_multi).unwrap(),
+            Some("MULTIPOLYGON(((1 1,2 1,2 2,1 2,1 1)),((11 11,12 11,12 12,11 12,11 11)))"),
         );
     }
 
@@ -372,72 +327,48 @@ mod test {
         let mut udaf = st_intersection_aggr_udf();
         udaf.add_kernel(st_intersection_aggr_impl());
 
-        let tester = AggregateTester::new(udaf.into(), vec![sedona_type.clone()]);
+        let tester = AggregateUdfTester::new(udaf.into(), vec![sedona_type.clone()]);
 
         // Test case 1: Two MultiPolygons with intersecting first polygons
         let multi_multi_case1 = vec![
-            create_array(
-                &[Some(
-                    "MULTIPOLYGON(((0 0, 3 0, 3 3, 0 3, 0 0)), ((5 5, 8 5, 8 8, 5 8, 5 5)))",
-                )],
-                &sedona_type,
-            ),
-            create_array(
-                &[Some(
-                    "MULTIPOLYGON(((2 2, 5 2, 5 5, 2 5, 2 2)), ((9 9, 12 9, 12 12, 9 12, 9 9)))",
-                )],
-                &sedona_type,
-            ),
+            vec![Some(
+                "MULTIPOLYGON(((0 0, 3 0, 3 3, 0 3, 0 0)), ((5 5, 8 5, 8 8, 5 8, 5 5)))",
+            )],
+            vec![Some(
+                "MULTIPOLYGON(((2 2, 5 2, 5 5, 2 5, 2 2)), ((9 9, 12 9, 12 12, 9 12, 9 9)))",
+            )],
         ];
-        assert_scalar_equal(
-            &tester.aggregate(multi_multi_case1).unwrap(),
-            &create_scalar(
-                Some("MULTIPOLYGON(((2 2, 3 2, 3 3, 2 3, 2 2)))"),
-                &WKB_GEOMETRY,
-            ),
+        assert_scalar_equal_wkb_geometry(
+            &tester.aggregate_wkt(multi_multi_case1).unwrap(),
+            Some("MULTIPOLYGON(((2 2, 3 2, 3 3, 2 3, 2 2)))"),
         );
 
         // Test case 2: MultiPolygons with non-intersecting first polygons
         let multi_multi_case2 = vec![
-            create_array(
-                &[Some(
-                    "MULTIPOLYGON(((0 0, 1 0, 1 1, 0 1, 0 0)), ((5 5, 6 5, 6 6, 5 6, 5 5)))",
-                )],
-                &sedona_type,
-            ),
-            create_array(
-                &[Some(
-                    "MULTIPOLYGON(((2 2, 3 2, 3 3, 2 3, 2 2)), ((7 7, 8 7, 8 8, 7 8, 7 7)))",
-                )],
-                &sedona_type,
-            ),
+            vec![Some(
+                "MULTIPOLYGON(((0 0, 1 0, 1 1, 0 1, 0 0)), ((5 5, 6 5, 6 6, 5 6, 5 5)))",
+            )],
+            vec![Some(
+                "MULTIPOLYGON(((2 2, 3 2, 3 3, 2 3, 2 2)), ((7 7, 8 7, 8 8, 7 8, 7 7)))",
+            )],
         ];
-        assert_scalar_equal(
-            &tester.aggregate(multi_multi_case2).unwrap(),
-            &create_scalar(None, &WKB_GEOMETRY),
-        );
+        assert_scalar_equal_wkb_geometry(&tester.aggregate_wkt(multi_multi_case2).unwrap(), None);
 
         // Test case 3: Three MultiPolygons intersection
         let multi_multi_case3 = vec![
-            create_array(
-                &[Some("MULTIPOLYGON(((0 0, 4 0, 4 4, 0 4, 0 0)), ((10 10, 14 10, 14 14, 10 14, 10 10)))")],
-                &sedona_type,
-            ),
-            create_array(
-                &[Some("MULTIPOLYGON(((2 2, 6 2, 6 6, 2 6, 2 2)), ((12 12, 16 12, 16 16, 12 16, 12 12)))")],
-                &sedona_type,
-            ),
-            create_array(
-                &[Some("MULTIPOLYGON(((3 3, 5 3, 5 5, 3 5, 3 3)), ((13 13, 15 13, 15 15, 13 15, 13 13)))")],
-                &sedona_type,
-            ),
+            vec![Some(
+                "MULTIPOLYGON(((0 0, 4 0, 4 4, 0 4, 0 0)), ((10 10, 14 10, 14 14, 10 14, 10 10)))",
+            )],
+            vec![Some(
+                "MULTIPOLYGON(((2 2, 6 2, 6 6, 2 6, 2 2)), ((12 12, 16 12, 16 16, 12 16, 12 12)))",
+            )],
+            vec![Some(
+                "MULTIPOLYGON(((3 3, 5 3, 5 5, 3 5, 3 3)), ((13 13, 15 13, 15 15, 13 15, 13 13)))",
+            )],
         ];
-        assert_scalar_equal(
-            &tester.aggregate(multi_multi_case3).unwrap(),
-            &create_scalar(
-                Some("MULTIPOLYGON(((3 3,4 3,4 4,3 4,3 3)),((13 13,14 13,14 14,13 14,13 13)))"),
-                &WKB_GEOMETRY,
-            ),
+        assert_scalar_equal_wkb_geometry(
+            &tester.aggregate_wkt(multi_multi_case3).unwrap(),
+            Some("MULTIPOLYGON(((3 3,4 3,4 4,3 4,3 3)),((13 13,14 13,14 14,13 14,13 13)))"),
         );
     }
 }

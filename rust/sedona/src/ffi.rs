@@ -416,16 +416,16 @@ impl SedonaAccumulator for ImportedSedonaAccumulator {
 #[cfg(test)]
 mod test {
     use datafusion_expr::Volatility;
+    use sedona_expr::{
+        aggregate_udf::SedonaAggregateUDF,
+        scalar_udf::{ArgMatcher, SedonaScalarUDF, SimpleSedonaScalarKernel},
+    };
     use sedona_functions::st_envelope_aggr::st_envelope_aggr_udf;
     use sedona_schema::datatypes::WKB_GEOMETRY;
     use sedona_testing::{
         compare::{assert_scalar_equal, assert_value_equal},
         create::{create_array, create_array_value, create_scalar, create_scalar_value},
-    };
-
-    use sedona_expr::{
-        aggregate_udf::{AggregateTester, SedonaAggregateUDF},
-        scalar_udf::{ArgMatcher, SedonaScalarUDF, SimpleSedonaScalarKernel},
+        testers::AggregateUdfTester,
     };
 
     use super::*;
@@ -491,7 +491,7 @@ mod test {
         let scalar_envelope = create_scalar(Some("POINT (0 1)"), &WKB_GEOMETRY);
 
         // Check aggregation without FFI
-        let tester = AggregateTester::new(agg.clone().into(), vec![WKB_GEOMETRY]);
+        let tester = AggregateUdfTester::new(agg.clone().into(), vec![WKB_GEOMETRY]);
         assert_eq!(tester.return_type().unwrap(), WKB_GEOMETRY);
         assert_scalar_equal(
             &tester.aggregate(vec![array_value.clone()]).unwrap(),
@@ -507,7 +507,7 @@ mod test {
             None,
         );
 
-        let tester = AggregateTester::new(agg_from_ffi.into(), vec![WKB_GEOMETRY]);
+        let tester = AggregateUdfTester::new(agg_from_ffi.into(), vec![WKB_GEOMETRY]);
         assert_eq!(tester.return_type().unwrap(), WKB_GEOMETRY);
         assert_scalar_equal(
             &tester.aggregate(vec![array_value.clone()]).unwrap(),

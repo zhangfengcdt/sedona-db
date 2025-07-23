@@ -458,9 +458,8 @@ mod test {
     use arrow_json::ArrayWriter;
     use arrow_schema::Schema;
     use rstest::rstest;
-    use sedona_expr::aggregate_udf::AggregateTester;
     use sedona_schema::datatypes::{WKB_GEOMETRY, WKB_VIEW_GEOMETRY};
-    use sedona_testing::create::create_array;
+    use sedona_testing::testers::AggregateUdfTester;
     use serde_json::Value;
 
     fn actual_result_json(struct_array: Arc<StructArray>) -> Value {
@@ -491,15 +490,12 @@ mod test {
         let mut udaf = st_analyze_aggr_udf();
         udaf.add_kernel(st_analyze_aggr_impl());
 
-        let tester = AggregateTester::new(udaf.into(), vec![sedona_type.clone()]);
+        let tester = AggregateUdfTester::new(udaf.into(), vec![sedona_type.clone()]);
 
         // Basic point analysis
-        let batches = vec![create_array(
-            &[Some("POINT(0 0)"), Some("POINT(1 1)")],
-            &sedona_type,
-        )];
-
-        let result = tester.aggregate(batches).unwrap();
+        let result = tester
+            .aggregate_wkt(vec![vec![Some("POINT(0 0)"), Some("POINT(1 1)")]])
+            .unwrap();
 
         assert!(matches!(result, ScalarValue::Struct(_)));
 
@@ -534,18 +530,15 @@ mod test {
         let mut udaf = st_analyze_aggr_udf();
         udaf.add_kernel(st_analyze_aggr_impl());
 
-        let tester = AggregateTester::new(udaf.into(), vec![sedona_type.clone()]);
+        let tester = AggregateUdfTester::new(udaf.into(), vec![sedona_type.clone()]);
 
-        // Create a batch with linestrings
-        let batches = vec![create_array(
-            &[
+        // Batch with linestrings
+        let result = tester
+            .aggregate_wkt(vec![vec![
                 Some("LINESTRING(0 0, 1 1, 2 2)"),
                 Some("LINESTRING(0 0, 0 1, 1 1)"),
-            ],
-            &sedona_type,
-        )];
-
-        let result = tester.aggregate(batches).unwrap();
+            ]])
+            .unwrap();
         assert!(matches!(result, ScalarValue::Struct(_)));
 
         if let ScalarValue::Struct(struct_array) = result {
@@ -577,18 +570,15 @@ mod test {
         let mut udaf = st_analyze_aggr_udf();
         udaf.add_kernel(st_analyze_aggr_impl());
 
-        let tester = AggregateTester::new(udaf.into(), vec![sedona_type.clone()]);
+        let tester = AggregateUdfTester::new(udaf.into(), vec![sedona_type.clone()]);
 
-        // Create a batch with polygons
-        let batches = vec![create_array(
-            &[
+        // Batch with polygons
+        let result = tester
+            .aggregate_wkt(vec![vec![
                 Some("POLYGON((0 0, 0 3, 3 3, 3 0, 0 0))"),
                 Some("POLYGON((1 1, 1 2, 2 2, 2 1, 1 1))"),
-            ],
-            &sedona_type,
-        )];
-
-        let result = tester.aggregate(batches).unwrap();
+            ]])
+            .unwrap();
         assert!(matches!(result, ScalarValue::Struct(_)));
 
         if let ScalarValue::Struct(struct_array) = result {
@@ -622,20 +612,17 @@ mod test {
         let mut udaf = st_analyze_aggr_udf();
         udaf.add_kernel(st_analyze_aggr_impl());
 
-        let tester = AggregateTester::new(udaf.into(), vec![sedona_type.clone()]);
+        let tester = AggregateUdfTester::new(udaf.into(), vec![sedona_type.clone()]);
 
-        // Create a batch with mixed geometry types
-        let batches = vec![create_array(
-            &[
+        // Batch with mixed geometry types
+        let result = tester
+            .aggregate_wkt(vec![vec![
                 Some("POINT(0 0)"),
                 Some("LINESTRING(0 0, 1 1)"),
                 Some("POLYGON((0 0, 0 2, 2 2, 2 0, 0 0))"),
                 Some("MULTIPOINT((1 1), (2 2))"),
-            ],
-            &sedona_type,
-        )];
-
-        let result = tester.aggregate(batches).unwrap();
+            ]])
+            .unwrap();
         assert!(matches!(result, ScalarValue::Struct(_)));
 
         if let ScalarValue::Struct(struct_array) = result {
@@ -667,12 +654,10 @@ mod test {
         let mut udaf = st_analyze_aggr_udf();
         udaf.add_kernel(st_analyze_aggr_impl());
 
-        let tester = AggregateTester::new(udaf.into(), vec![sedona_type.clone()]);
+        let tester = AggregateUdfTester::new(udaf.into(), vec![sedona_type.clone()]);
 
-        // Create an empty batch
-        let batches = vec![create_array(&[None, None], &sedona_type)];
-
-        let result = tester.aggregate(batches).unwrap();
+        // Empty batch
+        let result = tester.aggregate_wkt(vec![vec![None, None]]).unwrap();
         assert!(matches!(result, ScalarValue::Struct(_)));
 
         if let ScalarValue::Struct(struct_array) = result {

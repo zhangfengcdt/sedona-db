@@ -198,12 +198,8 @@ impl Accumulator for BoundsAccumulator2D {
 mod test {
     use datafusion_expr::AggregateUDF;
     use rstest::rstest;
-    use sedona_expr::aggregate_udf::AggregateTester;
     use sedona_schema::datatypes::WKB_VIEW_GEOMETRY;
-    use sedona_testing::{
-        compare::assert_scalar_equal,
-        create::{create_array, create_scalar},
-    };
+    use sedona_testing::{compare::assert_scalar_equal_wkb_geometry, testers::AggregateUdfTester};
 
     use super::*;
 
@@ -216,68 +212,53 @@ mod test {
 
     #[rstest]
     fn udf(#[values(WKB_GEOMETRY, WKB_VIEW_GEOMETRY)] sedona_type: SedonaType) {
-        let tester = AggregateTester::new(st_envelope_aggr_udf().into(), vec![sedona_type.clone()]);
+        let tester =
+            AggregateUdfTester::new(st_envelope_aggr_udf().into(), vec![sedona_type.clone()]);
         assert_eq!(tester.return_type().unwrap(), WKB_GEOMETRY);
 
         // Finite input with nulls
         let batches = vec![
-            create_array(
-                &[Some("POINT (0 1)"), None, Some("POINT (2 3)")],
-                &sedona_type,
-            ),
-            create_array(
-                &[Some("POINT (4 5)"), None, Some("POINT (6 7)")],
-                &sedona_type,
-            ),
+            vec![Some("POINT (0 1)"), None, Some("POINT (2 3)")],
+            vec![Some("POINT (4 5)"), None, Some("POINT (6 7)")],
         ];
-
-        assert_scalar_equal(
-            &tester.aggregate(batches).unwrap(),
-            &create_scalar(Some("POLYGON((0 1,6 1,6 7,0 7,0 1))"), &WKB_GEOMETRY),
+        assert_scalar_equal_wkb_geometry(
+            &tester.aggregate_wkt(batches).unwrap(),
+            Some("POLYGON((0 1,6 1,6 7,0 7,0 1))"),
         );
 
         // Empty input
-        assert_scalar_equal(
-            &tester.aggregate(vec![]).unwrap(),
-            &create_scalar(None, &WKB_GEOMETRY),
-        );
+        assert_scalar_equal_wkb_geometry(&tester.aggregate_wkt(vec![]).unwrap(), None);
 
         // All coordinates empty
-        assert_scalar_equal(
+        assert_scalar_equal_wkb_geometry(
             &tester
-                .aggregate(vec![create_array(&[Some("POINT EMPTY")], &sedona_type)])
+                .aggregate_wkt(vec![vec![Some("POINT EMPTY")]])
                 .unwrap(),
-            &create_scalar(None, &WKB_GEOMETRY),
+            None,
         );
 
         // Degenerate output: point
-        assert_scalar_equal(
+        assert_scalar_equal_wkb_geometry(
             &tester
-                .aggregate(vec![create_array(&[Some("POINT (0 1)")], &sedona_type)])
+                .aggregate_wkt(vec![vec![Some("POINT (0 1)")]])
                 .unwrap(),
-            &create_scalar(Some("POINT (0 1)"), &WKB_GEOMETRY),
+            Some("POINT (0 1)"),
         );
 
         // Degenerate output: vertical line
-        assert_scalar_equal(
+        assert_scalar_equal_wkb_geometry(
             &tester
-                .aggregate(vec![create_array(
-                    &[Some("MULTIPOINT (0 2, 0 1)")],
-                    &sedona_type,
-                )])
+                .aggregate_wkt(vec![vec![Some("MULTIPOINT (0 2, 0 1)")]])
                 .unwrap(),
-            &create_scalar(Some("LINESTRING (0 1, 0 2)"), &WKB_GEOMETRY),
+            Some("LINESTRING (0 1, 0 2)"),
         );
 
         // Degenerate output: horizontal line
-        assert_scalar_equal(
+        assert_scalar_equal_wkb_geometry(
             &tester
-                .aggregate(vec![create_array(
-                    &[Some("MULTIPOINT (1 1, 0 1)")],
-                    &sedona_type,
-                )])
+                .aggregate_wkt(vec![vec![Some("MULTIPOINT (1 1, 0 1)")]])
                 .unwrap(),
-            &create_scalar(Some("LINESTRING (0 1, 1 1)"), &WKB_GEOMETRY),
+            Some("LINESTRING (0 1, 1 1)"),
         );
     }
 }
