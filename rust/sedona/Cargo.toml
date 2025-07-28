@@ -12,10 +12,11 @@ rust-version.workspace = true
 result_large_err = "allow"
 
 [features]
-default = ["aws", "gcp", "http", "geo", "spatial-join"]
+default = ["aws", "gcp", "http", "geo", "tg", "spatial-join"]
 aws = ["dep:aws-config", "dep:aws-credential-types", "object_store/aws"]
 gcp = ["object_store/gcp"]
 geo = ["dep:sedona-geo"]
+tg = ["dep:sedona-tg"]
 http = ["object_store/http"]
 spatial-join = ["dep:sedona-spatial-join"]
 s2geography = ["dep:sedona-s2geography"]
@@ -46,6 +47,7 @@ sedona-common = { path = "../sedona-common" }
 sedona-expr = { path = "../sedona-expr" }
 sedona-functions = { path = "../sedona-functions" }
 sedona-geo = { path = "../sedona-geo", optional = true }
+sedona-tg = { path = "../../c/sedona-tg", optional = true }
 sedona-geoparquet = { path = "../sedona-geoparquet" }
 sedona-schema = { path = "../sedona-schema" }
 sedona-spatial-join = { path = "../sedona-spatial-join", optional = true }

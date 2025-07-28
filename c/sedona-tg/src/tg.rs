@@ -1,4 +1,5 @@
 use std::fmt::Display;
+use std::sync::OnceLock;
 
 use crate::{error::TgError, tg_bindgen::*};
 
@@ -216,6 +217,40 @@ pub struct Touches {}
 impl BinaryPredicate for Touches {
     fn evaluate(lhs: &Geom, rhs: &Geom) -> bool {
         unsafe { tg_geom_touches(lhs.inner, rhs.inner) }
+    }
+}
+
+/// Allocator functions for tg
+pub type TgMallocFn = unsafe extern "C" fn(usize) -> *mut std::os::raw::c_void;
+pub type TgReallocFn =
+    unsafe extern "C" fn(*mut std::os::raw::c_void, usize) -> *mut std::os::raw::c_void;
+pub type TgFreeFn = unsafe extern "C" fn(*mut std::os::raw::c_void);
+
+/// Set the allocator for tg. This can only be called once.
+///
+/// # Safety
+/// This function must be called prior to calling any other tg functions.
+///
+/// # Arguments
+/// * `malloc` - The malloc function to use
+/// * `realloc` - The realloc function to use
+/// * `free` - The free function to use
+///
+/// # Returns
+/// * `Ok(())` if the allocator was set successfully
+/// * `Err(TgError)` if an allocator has already been set
+pub unsafe fn set_allocator(
+    malloc: TgMallocFn,
+    realloc: TgReallocFn,
+    free: TgFreeFn,
+) -> Result<(), TgError> {
+    static ALLOCATOR_SET: OnceLock<()> = OnceLock::new();
+
+    if ALLOCATOR_SET.set(()).is_ok() {
+        tg_env_set_allocator(Some(malloc), Some(realloc), Some(free));
+        Ok(())
+    } else {
+        Err(TgError::Invalid("Allocator already set".to_string()))
     }
 }
 

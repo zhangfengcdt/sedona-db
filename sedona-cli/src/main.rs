@@ -29,8 +29,11 @@ use sedona_cli::{
 };
 
 use clap::Parser;
+
+#[cfg(feature = "mimalloc")]
 use mimalloc::MiMalloc;
 
+#[cfg(feature = "mimalloc")]
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
@@ -108,6 +111,17 @@ pub async fn main() -> ExitCode {
 /// Main CLI entrypoint
 async fn main_inner() -> Result<()> {
     env_logger::init();
+
+    #[cfg(feature = "mimalloc")]
+    {
+        use libmimalloc_sys::{mi_free, mi_malloc, mi_realloc};
+        use sedona_tg::tg::set_allocator;
+
+        // Configure tg to use mimalloc
+        unsafe { set_allocator(mi_malloc, mi_realloc, mi_free) }
+            .expect("Failed to set tg allocator");
+    }
+
     let args = Args::parse();
 
     if !args.quiet {

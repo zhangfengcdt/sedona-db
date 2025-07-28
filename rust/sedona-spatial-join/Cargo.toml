@@ -36,7 +36,7 @@ sedona-expr = { path = "../sedona-expr" }
 sedona-functions = { path = "../sedona-functions" }
 sedona-geometry = { path = "../sedona-geometry" }
 sedona-schema = { path = "../sedona-schema" }
-sedona-tg = { path = "../../c/sedona-tg"}
+sedona-tg = { path = "../../c/sedona-tg" }
 wkb = { workspace = true }
 geo-index = { workspace = true }
 geos = { workspace = true }
