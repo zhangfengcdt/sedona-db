@@ -40,6 +40,7 @@ sedona-tg = { path = "../../c/sedona-tg"}
 wkb = { workspace = true }
 geo-index = { workspace = true }
 geos = { workspace = true }
+float_next_after = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

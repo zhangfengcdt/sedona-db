@@ -76,7 +76,7 @@ jobs:
           # Update this key to force a new cache. When doing large dependency changes
           # (e.g., updating DataFusion), the old cache is not very useful and may result
           # in out-of-disk ("no space left on device")
-          prefix-key: "v1"
+          prefix-key: "v2"
       - name: Install dependencies
         shell: bash
         run: sudo apt-get update && sudo apt-get install -y libgeos-dev
