@@ -157,15 +157,15 @@ fn invoke_scalar(item: &Wkb, dim_index: usize) -> Result<Option<f64>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::create_array;
+    use arrow_array::{create_array, ArrayRef};
     use datafusion_common::ScalarValue;
     use datafusion_expr::ScalarUDF;
     use rstest::rstest;
-    use sedona_schema::datatypes::WKB_GEOMETRY;
+    use sedona_schema::datatypes::{
+        WKB_GEOGRAPHY, WKB_GEOMETRY, WKB_VIEW_GEOGRAPHY, WKB_VIEW_GEOMETRY,
+    };
     use sedona_testing::{
-        compare::assert_value_equal,
-        create::{create_array_value, create_scalar_value},
-        fixtures::MULTIPOINT_WITH_EMPTY_CHILD_WKB,
+        create::create_array, fixtures::MULTIPOINT_WITH_EMPTY_CHILD_WKB, testers::ScalarUdfTester,
     };
 
     #[test]
@@ -179,84 +179,72 @@ mod tests {
         assert!(udf_y.documentation().is_some());
     }
 
-    #[test]
-    fn udf_invoke() {
-        let udf_x = st_x_udf();
-        let udf_y = st_y_udf();
+    #[rstest]
+    fn udf_invoke(
+        #[values(WKB_GEOMETRY, WKB_GEOGRAPHY, WKB_VIEW_GEOMETRY, WKB_VIEW_GEOGRAPHY)]
+        sedona_type: SedonaType,
+    ) {
+        let x_tester = ScalarUdfTester::new(st_x_udf().into(), vec![sedona_type.clone()]);
+        let y_tester = ScalarUdfTester::new(st_y_udf().into(), vec![sedona_type.clone()]);
 
-        assert_value_equal(
-            &udf_x
-                .invoke_batch(
-                    &[create_scalar_value(Some("POINT (1 2)"), &WKB_GEOMETRY)],
-                    1,
-                )
-                .unwrap(),
-            &ScalarValue::Float64(Some(1.0)).into(),
+        assert_eq!(
+            x_tester.return_type().unwrap(),
+            SedonaType::Arrow(DataType::Float64)
+        );
+        assert_eq!(
+            y_tester.return_type().unwrap(),
+            SedonaType::Arrow(DataType::Float64)
         );
 
-        assert_value_equal(
-            &udf_y
-                .invoke_batch(
-                    &[create_scalar_value(Some("POINT (1 2)"), &WKB_GEOMETRY)],
-                    1,
-                )
-                .unwrap(),
-            &ScalarValue::Float64(Some(2.0)).into(),
+        assert_eq!(
+            x_tester.invoke_wkb_scalar(Some("POINT (1 2)")).unwrap(),
+            ScalarValue::Float64(Some(1.0))
+        );
+        assert_eq!(
+            y_tester.invoke_wkb_scalar(Some("POINT (1 2)")).unwrap(),
+            ScalarValue::Float64(Some(2.0))
         );
 
-        assert_value_equal(
-            &udf_x
-                .invoke_batch(
-                    &[create_array_value(
-                        &[Some("POINT (1 2)"), None, Some("MULTIPOINT (3 4)")],
-                        &WKB_GEOMETRY,
-                    )],
-                    3,
-                )
-                .unwrap(),
-            &ColumnarValue::Array(create_array!(Float64, [Some(1.0), None, Some(3.0)])),
+        let wkb_array = create_array(
+            &[Some("POINT (1 2)"), None, Some("MULTIPOINT (3 4)")],
+            &WKB_GEOMETRY,
         );
-
-        assert_value_equal(
-            &udf_y
-                .invoke_batch(
-                    &[create_array_value(
-                        &[Some("POINT (1 2)"), None, Some("MULTIPOINT (3 4)")],
-                        &WKB_GEOMETRY,
-                    )],
-                    3,
-                )
-                .unwrap(),
-            &ColumnarValue::Array(create_array!(Float64, [Some(2.0), None, Some(4.0)])),
+        let expected_x: ArrayRef = create_array!(Float64, [Some(1.0), None, Some(3.0)]);
+        let expected_y: ArrayRef = create_array!(Float64, [Some(2.0), None, Some(4.0)]);
+        assert_eq!(
+            &x_tester.invoke_array(wkb_array.clone()).unwrap(),
+            &expected_x
+        );
+        assert_eq!(
+            &y_tester.invoke_array(wkb_array.clone()).unwrap(),
+            &expected_y
         );
     }
 
-    #[test]
-    fn udf_empties() {
-        let udf_x = st_x_udf();
+    #[rstest]
+    fn udf_empties(
+        #[values(
+            "POINT",
+            "LINESTRING",
+            "POLYGON",
+            "MULTIPOINT",
+            "MULTILINESTRING",
+            "MULTIPOLYGON",
+            "GEOMETRYCOLLECTION"
+        )]
+        geom_type: &str,
+    ) {
+        let x_tester = ScalarUdfTester::new(st_x_udf().into(), vec![WKB_GEOMETRY]);
+        let y_tester = ScalarUdfTester::new(st_y_udf().into(), vec![WKB_GEOMETRY]);
 
-        assert_value_equal(
-            &udf_x
-                .invoke_batch(
-                    &[create_array_value(
-                        &[
-                            Some("POINT EMPTY"),
-                            Some("LINESTRING EMPTY"),
-                            Some("POLYGON EMPTY"),
-                            Some("MULTIPOINT EMPTY"),
-                            Some("MULTILINESTRING EMPTY"),
-                            Some("MULTIPOLYGON EMPTY"),
-                            Some("GEOMETRYCOLLECTION EMPTY"),
-                        ],
-                        &WKB_GEOMETRY,
-                    )],
-                    7,
-                )
-                .unwrap(),
-            &ColumnarValue::Array(create_array!(
-                Float64,
-                [None, None, None, None, None, None, None]
-            )),
+        let wkt_empty = format!("{geom_type} EMPTY");
+        assert_eq!(
+            x_tester.invoke_wkb_scalar(Some(&wkt_empty)).unwrap(),
+            ScalarValue::Float64(None)
+        );
+        assert_eq!(
+            y_tester.invoke_wkb_scalar(Some(&wkt_empty)).unwrap(),
+            ScalarValue::Float64(None)
         );
     }
 
@@ -272,22 +260,29 @@ mod tests {
         )]
         bad_wkt: &str,
     ) {
-        let udf_x = st_x_udf();
-        let err = udf_x
-            .invoke_batch(&[create_scalar_value(Some(bad_wkt), &WKB_GEOMETRY)], 1)
-            .unwrap_err();
+        let x_tester = ScalarUdfTester::new(st_x_udf().into(), vec![WKB_GEOMETRY]);
+
+        let err = x_tester.invoke_wkb_scalar(Some(bad_wkt)).unwrap_err();
         assert_eq!(err.message(), "Expected POINT");
     }
 
     #[test]
     fn multipoint_with_empty_child() {
-        let udf_x = st_x_udf();
-        let value = WKB_GEOMETRY
-            .wrap_arg(&ScalarValue::Binary(Some(MULTIPOINT_WITH_EMPTY_CHILD_WKB.to_vec())).into())
+        let x_tester = ScalarUdfTester::new(st_x_udf().into(), vec![WKB_GEOMETRY]);
+        let y_tester = ScalarUdfTester::new(st_y_udf().into(), vec![WKB_GEOMETRY]);
+
+        let scalar = WKB_GEOMETRY
+            .wrap_scalar(&ScalarValue::Binary(Some(
+                MULTIPOINT_WITH_EMPTY_CHILD_WKB.to_vec(),
+            )))
             .unwrap();
-        assert_value_equal(
-            &udf_x.invoke_batch(&[value], 1).unwrap(),
-            &ScalarValue::Float64(None).into(),
+        assert_eq!(
+            x_tester.invoke_scalar(scalar.clone()).unwrap(),
+            ScalarValue::Float64(None)
+        );
+        assert_eq!(
+            y_tester.invoke_scalar(scalar.clone()).unwrap(),
+            ScalarValue::Float64(None)
         );
     }
 }

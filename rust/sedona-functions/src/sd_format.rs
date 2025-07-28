@@ -184,7 +184,7 @@ mod tests {
     use sedona_schema::datatypes::{
         WKB_GEOGRAPHY, WKB_GEOMETRY, WKB_VIEW_GEOGRAPHY, WKB_VIEW_GEOMETRY,
     };
-    use sedona_testing::{compare::assert_value_equal, create::create_array_value};
+    use sedona_testing::{create::create_array, testers::ScalarUdfTester};
 
     use super::*;
 
@@ -203,46 +203,37 @@ mod tests {
         use arrow_array::ArrayRef;
 
         let udf = sd_format_udf();
-
-        let options_null = ColumnarValue::Scalar(ScalarValue::Utf8(None));
-        let options_empty = ColumnarValue::Scalar(ScalarValue::Utf8(Some("{}".to_string())));
+        let unary_tester = ScalarUdfTester::new(udf.clone().into(), vec![sedona_type.clone()]);
+        let binary_tester = ScalarUdfTester::new(
+            udf.clone().into(),
+            vec![sedona_type.clone(), SedonaType::Arrow(DataType::Utf8)],
+        );
 
         // With omitted, Null, or invalid options, the output should be identical
-        let wkt_values = [Some("POINT(1 2)"), None, Some("LINESTRING(3 5,7 8)")];
-        let expected_array: StringArray = wkt_values.iter().collect();
-        assert_value_equal(
-            &udf.invoke_batch(&[create_array_value(&wkt_values, &sedona_type)], 1)
+        let wkt_values = vec![Some("POINT(1 2)"), None, Some("LINESTRING(3 5,7 8)")];
+        let wkt_array = create_array(&wkt_values, &sedona_type);
+        let expected_array: ArrayRef = Arc::new(wkt_values.iter().collect::<StringArray>());
+
+        assert_eq!(
+            &unary_tester.invoke_wkb_array(wkt_values.clone()).unwrap(),
+            &expected_array
+        );
+        assert_eq!(
+            &binary_tester
+                .invoke_array_scalar(wkt_array.clone(), "{}")
                 .unwrap(),
-            &ColumnarValue::Array(Arc::new(expected_array.clone())),
+            &expected_array
         );
-        assert_value_equal(
-            &udf.invoke_batch(
-                &[create_array_value(&wkt_values, &sedona_type), options_null],
-                1,
-            )
-            .unwrap(),
-            &ColumnarValue::Array(Arc::new(expected_array.clone())),
-        );
-        assert_value_equal(
-            &udf.invoke_batch(
-                &[create_array_value(&wkt_values, &sedona_type), options_empty],
-                1,
-            )
-            .unwrap(),
-            &ColumnarValue::Array(Arc::new(expected_array.clone())),
+        assert_eq!(
+            &binary_tester
+                .invoke_array_scalar(wkt_array.clone(), ScalarValue::Null)
+                .unwrap(),
+            &expected_array
         );
 
         // Invalid options should error
-        let options_invalid =
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(r#"{"width_hint": -1}"#.to_string())));
-        let err = udf
-            .invoke_batch(
-                &[
-                    create_array_value(&wkt_values, &sedona_type),
-                    options_invalid,
-                ],
-                1,
-            )
+        let err = binary_tester
+            .invoke_array_scalar(wkt_array.clone(), r#"{"width_hint": -1}"#)
             .unwrap_err();
         assert_eq!(
             err.message(),
@@ -250,20 +241,13 @@ mod tests {
         );
 
         // For a very small width hint, we should get truncated values
-        let options_short =
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(r#"{"width_hint": 3}"#.to_string())));
         let expected_array: ArrayRef =
             create_array!(Utf8, [Some("POINT"), None, Some("LINESTRING")]);
-        assert_value_equal(
-            &udf.invoke_batch(
-                &[
-                    create_array_value(&wkt_values, &sedona_type),
-                    options_short.clone(),
-                ],
-                1,
-            )
-            .unwrap(),
-            &ColumnarValue::Array(expected_array),
+        assert_eq!(
+            &binary_tester
+                .invoke_array_scalar(wkt_array.clone(), r#"{"width_hint": 3}"#)
+                .unwrap(),
+            &expected_array
         );
     }
 }

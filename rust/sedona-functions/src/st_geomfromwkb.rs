@@ -103,8 +103,10 @@ mod tests {
     use datafusion_expr::ScalarUDF;
     use rstest::rstest;
     use sedona_testing::{
-        compare::assert_value_equal,
-        create::{create_array_value, create_scalar_value},
+        compare::{assert_array_equal, assert_scalar_equal},
+        create::create_array,
+        create::create_scalar,
+        testers::ScalarUdfTester,
     };
 
     use super::*;
@@ -128,31 +130,27 @@ mod tests {
     #[rstest]
     fn udf(#[values(DataType::Binary, DataType::BinaryView)] data_type: DataType) {
         let udf = st_geomfromwkb_udf();
-
-        assert_value_equal(
-            &udf.invoke_batch(
-                &[ColumnarValue::Scalar(ScalarValue::Binary(Some(
-                    POINT12.to_vec(),
-                )))],
-                1,
-            )
-            .unwrap(),
-            &create_scalar_value(Some("POINT (1 2)"), &WKB_VIEW_GEOMETRY),
+        let tester = ScalarUdfTester::new(
+            udf.clone().into(),
+            vec![SedonaType::Arrow(data_type.clone())],
         );
 
-        assert_value_equal(
-            &udf.invoke_batch(&[ColumnarValue::Scalar(ScalarValue::Binary(None))], 1)
-                .unwrap(),
-            &create_scalar_value(None, &WKB_VIEW_GEOMETRY),
+        assert_eq!(tester.return_type().unwrap(), WKB_VIEW_GEOMETRY);
+
+        assert_scalar_equal(
+            &tester.invoke_scalar(POINT12.to_vec()).unwrap(),
+            &create_scalar(Some("POINT (1 2)"), &WKB_VIEW_GEOMETRY),
+        );
+
+        assert_scalar_equal(
+            &tester.invoke_scalar(ScalarValue::Null).unwrap(),
+            &create_scalar(None, &WKB_VIEW_GEOMETRY),
         );
 
         let binary_array: BinaryArray = [Some(POINT12), None, Some(POINT12)].iter().collect();
-        let binary_value = ColumnarValue::Array(Arc::new(binary_array))
-            .cast_to(&data_type, None)
-            .unwrap();
-        assert_value_equal(
-            &udf.invoke_batch(&[binary_value], 1).unwrap(),
-            &create_array_value(
+        assert_array_equal(
+            &tester.invoke_array(Arc::new(binary_array)).unwrap(),
+            &create_array(
                 &[Some("POINT (1 2)"), None, Some("POINT (1 2)")],
                 &WKB_VIEW_GEOMETRY,
             ),
@@ -162,9 +160,10 @@ mod tests {
     #[test]
     fn invalid_wkb() {
         let udf = st_geomfromwkb_udf();
+        let tester = ScalarUdfTester::new(udf.into(), vec![SedonaType::Arrow(DataType::Binary)]);
 
-        let err = udf
-            .invoke_batch(&[ScalarValue::Binary(Some(vec![])).into()], 1)
+        let err = tester
+            .invoke_scalar(ScalarValue::Binary(Some(vec![])))
             .unwrap_err();
 
         assert_eq!(err.message(), "failed to fill whole buffer");
@@ -173,11 +172,13 @@ mod tests {
     #[test]
     fn geog() {
         let udf = st_geogfromwkb_udf();
-        let wkb_scalar = ScalarValue::Binary(Some(POINT12.to_vec()));
+        let tester = ScalarUdfTester::new(udf.into(), vec![SedonaType::Arrow(DataType::Binary)]);
 
-        assert_value_equal(
-            &udf.invoke_batch(&[wkb_scalar.clone().into()], 1).unwrap(),
-            &create_scalar_value(Some("POINT (1 2)"), &WKB_VIEW_GEOGRAPHY),
+        assert_eq!(tester.return_type().unwrap(), WKB_VIEW_GEOGRAPHY);
+
+        assert_scalar_equal(
+            &tester.invoke_scalar(POINT12.to_vec()).unwrap(),
+            &create_scalar(Some("POINT (1 2)"), &WKB_VIEW_GEOGRAPHY),
         );
     }
 }

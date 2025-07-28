@@ -59,17 +59,14 @@ impl SedonaScalarKernel for STAsBinary {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::{BinaryArray, BinaryViewArray};
+    use arrow_array::{ArrayRef, BinaryArray, BinaryViewArray};
     use datafusion_common::scalar::ScalarValue;
     use datafusion_expr::ScalarUDF;
     use rstest::rstest;
     use sedona_schema::datatypes::{
         WKB_GEOGRAPHY, WKB_GEOMETRY, WKB_VIEW_GEOGRAPHY, WKB_VIEW_GEOMETRY,
     };
-    use sedona_testing::{
-        compare::assert_value_equal,
-        create::{create_array_value, create_scalar_value},
-    };
+    use sedona_testing::testers::ScalarUdfTester;
 
     use super::*;
 
@@ -88,30 +85,24 @@ mod tests {
     #[rstest]
     fn udf_geometry_input(#[values(WKB_GEOMETRY, WKB_GEOGRAPHY)] sedona_type: SedonaType) {
         let udf = st_asbinary_udf();
+        let tester = ScalarUdfTester::new(udf.into(), vec![sedona_type]);
 
-        assert_value_equal(
-            &udf.invoke_batch(&[create_scalar_value(Some("POINT (1 2)"), &sedona_type)], 1)
-                .unwrap(),
-            &ColumnarValue::Scalar(ScalarValue::Binary(Some(POINT12.to_vec()))),
+        assert_eq!(
+            tester.invoke_wkb_scalar(Some("POINT (1 2)")).unwrap(),
+            ScalarValue::Binary(Some(POINT12.to_vec()))
         );
 
-        assert_value_equal(
-            &udf.invoke_batch(&[create_scalar_value(None, &sedona_type)], 1)
-                .unwrap(),
-            &ColumnarValue::Scalar(ScalarValue::Binary(None)),
+        assert_eq!(
+            tester.invoke_wkb_scalar(None).unwrap(),
+            ScalarValue::Binary(None)
         );
 
         let expected_array: BinaryArray = [Some(POINT12), None, Some(POINT12)].iter().collect();
-        assert_value_equal(
-            &udf.invoke_batch(
-                &[create_array_value(
-                    &[Some("POINT (1 2)"), None, Some("POINT (1 2)")],
-                    &sedona_type,
-                )],
-                1,
-            )
-            .unwrap(),
-            &ColumnarValue::Array(Arc::new(expected_array)),
+        assert_eq!(
+            &tester
+                .invoke_wkb_array(vec![Some("POINT (1 2)"), None, Some("POINT (1 2)")])
+                .unwrap(),
+            &(Arc::new(expected_array) as ArrayRef)
         );
     }
 
@@ -120,30 +111,24 @@ mod tests {
         #[values(WKB_VIEW_GEOMETRY, WKB_VIEW_GEOGRAPHY)] sedona_type: SedonaType,
     ) {
         let udf = st_asbinary_udf();
+        let tester = ScalarUdfTester::new(udf.into(), vec![sedona_type]);
 
-        assert_value_equal(
-            &udf.invoke_batch(&[create_scalar_value(Some("POINT (1 2)"), &sedona_type)], 1)
-                .unwrap(),
-            &ColumnarValue::Scalar(ScalarValue::BinaryView(Some(POINT12.to_vec()))),
+        assert_eq!(
+            tester.invoke_wkb_scalar(Some("POINT (1 2)")).unwrap(),
+            ScalarValue::BinaryView(Some(POINT12.to_vec()))
         );
 
-        assert_value_equal(
-            &udf.invoke_batch(&[create_scalar_value(None, &sedona_type)], 1)
-                .unwrap(),
-            &ColumnarValue::Scalar(ScalarValue::BinaryView(None)),
+        assert_eq!(
+            tester.invoke_wkb_scalar(None).unwrap(),
+            ScalarValue::BinaryView(None)
         );
 
         let expected_array: BinaryViewArray = [Some(POINT12), None, Some(POINT12)].iter().collect();
-        assert_value_equal(
-            &udf.invoke_batch(
-                &[create_array_value(
-                    &[Some("POINT (1 2)"), None, Some("POINT (1 2)")],
-                    &sedona_type,
-                )],
-                1,
-            )
-            .unwrap(),
-            &ColumnarValue::Array(Arc::new(expected_array)),
+        assert_eq!(
+            &tester
+                .invoke_wkb_array(vec![Some("POINT (1 2)"), None, Some("POINT (1 2)")])
+                .unwrap(),
+            &(Arc::new(expected_array) as ArrayRef)
         );
     }
 }

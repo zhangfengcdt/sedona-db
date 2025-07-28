@@ -56,51 +56,39 @@ fn invoke_scalar(wkb: &Wkb) -> Result<f64> {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::Float64Array;
+    use arrow_array::{create_array, ArrayRef};
     use datafusion_common::scalar::ScalarValue;
     use rstest::rstest;
+    use sedona_functions::register::stubs::st_area_udf;
     use sedona_schema::datatypes::{WKB_GEOMETRY, WKB_VIEW_GEOMETRY};
-    use sedona_testing::{
-        compare::assert_value_equal, create::create_array_value, create::create_scalar_value,
-    };
+    use sedona_testing::testers::ScalarUdfTester;
 
     use super::*;
 
     #[rstest]
     fn udf(#[values(WKB_GEOMETRY, WKB_VIEW_GEOMETRY)] sedona_type: SedonaType) {
-        use sedona_functions::register::stubs::st_area_udf;
-
         let mut udf = st_area_udf();
         udf.add_kernel(st_area_impl());
+        let tester = ScalarUdfTester::new(udf.into(), vec![sedona_type]);
 
-        assert_value_equal(
-            &udf.invoke_batch(
-                &[create_scalar_value(
-                    Some("POLYGON ((0 0, 1 0, 0 1, 0 0))"),
-                    &sedona_type,
-                )],
-                1,
-            )
-            .unwrap(),
-            &ColumnarValue::Scalar(ScalarValue::Float64(Some(0.5))),
+        assert_eq!(
+            tester.return_type().unwrap(),
+            SedonaType::Arrow(DataType::Float64)
         );
 
-        assert_value_equal(
-            &udf.invoke_batch(&[create_scalar_value(None, &sedona_type)], 1)
+        assert_eq!(
+            tester
+                .invoke_wkb_scalar(Some("POLYGON ((0 0, 1 0, 0 1, 0 0))"))
                 .unwrap(),
-            &ColumnarValue::Scalar(ScalarValue::Float64(None)),
+            ScalarValue::Float64(Some(0.5))
         );
 
-        let wkt_values = [
+        let input_wkt = vec![
             Some("POINT(1 2)"),
             None,
             Some("POLYGON ((0 0, 1 0, 0 1, 0 0))"),
         ];
-        let expected_array: Float64Array = vec![Some(0.0), None, Some(0.5)].into();
-        assert_value_equal(
-            &udf.invoke_batch(&[create_array_value(&wkt_values, &sedona_type)], 1)
-                .unwrap(),
-            &ColumnarValue::Array(Arc::new(expected_array)),
-        );
+        let expected: ArrayRef = create_array!(Float64, [Some(0.0), None, Some(0.5)]);
+        assert_eq!(&tester.invoke_wkb_array(input_wkt).unwrap(), &expected);
     }
 }

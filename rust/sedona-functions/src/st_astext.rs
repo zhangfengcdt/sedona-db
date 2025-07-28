@@ -83,7 +83,7 @@ impl SedonaScalarKernel for STAsText {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::StringArray;
+    use arrow_array::{create_array, ArrayRef};
     use datafusion_common::scalar::ScalarValue;
     use datafusion_expr::ScalarUDF;
     use rstest::rstest;
@@ -91,7 +91,8 @@ mod tests {
         WKB_GEOGRAPHY, WKB_GEOMETRY, WKB_VIEW_GEOGRAPHY, WKB_VIEW_GEOMETRY,
     };
     use sedona_testing::{
-        compare::assert_value_equal, create::create_array_value, create::create_scalar_value,
+        compare::{assert_array_equal, assert_scalar_equal},
+        testers::ScalarUdfTester,
     };
 
     use super::*;
@@ -109,25 +110,25 @@ mod tests {
         sedona_type: SedonaType,
     ) {
         let udf = st_astext_udf();
+        let tester = ScalarUdfTester::new(udf.into(), vec![sedona_type]);
 
-        assert_value_equal(
-            &udf.invoke_batch(&[create_scalar_value(Some("POINT (1 2)"), &sedona_type)], 1)
-                .unwrap(),
-            &ColumnarValue::Scalar(ScalarValue::Utf8(Some("POINT(1 2)".to_string()))),
+        assert_scalar_equal(
+            &tester.invoke_wkb_scalar(Some("POINT (1 2)")).unwrap(),
+            &ScalarValue::Utf8(Some("POINT(1 2)".to_string())),
         );
 
-        assert_value_equal(
-            &udf.invoke_batch(&[create_scalar_value(None, &sedona_type)], 1)
-                .unwrap(),
-            &ColumnarValue::Scalar(ScalarValue::Utf8(None)),
+        assert_scalar_equal(
+            &tester.invoke_wkb_scalar(None).unwrap(),
+            &ScalarValue::Utf8(None),
         );
 
-        let wkt_values = [Some("POINT(1 2)"), None, Some("POINT(3 5)")];
-        let expected_array: StringArray = wkt_values.iter().collect();
-        assert_value_equal(
-            &udf.invoke_batch(&[create_array_value(&wkt_values, &sedona_type)], 1)
+        let expected_array: ArrayRef =
+            create_array!(Utf8, [Some("POINT(1 2)"), None, Some("POINT(3 5)")]);
+        assert_array_equal(
+            &tester
+                .invoke_wkb_array(vec![Some("POINT(1 2)"), None, Some("POINT(3 5)")])
                 .unwrap(),
-            &ColumnarValue::Array(Arc::new(expected_array)),
+            &expected_array,
         );
     }
 }

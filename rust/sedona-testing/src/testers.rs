@@ -1,16 +1,16 @@
-use std::sync::Arc;
+use std::{iter::zip, sync::Arc};
 
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{DataType, Field, FieldRef, Schema};
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
-    Accumulator, AggregateUDF,
+    Accumulator, AggregateUDF, ColumnarValue, Expr, Literal, ScalarFunctionArgs, ScalarUDF,
 };
 use datafusion_physical_expr::{expressions::Column, LexOrdering, PhysicalExpr};
 use sedona_schema::datatypes::SedonaType;
 
-use crate::create::create_array;
+use crate::create::{create_array, create_scalar};
 
 /// Low-level tester for aggregate functions
 ///
@@ -111,6 +111,191 @@ impl AggregateUdfTester {
             is_distinct: false,
         };
         self.udf.state_fields(state_field_args)
+    }
+
+    fn arg_fields(&self) -> Vec<FieldRef> {
+        self.arg_data_types()
+            .into_iter()
+            .map(|data_type| Arc::new(Field::new("", data_type, true)))
+            .collect()
+    }
+
+    fn arg_data_types(&self) -> Vec<DataType> {
+        self.arg_types
+            .iter()
+            .map(|sedona_type| sedona_type.data_type())
+            .collect()
+    }
+}
+
+/// Low-level tester for scalar functions
+///
+/// This struct provides a means by which to run a simple check of an
+/// scalar UDF implementation by simulating how DataFusion might call it.
+///
+/// This is not a replacement for testing at a higher level using DataFusion's
+/// actual implementation but provides a useful mechanism to ensure all the
+/// pieces of an scalar UDF are plugged in.
+///
+/// Note that arguments are always cast to the values passed [Self::new]:
+/// to test different combinations of argument types, use a new tester.
+pub struct ScalarUdfTester {
+    udf: ScalarUDF,
+    arg_types: Vec<SedonaType>,
+}
+
+impl ScalarUdfTester {
+    /// Create a new tester
+    pub fn new(udf: ScalarUDF, arg_types: Vec<SedonaType>) -> Self {
+        Self { udf, arg_types }
+    }
+
+    /// Compute the return type
+    pub fn return_type(&self) -> Result<SedonaType> {
+        let arg_data_types = self
+            .arg_types
+            .iter()
+            .map(|sedona_type| sedona_type.data_type())
+            .collect::<Vec<_>>();
+        let out_data_type = self.udf.return_type(&arg_data_types)?;
+        SedonaType::from_data_type(&out_data_type)
+    }
+
+    /// Invoke this function with a scalar
+    pub fn invoke_scalar<T: Literal>(&self, arg: T) -> Result<ScalarValue> {
+        let args = vec![Self::scalar_arg(arg, &self.arg_types[0])?];
+
+        if let ColumnarValue::Scalar(scalar) = self.invoke(args)? {
+            Ok(scalar)
+        } else {
+            internal_err!("Expected scalar result from scalar invoke")
+        }
+    }
+
+    /// Invoke this function with a geometry scalar
+    pub fn invoke_wkb_scalar(&self, wkt_value: Option<&str>) -> Result<ScalarValue> {
+        self.invoke_scalar(create_scalar(wkt_value, &self.arg_types[0]))
+    }
+
+    /// Invoke this function with two scalars
+    pub fn invoke_scalar_scalar<T0: Literal, T1: Literal>(
+        &self,
+        arg0: T0,
+        arg1: T1,
+    ) -> Result<ScalarValue> {
+        let args = vec![
+            Self::scalar_arg(arg0, &self.arg_types[0])?,
+            Self::scalar_arg(arg1, &self.arg_types[1])?,
+        ];
+
+        if let ColumnarValue::Scalar(scalar) = self.invoke(args)? {
+            Ok(scalar)
+        } else {
+            internal_err!("Expected scalar result from binary scalar invoke")
+        }
+    }
+
+    /// Invoke this function with a geometry array
+    pub fn invoke_wkb_array(&self, wkb_values: Vec<Option<&str>>) -> Result<ArrayRef> {
+        self.invoke_array(create_array(&wkb_values, &self.arg_types[0]))
+    }
+
+    /// Invoke this function with an array
+    pub fn invoke_array(&self, array: ArrayRef) -> Result<ArrayRef> {
+        self.invoke_arrays(vec![array])
+    }
+
+    /// Invoke a binary function with an array and a scalar
+    pub fn invoke_array_scalar(&self, array: ArrayRef, arg: impl Literal) -> Result<ArrayRef> {
+        self.invoke_arrays_scalar(vec![array], arg)
+    }
+
+    /// Invoke a binary function with a scalar and an array
+    pub fn invoke_scalar_array(&self, arg: impl Literal, array: ArrayRef) -> Result<ArrayRef> {
+        self.invoke_scalar_arrays(arg, vec![array])
+    }
+
+    /// Invoke a binary function with two arrays
+    pub fn invoke_array_array(&self, array0: ArrayRef, array1: ArrayRef) -> Result<ArrayRef> {
+        self.invoke_arrays(vec![array0, array1])
+    }
+
+    fn invoke_scalar_arrays(&self, arg: impl Literal, arrays: Vec<ArrayRef>) -> Result<ArrayRef> {
+        let mut args = zip(arrays, &self.arg_types)
+            .map(|(array, sedona_type)| {
+                ColumnarValue::Array(array).cast_to(&sedona_type.data_type(), None)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let index = args.len();
+        args.insert(0, Self::scalar_arg(arg, &self.arg_types[index])?);
+
+        if let ColumnarValue::Array(array) = self.invoke(args)? {
+            Ok(array)
+        } else {
+            internal_err!("Expected array result from scalar/array invoke")
+        }
+    }
+
+    fn invoke_arrays_scalar(&self, arrays: Vec<ArrayRef>, arg: impl Literal) -> Result<ArrayRef> {
+        let mut args = zip(arrays, &self.arg_types)
+            .map(|(array, sedona_type)| {
+                ColumnarValue::Array(array).cast_to(&sedona_type.data_type(), None)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let index = args.len();
+        args.push(Self::scalar_arg(arg, &self.arg_types[index])?);
+
+        if let ColumnarValue::Array(array) = self.invoke(args)? {
+            Ok(array)
+        } else {
+            internal_err!("Expected array result from array/scalar invoke")
+        }
+    }
+
+    fn invoke_arrays(&self, arrays: Vec<ArrayRef>) -> Result<ArrayRef> {
+        let args = zip(arrays, &self.arg_types)
+            .map(|(array, sedona_type)| {
+                ColumnarValue::Array(array).cast_to(&sedona_type.data_type(), None)
+            })
+            .collect::<Result<_>>()?;
+
+        if let ColumnarValue::Array(array) = self.invoke(args)? {
+            Ok(array)
+        } else {
+            internal_err!("Expected array result from array invoke")
+        }
+    }
+
+    pub fn invoke(&self, args: Vec<ColumnarValue>) -> Result<ColumnarValue> {
+        assert_eq!(args.len(), self.arg_types.len());
+
+        let mut number_rows = 1;
+        for arg in &args {
+            match arg {
+                ColumnarValue::Array(array) => {
+                    number_rows = array.len();
+                    break;
+                }
+                _ => continue,
+            }
+        }
+
+        let args = ScalarFunctionArgs {
+            args,
+            arg_fields: self.arg_fields(),
+            number_rows,
+            return_field: self.return_type()?.to_storage_field("", true)?.into(),
+        };
+
+        self.udf.invoke_with_args(args)
+    }
+
+    fn scalar_arg(arg: impl Literal, sedona_type: &SedonaType) -> Result<ColumnarValue> {
+        if let Expr::Literal(scalar, _) = arg.lit() {
+            ColumnarValue::Scalar(scalar).cast_to(&sedona_type.data_type(), None)
+        } else {
+            internal_err!("Can't use test scalar invoke where .lit() returns non-literal")
+        }
     }
 
     fn arg_fields(&self) -> Vec<FieldRef> {
