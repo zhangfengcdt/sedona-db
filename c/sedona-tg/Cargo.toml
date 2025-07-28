@@ -18,6 +18,8 @@ cc = { version = "1" }
 criterion = { workspace = true }
 sedona = { path = "../../rust/sedona" }
 sedona-testing = { path = "../../rust/sedona-testing" }
+wkb = { workspace = true }
+geo = { workspace = true }
 
 [dependencies]
 arrow-schema = { workspace = true }
@@ -33,3 +35,7 @@ thiserror = { workspace = true }
 [[bench]]
 harness = false
 name = "geo-predicates"
+
+[[bench]]
+harness = false
+name = "parse-wkb"
