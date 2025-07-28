@@ -1,5 +1,8 @@
+mod distance;
 pub mod executor;
+mod overlay;
 mod predicates;
+mod referencing;
 pub mod register;
 mod sd_format;
 pub mod st_analyze_aggr;

@@ -2,58 +2,42 @@ use arrow_schema::DataType;
 use datafusion_expr::{scalar_doc_sections::DOC_SECTION_OTHER, Documentation, Volatility};
 use sedona_expr::scalar_udf::{ArgMatcher, SedonaScalarUDF};
 
-/// ST_Equals() scalar UDF implementation
-///
-/// Stub function for an intersection check.
+/// ST_Equals() scalar UDF stub
 pub fn st_equals_udf() -> SedonaScalarUDF {
     predicate_stub_udf("ST_Equals", "equals")
 }
 
-/// ST_Intersects() scalar UDF implementation
-///
-/// Stub function for an intersection check.
+/// ST_Intersects() scalar UDF stub
 pub fn st_intersects_udf() -> SedonaScalarUDF {
     predicate_stub_udf("ST_Intersects", "intersects")
 }
 
-/// ST_Disjoint() scalar UDF implementation
-///
-/// Stub function for an intersection check.
+/// ST_Disjoint() scalar UDF stub
 pub fn st_disjoint_udf() -> SedonaScalarUDF {
     predicate_stub_udf("ST_Disjoint", "is disjoint from")
 }
 
-/// ST_Contains() scalar UDF implementation
-///
-/// Stub function for an intersection check.
+/// ST_Contains() scalar UDF stub
 pub fn st_contains_udf() -> SedonaScalarUDF {
     predicate_stub_udf("ST_Contains", "contains")
 }
 
-/// ST_Within() scalar UDF implementation
-///
-/// Stub function for an intersection check.
+/// ST_Within() scalar UDF stub
 pub fn st_within_udf() -> SedonaScalarUDF {
     predicate_stub_udf("ST_Within", "is fully contained by")
 }
 
-/// ST_Covers() scalar UDF implementation
-///
-/// Stub function for an intersection check.
+/// ST_Covers() scalar UDF stub
 pub fn st_covers_udf() -> SedonaScalarUDF {
     predicate_stub_udf("ST_Covers", "covers")
 }
 
-/// ST_CoveredBy() scalar UDF implementation
-///
-/// Stub function for an intersection check.
+/// ST_CoveredBy() scalar UDF stub
 pub fn st_covered_by_udf() -> SedonaScalarUDF {
     predicate_stub_udf("ST_CoveredBy", "is covered by")
 }
 
-/// ST_Touches() scalar UDF implementation
-///
-/// Stub function for an intersection check.
+/// ST_Touches() scalar UDF stub
 pub fn st_touches_udf() -> SedonaScalarUDF {
     predicate_stub_udf("ST_Touches", "touches")
 }
