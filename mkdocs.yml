@@ -1,0 +1,98 @@
+site_name: SedonaDB Staging
+site_description: "This is the staging area for sedonadb"
+nav:
+   - Home: index.md
+   - Reference:
+      - Navigation Subsection: test-reference.md
+theme:
+  name: material
+  font:
+    text: Roboto
+    code: Roboto Mono
+  palette:
+    # Palette toggle for light mode
+    - scheme: default
+      primary: orange
+      accent: orange
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Palette toggle for dark mode
+    - scheme: slate
+      primary: orange
+      accent: orange
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tabs
+    - navigation.top
+    - navigation.footer
+    - navigation.tabs.sticky
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - navigation.expand
+
+exclude_docs: |
+     snippets/*
+markdown_extensions:
+   - admonition
+   - attr_list
+   - codehilite
+   - footnotes
+   - toc:
+        permalink: true
+        toc_depth: 3
+   - pymdownx.arithmatex
+   - pymdownx.betterem:
+        smart_enable: all
+   - pymdownx.caret
+   - pymdownx.critic
+   - pymdownx.details
+   - pymdownx.emoji
+   - pymdownx.highlight
+   - pymdownx.inlinehilite
+   - pymdownx.magiclink
+   - pymdownx.mark
+   - pymdownx.smartsymbols
+   - pymdownx.snippets:
+        base_path: ["docs/"]
+   - pymdownx.superfences:
+        custom_fences:
+        - name: mermaid
+          class: mermaid
+   - pymdownx.tabbed:
+        alternate_style: true
+   - pymdownx.tasklist:
+        custom_checkbox: true
+   - pymdownx.tilde
+plugins:
+   - search
+   - macros
+   - git-revision-date-localized:
+        type: datetime
+   - mkdocs-jupyter
+   - mike:
+        version_selector: false
+   - glightbox:
+        touchNavigation: true
+        loop: false
+        effect: zoom
+        slide_effect: slide
+        width: 100%
+        height: auto
+        zoomable: true
+        draggable: true
+        skip_classes:
+          - custom-skip-class-name
+          - skip-lightbox
+        auto_caption: false
+        caption_position: bottom
+        background: white
+        shadow: false
+        manual: false
+   - tags:
+        tags_file: tags.md
