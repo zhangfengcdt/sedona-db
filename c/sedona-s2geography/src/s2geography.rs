@@ -45,8 +45,26 @@ macro_rules! define_s2_udfs {
 
 #[allow(non_snake_case)]
 impl S2ScalarUDF {
-    // Wrappers for individual ScalarUDFs exposed by s2geography
-    define_s2_udfs![Length, Intersects, Centroid, InterpolateNormalized];
+    define_s2_udfs![
+        Area,
+        Centroid,
+        ClosestPoint,
+        Contains,
+        ConvexHull,
+        Difference,
+        Distance,
+        Equals,
+        Intersection,
+        Intersects,
+        Length,
+        LineInterpolatePoint,
+        LineLocatePoint,
+        MaxDistance,
+        Perimeter,
+        ShortestLine,
+        SymDifference,
+        Union
+    ];
 
     /// Initialize the UDF instance with argument types and options
     ///

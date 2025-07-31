@@ -90,7 +90,21 @@ struct UdfExporter {
     return UdfExporter::Export(s2geography::arrow_udf::name(), out);       \
   }
 
-INIT_UDF_IMPL(Length);
-INIT_UDF_IMPL(Intersects);
+INIT_UDF_IMPL(Area);
 INIT_UDF_IMPL(Centroid);
-INIT_UDF_IMPL(InterpolateNormalized);
+INIT_UDF_IMPL(ClosestPoint);
+INIT_UDF_IMPL(Contains);
+INIT_UDF_IMPL(ConvexHull);
+INIT_UDF_IMPL(Difference);
+INIT_UDF_IMPL(Distance);
+INIT_UDF_IMPL(Equals);
+INIT_UDF_IMPL(Intersection);
+INIT_UDF_IMPL(Intersects);
+INIT_UDF_IMPL(Length);
+INIT_UDF_IMPL(LineInterpolatePoint);
+INIT_UDF_IMPL(LineLocatePoint);
+INIT_UDF_IMPL(MaxDistance);
+INIT_UDF_IMPL(Perimeter);
+INIT_UDF_IMPL(ShortestLine);
+INIT_UDF_IMPL(SymDifference);
+INIT_UDF_IMPL(Union);

@@ -394,6 +394,14 @@ impl SedonaScalarUDF {
         Self::new(name, vec![stub_kernel], volatility, documentation)
     }
 
+    /// Create a SedonaScalarUDF from a single kernel
+    ///
+    /// This constructor creates a [Volatility::Immutable] function with no documentation
+    /// consisting of only the implementation provided.
+    pub fn from_kernel(name: &str, kernel: ScalarKernelRef) -> SedonaScalarUDF {
+        Self::new(name, vec![kernel], Volatility::Immutable, None)
+    }
+
     pub fn invoke_batch(
         &self,
         args: &[ColumnarValue],

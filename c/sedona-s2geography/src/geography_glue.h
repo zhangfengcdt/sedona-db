@@ -41,10 +41,24 @@ struct SedonaGeographyArrowUdf {
 #define DECLARE_UDF_IMPL(name) \
   void SedonaGeographyInitUdf##name(struct SedonaGeographyArrowUdf* out)
 
-DECLARE_UDF_IMPL(Length);
-DECLARE_UDF_IMPL(Intersects);
+DECLARE_UDF_IMPL(Area);
 DECLARE_UDF_IMPL(Centroid);
-DECLARE_UDF_IMPL(InterpolateNormalized);
+DECLARE_UDF_IMPL(ClosestPoint);
+DECLARE_UDF_IMPL(Contains);
+DECLARE_UDF_IMPL(ConvexHull);
+DECLARE_UDF_IMPL(Difference);
+DECLARE_UDF_IMPL(Distance);
+DECLARE_UDF_IMPL(Equals);
+DECLARE_UDF_IMPL(Intersection);
+DECLARE_UDF_IMPL(Intersects);
+DECLARE_UDF_IMPL(Length);
+DECLARE_UDF_IMPL(LineInterpolatePoint);
+DECLARE_UDF_IMPL(LineLocatePoint);
+DECLARE_UDF_IMPL(MaxDistance);
+DECLARE_UDF_IMPL(Perimeter);
+DECLARE_UDF_IMPL(ShortestLine);
+DECLARE_UDF_IMPL(SymDifference);
+DECLARE_UDF_IMPL(Union);
 
 #undef DECLARE_UDF_IMPL
 

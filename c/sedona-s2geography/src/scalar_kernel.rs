@@ -3,32 +3,196 @@ use std::sync::Arc;
 use arrow_schema::DataType;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
-use sedona_expr::scalar_udf::{ArgMatcher, ScalarKernelRef, SedonaScalarKernel};
-use sedona_schema::datatypes::SedonaType;
+use sedona_expr::scalar_udf::{ArgMatcher, ScalarKernelRef, SedonaScalarKernel, TypeMatcher};
+use sedona_schema::datatypes::{SedonaType, WKB_GEOGRAPHY};
 
 use crate::s2geography::S2ScalarUDF;
 
-/// Implementation of ST_Length() for geography using s2geography
-pub fn st_length_impl() -> ScalarKernelRef {
-    Arc::new(S2Length {})
+/// Implementation of ST_Area() for geography using s2geography
+pub fn st_area_impl() -> ScalarKernelRef {
+    S2ScalarKernel::new_ref(
+        S2ScalarUDF::Area,
+        vec![ArgMatcher::is_geography()],
+        DataType::Float64.try_into().unwrap(),
+    )
+}
+
+/// Implementation of ST_Centroid() for geography using s2geography
+pub fn st_centroid_impl() -> ScalarKernelRef {
+    S2ScalarKernel::new_ref(
+        S2ScalarUDF::Centroid,
+        vec![ArgMatcher::is_geography()],
+        WKB_GEOGRAPHY,
+    )
+}
+
+/// Implementation of ST_ClosestPoint() for geography using s2geography
+pub fn st_closest_point_impl() -> ScalarKernelRef {
+    S2ScalarKernel::new_ref(
+        S2ScalarUDF::ClosestPoint,
+        vec![ArgMatcher::is_geography(), ArgMatcher::is_geography()],
+        WKB_GEOGRAPHY,
+    )
+}
+
+/// Implementation of ST_Contains() for geography using s2geography
+pub fn st_contains_impl() -> ScalarKernelRef {
+    S2ScalarKernel::new_ref(
+        S2ScalarUDF::Contains,
+        vec![ArgMatcher::is_geography(), ArgMatcher::is_geography()],
+        DataType::Boolean.try_into().unwrap(),
+    )
+}
+
+/// Implementation of ST_ConvexHull() for geography using s2geography
+pub fn st_convex_hull_impl() -> ScalarKernelRef {
+    S2ScalarKernel::new_ref(
+        S2ScalarUDF::ConvexHull,
+        vec![ArgMatcher::is_geography()],
+        WKB_GEOGRAPHY,
+    )
+}
+
+/// Implementation of ST_Difference() for geography using s2geography
+pub fn st_difference_impl() -> ScalarKernelRef {
+    S2ScalarKernel::new_ref(
+        S2ScalarUDF::Difference,
+        vec![ArgMatcher::is_geography(), ArgMatcher::is_geography()],
+        WKB_GEOGRAPHY,
+    )
+}
+
+/// Implementation of ST_Distance() for geography using s2geography
+pub fn st_distance_impl() -> ScalarKernelRef {
+    S2ScalarKernel::new_ref(
+        S2ScalarUDF::Distance,
+        vec![ArgMatcher::is_geography(), ArgMatcher::is_geography()],
+        DataType::Float64.try_into().unwrap(),
+    )
+}
+
+/// Implementation of ST_Equals() for geography using s2geography
+pub fn st_equals_impl() -> ScalarKernelRef {
+    S2ScalarKernel::new_ref(
+        S2ScalarUDF::Equals,
+        vec![ArgMatcher::is_geography(), ArgMatcher::is_geography()],
+        DataType::Boolean.try_into().unwrap(),
+    )
+}
+
+/// Implementation of ST_Intersection() for geography using s2geography
+pub fn st_intersection_impl() -> ScalarKernelRef {
+    S2ScalarKernel::new_ref(
+        S2ScalarUDF::Intersection,
+        vec![ArgMatcher::is_geography(), ArgMatcher::is_geography()],
+        WKB_GEOGRAPHY,
+    )
 }
 
 /// Implementation of ST_Intersects() for geography using s2geography
 pub fn st_intersects_impl() -> ScalarKernelRef {
-    Arc::new(S2Intersects {})
+    S2ScalarKernel::new_ref(
+        S2ScalarUDF::Intersects,
+        vec![ArgMatcher::is_geography(), ArgMatcher::is_geography()],
+        DataType::Boolean.try_into().unwrap(),
+    )
+}
+
+/// Implementation of ST_Length() for geography using s2geography
+pub fn st_length_impl() -> ScalarKernelRef {
+    S2ScalarKernel::new_ref(
+        S2ScalarUDF::Length,
+        vec![ArgMatcher::is_geography()],
+        DataType::Float64.try_into().unwrap(),
+    )
+}
+
+/// Implementation of ST_LineInterpolatePoint() for geography using s2geography
+pub fn st_line_interpolate_point_impl() -> ScalarKernelRef {
+    S2ScalarKernel::new_ref(
+        S2ScalarUDF::LineInterpolatePoint,
+        vec![ArgMatcher::is_geography(), ArgMatcher::is_numeric()],
+        WKB_GEOGRAPHY,
+    )
+}
+
+/// Implementation of ST_LineLocatePoint() for geography using s2geography
+pub fn st_line_locate_point_impl() -> ScalarKernelRef {
+    S2ScalarKernel::new_ref(
+        S2ScalarUDF::LineLocatePoint,
+        vec![ArgMatcher::is_geography(), ArgMatcher::is_geography()],
+        DataType::Float64.try_into().unwrap(),
+    )
+}
+
+/// Implementation of ST_MaxDistance() for geography using s2geography
+pub fn st_max_distance_impl() -> ScalarKernelRef {
+    S2ScalarKernel::new_ref(
+        S2ScalarUDF::MaxDistance,
+        vec![ArgMatcher::is_geography(), ArgMatcher::is_geography()],
+        DataType::Float64.try_into().unwrap(),
+    )
+}
+
+/// Implementation of ST_Perimeter() for geography using s2geography
+pub fn st_perimeter_impl() -> ScalarKernelRef {
+    S2ScalarKernel::new_ref(
+        S2ScalarUDF::Perimeter,
+        vec![ArgMatcher::is_geography()],
+        DataType::Float64.try_into().unwrap(),
+    )
+}
+
+/// Implementation of ST_ShortestLine() for geography using s2geography
+pub fn st_shortest_line_impl() -> ScalarKernelRef {
+    S2ScalarKernel::new_ref(
+        S2ScalarUDF::ShortestLine,
+        vec![ArgMatcher::is_geography(), ArgMatcher::is_geography()],
+        WKB_GEOGRAPHY,
+    )
+}
+
+/// Implementation of ST_SymDifference() for geography using s2geography
+pub fn st_sym_difference_impl() -> ScalarKernelRef {
+    S2ScalarKernel::new_ref(
+        S2ScalarUDF::SymDifference,
+        vec![ArgMatcher::is_geography(), ArgMatcher::is_geography()],
+        WKB_GEOGRAPHY,
+    )
+}
+
+/// Implementation of ST_Union() for geography using s2geography
+pub fn st_union_impl() -> ScalarKernelRef {
+    S2ScalarKernel::new_ref(
+        S2ScalarUDF::Union,
+        vec![ArgMatcher::is_geography(), ArgMatcher::is_geography()],
+        WKB_GEOGRAPHY,
+    )
 }
 
 #[derive(Debug)]
-struct S2Length {}
+struct S2ScalarKernel {
+    inner_factory: fn() -> S2ScalarUDF,
+    matcher: ArgMatcher,
+}
 
-impl SedonaScalarKernel for S2Length {
+impl S2ScalarKernel {
+    /// Creates a new reference to a S2ScalarKernel
+    pub fn new_ref(
+        inner_factory: fn() -> S2ScalarUDF,
+        matchers: Vec<Arc<dyn TypeMatcher + Send + Sync>>,
+        out_type: SedonaType,
+    ) -> ScalarKernelRef {
+        Arc::new(Self {
+            inner_factory,
+            matcher: ArgMatcher::new(matchers, out_type),
+        })
+    }
+}
+
+impl SedonaScalarKernel for S2ScalarKernel {
     fn return_type(&self, args: &[SedonaType]) -> Result<Option<SedonaType>> {
-        let matcher = ArgMatcher::new(
-            vec![ArgMatcher::is_geography()],
-            SedonaType::Arrow(DataType::Float64),
-        );
-
-        matcher.match_args(args)
+        self.matcher.match_args(args)
     }
 
     fn invoke_batch(
@@ -36,56 +200,8 @@ impl SedonaScalarKernel for S2Length {
         arg_types: &[SedonaType],
         args: &[ColumnarValue],
     ) -> Result<ColumnarValue> {
-        let mut wrapper = S2ScalarUDFWrapper::from(S2ScalarUDF::Length());
-        wrapper.invoke(arg_types, args)
-    }
-}
+        let mut inner = (self.inner_factory)();
 
-#[derive(Debug)]
-struct S2Intersects {}
-
-impl SedonaScalarKernel for S2Intersects {
-    fn return_type(&self, args: &[SedonaType]) -> Result<Option<SedonaType>> {
-        let matcher = ArgMatcher::new(
-            vec![ArgMatcher::is_geography(), ArgMatcher::is_geography()],
-            SedonaType::Arrow(DataType::Boolean),
-        );
-
-        matcher.match_args(args)
-    }
-
-    fn invoke_batch(
-        &self,
-        arg_types: &[SedonaType],
-        args: &[ColumnarValue],
-    ) -> Result<ColumnarValue> {
-        let mut wrapper = S2ScalarUDFWrapper::from(S2ScalarUDF::Intersects());
-        wrapper.invoke(arg_types, args)
-    }
-}
-
-/// Wrapper around the S2ScalarUDF that handles DataFusion-specific details
-///
-/// In our UDFs, we instantiate the wrapper and execute it for every batch
-/// (even though the underlying object supports being reused for more than
-/// one batch, it is not thread safe).
-#[derive(Debug)]
-struct S2ScalarUDFWrapper {
-    inner: S2ScalarUDF,
-}
-
-impl From<S2ScalarUDF> for S2ScalarUDFWrapper {
-    fn from(value: S2ScalarUDF) -> Self {
-        Self { inner: value }
-    }
-}
-
-impl S2ScalarUDFWrapper {
-    fn invoke(
-        &mut self,
-        arg_types: &[SedonaType],
-        args: &[ColumnarValue],
-    ) -> Result<ColumnarValue> {
         // S2's scalar UDFs operate on fields with extension metadata
         let arg_fields = arg_types
             .iter()
@@ -93,7 +209,7 @@ impl S2ScalarUDFWrapper {
             .collect::<Result<Vec<_>>>()?;
 
         // Initialize the UDF with a schema consisting of the output fields
-        let out_ffi_schema = self.inner.init(arg_fields.into(), None)?;
+        let out_ffi_schema = inner.init(arg_fields.into(), None)?;
 
         // Create arrays from each argument (scalars become arrays of size 1)
         let arg_arrays = args
@@ -105,7 +221,7 @@ impl S2ScalarUDFWrapper {
             .collect::<Result<Vec<_>>>()?;
 
         // Execute the batch
-        let out_ffi_array = self.inner.execute(&arg_arrays)?;
+        let out_ffi_array = inner.execute(&arg_arrays)?;
 
         // Create the ArrayRef
         let out_array_data = unsafe { arrow_array::ffi::from_ffi(out_ffi_array, &out_ffi_schema)? };
@@ -126,77 +242,370 @@ impl S2ScalarUDFWrapper {
 mod test {
 
     use arrow_array::ArrayRef;
-    use sedona_schema::datatypes::WKB_GEOGRAPHY;
+    use rstest::rstest;
+    use sedona_expr::scalar_udf::SedonaScalarUDF;
+    use sedona_schema::datatypes::{WKB_GEOGRAPHY, WKB_VIEW_GEOGRAPHY};
     use sedona_testing::{
-        compare::assert_value_equal,
-        create::{create_array_value, create_scalar_value},
+        compare::assert_scalar_equal,
+        create::{create_array, create_scalar},
+        testers::ScalarUdfTester,
     };
 
     use super::*;
 
-    #[test]
-    fn length() {
-        let mut udf = sedona_functions::register::stubs::st_length_udf();
-        udf.add_kernel(st_length_impl());
+    #[rstest]
+    fn unary_scalar_kernel(#[values(WKB_GEOGRAPHY, WKB_VIEW_GEOGRAPHY)] sedona_type: SedonaType) {
+        let udf = SedonaScalarUDF::from_kernel("st_length", st_length_impl());
+        let tester = ScalarUdfTester::new(udf.into(), vec![sedona_type]);
+        assert_eq!(
+            tester.return_type().unwrap(),
+            DataType::Float64.try_into().unwrap()
+        );
 
-        // Check array input
-        let result = udf
-            .invoke_batch(
-                &[create_array_value(
-                    &[
-                        Some("POINT (0 1)"),
-                        Some("LINESTRING (0 0, 0 1)"),
-                        Some("POLYGON ((0 0, 1 0, 0 1, 0 0))"),
-                        None,
-                    ],
-                    &WKB_GEOGRAPHY,
-                )],
-                4,
-            )
+        // Array -> Array
+        let result = tester
+            .invoke_wkb_array(vec![
+                Some("POINT (0 1)"),
+                Some("LINESTRING (0 0, 0 1)"),
+                Some("POLYGON ((0 0, 1 0, 0 1, 0 0))"),
+                None,
+            ])
             .unwrap();
 
         let expected: ArrayRef = arrow_array::create_array!(
             Float64,
             [Some(0.0), Some(111195.10117748393), Some(0.0), None]
         );
-        assert_value_equal(&result, &ColumnarValue::Array(expected));
 
-        // Check scalar input
-        let result = udf
-            .invoke_batch(
-                &[create_scalar_value(
-                    Some("LINESTRING (0 0, 0 1)"),
-                    &WKB_GEOGRAPHY,
-                )],
-                1,
-            )
+        assert_eq!(&result, &expected);
+
+        // Scalar -> Scalar
+        let result = tester
+            .invoke_wkb_scalar(Some("LINESTRING (0 0, 0 1)"))
             .unwrap();
-        assert_value_equal(
-            &result,
-            &ColumnarValue::Scalar(ScalarValue::Float64(Some(111195.10117748393))),
+        assert_eq!(result, ScalarValue::Float64(Some(111195.10117748393)));
+    }
+
+    #[rstest]
+    fn binary_scalar_kernel(#[values(WKB_GEOGRAPHY, WKB_VIEW_GEOGRAPHY)] sedona_type: SedonaType) {
+        let udf = SedonaScalarUDF::from_kernel("st_intersects", st_intersects_impl());
+        let tester =
+            ScalarUdfTester::new(udf.into(), vec![sedona_type.clone(), sedona_type.clone()]);
+        assert_eq!(
+            tester.return_type().unwrap(),
+            DataType::Boolean.try_into().unwrap()
+        );
+
+        let point_array = create_array(
+            &[Some("POINT (0.25 0.25)"), Some("POINT (10 10)"), None],
+            &sedona_type,
+        );
+        let polygon_scalar = create_scalar(Some("POLYGON ((0 0, 1 0, 0 1, 0 0))"), &sedona_type);
+        let point_scalar = create_scalar(Some("POINT (0.25 0.25)"), &sedona_type);
+
+        let expected: ArrayRef =
+            arrow_array::create_array!(Boolean, [Some(true), Some(false), None]);
+
+        // Array, Scalar -> Array
+        let result = tester
+            .invoke_array_scalar(point_array.clone(), polygon_scalar.clone())
+            .unwrap();
+        assert_eq!(&result, &expected);
+
+        // Scalar, Array -> Array
+        let result = tester
+            .invoke_scalar_array(polygon_scalar.clone(), point_array.clone())
+            .unwrap();
+        assert_eq!(&result, &expected);
+
+        // Scalar, Scalar -> Scalar
+        let result = tester
+            .invoke_scalar_scalar(polygon_scalar, point_scalar)
+            .unwrap();
+        assert_eq!(result, ScalarValue::Boolean(Some(true)));
+    }
+
+    #[test]
+    fn area() {
+        let udf = SedonaScalarUDF::from_kernel("st_area", st_area_impl());
+        let tester = ScalarUdfTester::new(udf.into(), vec![WKB_GEOGRAPHY]);
+        assert_eq!(
+            tester.return_type().unwrap(),
+            DataType::Float64.try_into().unwrap()
+        );
+
+        assert_eq!(
+            tester
+                .invoke_wkb_scalar(Some("POLYGON ((0 0, 0 1, 1 0, 0 0))"))
+                .unwrap(),
+            ScalarValue::Float64(Some(6182489130.907195))
+        )
+    }
+
+    #[test]
+    fn centroid() {
+        let udf = SedonaScalarUDF::from_kernel("st_centroid", st_centroid_impl());
+        let tester = ScalarUdfTester::new(udf.into(), vec![WKB_GEOGRAPHY]);
+        assert_eq!(tester.return_type().unwrap(), WKB_GEOGRAPHY);
+
+        assert_scalar_equal(
+            &tester
+                .invoke_wkb_scalar(Some("LINESTRING (0 0, 0 1)"))
+                .unwrap(),
+            &create_scalar(Some("POINT (0 0.5)"), &WKB_GEOGRAPHY),
+        )
+    }
+
+    #[test]
+    fn closest_point() {
+        let udf = SedonaScalarUDF::from_kernel("st_closestpoint", st_closest_point_impl());
+        let tester = ScalarUdfTester::new(udf.into(), vec![WKB_GEOGRAPHY, WKB_GEOGRAPHY]);
+        assert_eq!(tester.return_type().unwrap(), WKB_GEOGRAPHY);
+
+        let scalar0 = create_scalar(Some("LINESTRING (0 0, 0 1)"), &WKB_GEOGRAPHY);
+        let scalar1 = create_scalar(Some("POINT (-1 -1)"), &WKB_GEOGRAPHY);
+
+        assert_scalar_equal(
+            &tester.invoke_scalar_scalar(scalar0, scalar1).unwrap(),
+            &create_scalar(Some("POINT (0 0)"), &WKB_GEOGRAPHY),
+        )
+    }
+
+    #[test]
+    fn contains() {
+        let udf = SedonaScalarUDF::from_kernel("st_contains", st_contains_impl());
+        let tester = ScalarUdfTester::new(udf.into(), vec![WKB_GEOGRAPHY, WKB_GEOGRAPHY]);
+        assert_eq!(
+            tester.return_type().unwrap(),
+            DataType::Boolean.try_into().unwrap()
+        );
+
+        let scalar0 = create_scalar(Some("POLYGON ((0 0, 0 1, 1 0, 0 0))"), &WKB_GEOGRAPHY);
+        let scalar1 = create_scalar(Some("POINT (0.25 0.25)"), &WKB_GEOGRAPHY);
+
+        assert_eq!(
+            tester.invoke_scalar_scalar(scalar0, scalar1).unwrap(),
+            ScalarValue::Boolean(Some(true))
         );
     }
 
     #[test]
+    fn difference() {
+        let udf = SedonaScalarUDF::from_kernel("st_difference", st_difference_impl());
+        let tester = ScalarUdfTester::new(udf.into(), vec![WKB_GEOGRAPHY, WKB_GEOGRAPHY]);
+        assert_eq!(tester.return_type().unwrap(), WKB_GEOGRAPHY);
+
+        let scalar0 = create_scalar(Some("POINT (0 0)"), &WKB_GEOGRAPHY);
+        let scalar1 = create_scalar(Some("POINT (0 0)"), &WKB_GEOGRAPHY);
+
+        assert_scalar_equal(
+            &tester.invoke_scalar_scalar(scalar0, scalar1).unwrap(),
+            &create_scalar(Some("GEOMETRYCOLLECTION EMPTY"), &WKB_GEOGRAPHY),
+        )
+    }
+
+    #[test]
+    fn distance() {
+        let udf = SedonaScalarUDF::from_kernel("st_distance", st_distance_impl());
+        let tester = ScalarUdfTester::new(udf.into(), vec![WKB_GEOGRAPHY, WKB_GEOGRAPHY]);
+        assert_eq!(
+            tester.return_type().unwrap(),
+            DataType::Float64.try_into().unwrap()
+        );
+
+        let scalar0 = create_scalar(Some("POINT (0 0)"), &WKB_GEOGRAPHY);
+        let scalar1 = create_scalar(Some("LINESTRING (0 0, 0 1)"), &WKB_GEOGRAPHY);
+
+        assert_eq!(
+            tester.invoke_scalar_scalar(scalar0, scalar1).unwrap(),
+            ScalarValue::Float64(Some(0.0))
+        );
+    }
+
+    #[test]
+    fn equals() {
+        let udf = SedonaScalarUDF::from_kernel("st_equals", st_equals_impl());
+        let tester = ScalarUdfTester::new(udf.into(), vec![WKB_GEOGRAPHY, WKB_GEOGRAPHY]);
+        assert_eq!(
+            tester.return_type().unwrap(),
+            DataType::Boolean.try_into().unwrap()
+        );
+
+        let scalar0 = create_scalar(Some("POLYGON ((0 0, 0 1, 1 0, 0 0))"), &WKB_GEOGRAPHY);
+        let scalar1 = create_scalar(Some("POINT (0.25 0.25)"), &WKB_GEOGRAPHY);
+
+        assert_eq!(
+            tester.invoke_scalar_scalar(scalar0, scalar1).unwrap(),
+            ScalarValue::Boolean(Some(false))
+        );
+    }
+
+    #[test]
+    fn intersection() {
+        let udf = SedonaScalarUDF::from_kernel("st_intersection", st_intersection_impl());
+        let tester = ScalarUdfTester::new(udf.into(), vec![WKB_GEOGRAPHY, WKB_GEOGRAPHY]);
+        assert_eq!(tester.return_type().unwrap(), WKB_GEOGRAPHY);
+
+        let scalar0 = create_scalar(Some("POINT (0 0)"), &WKB_GEOGRAPHY);
+        let scalar1 = create_scalar(Some("POINT (0 0)"), &WKB_GEOGRAPHY);
+
+        assert_scalar_equal(
+            &tester.invoke_scalar_scalar(scalar0, scalar1).unwrap(),
+            &create_scalar(Some("POINT (0 0)"), &WKB_GEOGRAPHY),
+        )
+    }
+
+    #[test]
     fn intersects() {
-        let mut udf = sedona_functions::register::stubs::st_intersects_udf();
-        udf.add_kernel(st_intersects_impl());
-
-        let point_array = create_array_value(
-            &[Some("POINT (0.25 0.25)"), Some("POINT (10 10)"), None],
-            &WKB_GEOGRAPHY,
+        let udf = SedonaScalarUDF::from_kernel("st_intersects", st_intersects_impl());
+        let tester = ScalarUdfTester::new(udf.into(), vec![WKB_GEOGRAPHY, WKB_GEOGRAPHY]);
+        assert_eq!(
+            tester.return_type().unwrap(),
+            DataType::Boolean.try_into().unwrap()
         );
-        let polygon_scalar =
-            create_scalar_value(Some("POLYGON ((0 0, 1 0, 0 1, 0 0))"), &WKB_GEOGRAPHY);
 
-        // Array, Scalar -> Array
-        assert_value_equal(
-            &udf.invoke_batch(&[point_array.clone(), polygon_scalar.clone()], 1)
+        let scalar0 = create_scalar(Some("POLYGON ((0 0, 0 1, 1 0, 0 0))"), &WKB_GEOGRAPHY);
+        let scalar1 = create_scalar(Some("POINT (0.25 0.25)"), &WKB_GEOGRAPHY);
+
+        assert_eq!(
+            tester.invoke_scalar_scalar(scalar0, scalar1).unwrap(),
+            ScalarValue::Boolean(Some(true))
+        );
+    }
+
+    #[test]
+    fn length() {
+        let udf = SedonaScalarUDF::from_kernel("st_length", st_length_impl());
+        let tester = ScalarUdfTester::new(udf.into(), vec![WKB_GEOGRAPHY]);
+        assert_eq!(
+            tester.return_type().unwrap(),
+            DataType::Float64.try_into().unwrap()
+        );
+
+        assert_eq!(
+            tester
+                .invoke_wkb_scalar(Some("LINESTRING (0 0, 0 1)"))
                 .unwrap(),
-            &ColumnarValue::Array(arrow_array::create_array!(
-                Boolean,
-                [Some(true), Some(false), None]
-            )),
+            ScalarValue::Float64(Some(111195.10117748393))
+        )
+    }
+
+    #[test]
+    fn line_interpolate_point() {
+        let udf = SedonaScalarUDF::from_kernel(
+            "st_lineinterpolatepoint",
+            st_line_interpolate_point_impl(),
         );
+        let tester = ScalarUdfTester::new(
+            udf.into(),
+            vec![WKB_GEOGRAPHY, DataType::Float64.try_into().unwrap()],
+        );
+        assert_eq!(tester.return_type().unwrap(), WKB_GEOGRAPHY);
+
+        let scalar0 = create_scalar(Some("LINESTRING (0 0, 0 1)"), &WKB_GEOGRAPHY);
+        let scalar1 = ScalarValue::Float64(Some(0.5));
+
+        assert_scalar_equal(
+            &tester.invoke_scalar_scalar(scalar0, scalar1).unwrap(),
+            &create_scalar(Some("POINT (0 0.5)"), &WKB_GEOGRAPHY),
+        )
+    }
+
+    #[test]
+    fn line_locate_point() {
+        let udf = SedonaScalarUDF::from_kernel("st_linelocatepoint", st_line_locate_point_impl());
+        let tester = ScalarUdfTester::new(udf.into(), vec![WKB_GEOGRAPHY, WKB_GEOGRAPHY]);
+        assert_eq!(
+            tester.return_type().unwrap(),
+            DataType::Float64.try_into().unwrap()
+        );
+
+        let scalar0 = create_scalar(Some("LINESTRING (0 0, 0 1)"), &WKB_GEOGRAPHY);
+        let scalar1 = create_scalar(Some("POINT (0 0.5)"), &WKB_GEOGRAPHY);
+
+        assert_eq!(
+            tester.invoke_scalar_scalar(scalar0, scalar1).unwrap(),
+            ScalarValue::Float64(Some(0.5))
+        );
+    }
+
+    #[test]
+    fn max_distance() {
+        let udf = SedonaScalarUDF::from_kernel("st_maxdistance", st_max_distance_impl());
+        let tester = ScalarUdfTester::new(udf.into(), vec![WKB_GEOGRAPHY, WKB_GEOGRAPHY]);
+        assert_eq!(
+            tester.return_type().unwrap(),
+            DataType::Float64.try_into().unwrap()
+        );
+
+        let scalar0 = create_scalar(Some("POINT (0 0)"), &WKB_GEOGRAPHY);
+        let scalar1 = create_scalar(Some("LINESTRING (0 0, 0 1)"), &WKB_GEOGRAPHY);
+
+        assert_eq!(
+            tester.invoke_scalar_scalar(scalar0, scalar1).unwrap(),
+            ScalarValue::Float64(Some(111195.10117748393))
+        );
+    }
+
+    #[test]
+    fn perimeter() {
+        let udf = SedonaScalarUDF::from_kernel("st_perimeter", st_perimeter_impl());
+        let tester = ScalarUdfTester::new(udf.into(), vec![WKB_GEOGRAPHY]);
+        assert_eq!(
+            tester.return_type().unwrap(),
+            DataType::Float64.try_into().unwrap()
+        );
+
+        assert_eq!(
+            tester
+                .invoke_wkb_scalar(Some("POLYGON ((0 0, 0 1, 1 0, 0 0))"))
+                .unwrap(),
+            ScalarValue::Float64(Some(379639.8304474758))
+        )
+    }
+
+    #[test]
+    fn shortest_line() {
+        let udf = SedonaScalarUDF::from_kernel("st_shortestline", st_shortest_line_impl());
+        let tester = ScalarUdfTester::new(udf.into(), vec![WKB_GEOGRAPHY, WKB_GEOGRAPHY]);
+        assert_eq!(tester.return_type().unwrap(), WKB_GEOGRAPHY);
+
+        let scalar0 = create_scalar(Some("LINESTRING (0 0, 0 1)"), &WKB_GEOGRAPHY);
+        let scalar1 = create_scalar(Some("POINT (0 -1)"), &WKB_GEOGRAPHY);
+
+        assert_scalar_equal(
+            &tester.invoke_scalar_scalar(scalar0, scalar1).unwrap(),
+            &create_scalar(Some("LINESTRING (0 0, 0 -1)"), &WKB_GEOGRAPHY),
+        )
+    }
+
+    #[test]
+    fn sym_difference() {
+        let udf = SedonaScalarUDF::from_kernel("st_symdifference", st_sym_difference_impl());
+        let tester = ScalarUdfTester::new(udf.into(), vec![WKB_GEOGRAPHY, WKB_GEOGRAPHY]);
+        assert_eq!(tester.return_type().unwrap(), WKB_GEOGRAPHY);
+
+        let scalar0 = create_scalar(Some("POINT (0 0)"), &WKB_GEOGRAPHY);
+        let scalar1 = create_scalar(Some("POINT (0 0)"), &WKB_GEOGRAPHY);
+
+        assert_scalar_equal(
+            &tester.invoke_scalar_scalar(scalar0, scalar1).unwrap(),
+            &create_scalar(Some("GEOMETRYCOLLECTION EMPTY"), &WKB_GEOGRAPHY),
+        )
+    }
+
+    #[test]
+    fn union() {
+        let udf = SedonaScalarUDF::from_kernel("st_union", st_union_impl());
+        let tester = ScalarUdfTester::new(udf.into(), vec![WKB_GEOGRAPHY, WKB_GEOGRAPHY]);
+        assert_eq!(tester.return_type().unwrap(), WKB_GEOGRAPHY);
+
+        let scalar0 = create_scalar(Some("POINT (0 0)"), &WKB_GEOGRAPHY);
+        let scalar1 = create_scalar(Some("POINT (0 0)"), &WKB_GEOGRAPHY);
+
+        assert_scalar_equal(
+            &tester.invoke_scalar_scalar(scalar0, scalar1).unwrap(),
+            &create_scalar(Some("POINT (0 0)"), &WKB_GEOGRAPHY),
+        )
     }
 }

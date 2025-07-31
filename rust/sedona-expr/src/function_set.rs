@@ -79,8 +79,9 @@ impl FunctionSet {
 
     /// Add a kernel to a function in this set
     ///
-    /// This errors if a function of that name does not exist in this set. A reference
-    /// to the matching function is returned.
+    /// This adds a scalar UDF with immutable output and no documentation if a
+    /// function of that name does not exist in this set. A reference to the
+    /// matching function is returned.
     pub fn add_scalar_udf_kernel(
         &mut self,
         name: &str,
@@ -88,10 +89,12 @@ impl FunctionSet {
     ) -> Result<&SedonaScalarUDF> {
         if let Some(function) = self.scalar_udf_mut(name) {
             function.add_kernel(kernel);
-            Ok(self.scalar_udf(name).unwrap())
         } else {
-            internal_err!("Can't register scalar kernel for function '{}'", name)
+            let function = SedonaScalarUDF::from_kernel(name, kernel);
+            self.insert_scalar_udf(function);
         }
+
+        Ok(self.scalar_udf(name).unwrap())
     }
 
     /// Add an aggregate kernel to a function in this set
@@ -168,13 +171,10 @@ mod tests {
                 .name(),
             "simple_udf"
         );
-        let err = functions
-            .add_scalar_udf_kernel("function that does not exist", kernel.clone())
-            .unwrap_err();
-        assert_eq!(
-            err.message().lines().next().unwrap(),
-            "Can't register scalar kernel for function 'function that does not exist'."
-        );
+        let inserted_udf = functions
+            .add_scalar_udf_kernel("function that does not yet exist", kernel.clone())
+            .unwrap();
+        assert_eq!(inserted_udf.name(), "function that does not yet exist");
 
         let kernel2 = SimpleSedonaScalarKernel::new_ref(
             ArgMatcher::new(
@@ -193,9 +193,13 @@ mod tests {
                 .scalar_udfs()
                 .map(|s| s.name())
                 .collect::<HashSet<_>>(),
-            vec!["simple_udf", "simple_udf2"]
-                .into_iter()
-                .collect::<HashSet<_>>()
+            vec![
+                "simple_udf",
+                "simple_udf2",
+                "function that does not yet exist"
+            ]
+            .into_iter()
+            .collect::<HashSet<_>>()
         );
     }
 
