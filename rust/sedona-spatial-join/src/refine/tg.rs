@@ -88,6 +88,7 @@ impl SelectOptimalMode for TgOptimalModeSelector {
     fn select_without_probe_stats(&self, build_stats: &GeoStatistics) -> Option<ExecutionMode> {
         match &self.predicate {
             SpatialPredicate::Distance(_) => Some(ExecutionMode::PrepareNone),
+            SpatialPredicate::KNearestNeighbors(_) => Some(ExecutionMode::PrepareNone),
             SpatialPredicate::Relation(predicate) => {
                 match predicate.relation_type {
                     SpatialRelationType::Intersects => {
@@ -300,6 +301,11 @@ fn create_evaluator(predicate: &SpatialPredicate) -> Result<Box<dyn TgPredicateE
         SpatialPredicate::Distance(_) => {
             return Err(DataFusionError::Internal(
                 "Distance predicate is not supported for TG".to_string(),
+            ))
+        }
+        SpatialPredicate::KNearestNeighbors(_) => {
+            return Err(DataFusionError::Internal(
+                "KNN predicate is not supported for TG".to_string(),
             ))
         }
         SpatialPredicate::Relation(predicate) => match predicate.relation_type {

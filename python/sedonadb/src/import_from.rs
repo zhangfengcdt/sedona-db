@@ -31,9 +31,9 @@ pub fn import_table_provider_from_any<'py>(
         let reader = import_arrow_array_stream(py, obj, requested_schema)?;
         Ok(Arc::new(RecordBatchReaderProvider::new(reader)))
     } else {
-        return Err(PySedonaError::SedonaPython(
+        Err(PySedonaError::SedonaPython(
             "Can't create SedonaDB table from object".to_string(),
-        ));
+        ))
     }
 }
 

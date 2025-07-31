@@ -38,6 +38,7 @@ pub fn default_function_set() -> FunctionSet {
         crate::predicates::st_disjoint_udf,
         crate::predicates::st_equals_udf,
         crate::predicates::st_intersects_udf,
+        crate::predicates::st_knn_udf,
         crate::predicates::st_touches_udf,
         crate::predicates::st_within_udf,
         crate::referencing::st_line_interpolate_point_udf,

@@ -26,6 +26,7 @@ impl SelectOptimalMode for GeoOptimalModeSelector {
     fn select(&self, _build_stats: &GeoStatistics, probe_stats: &GeoStatistics) -> ExecutionMode {
         match self.predicate {
             SpatialPredicate::Distance(_) => ExecutionMode::PrepareNone,
+            SpatialPredicate::KNearestNeighbors(_) => ExecutionMode::PrepareNone,
             SpatialPredicate::Relation(_) => {
                 // We only support PrepareProbe and PrepareNone. Only the stats from the probe side is used to
                 // select the execution mode.
@@ -43,6 +44,7 @@ impl SelectOptimalMode for GeoOptimalModeSelector {
     fn select_without_probe_stats(&self, _build_stats: &GeoStatistics) -> Option<ExecutionMode> {
         match self.predicate {
             SpatialPredicate::Distance(_) => Some(ExecutionMode::PrepareNone),
+            SpatialPredicate::KNearestNeighbors(_) => Some(ExecutionMode::PrepareNone),
             _ => None,
         }
     }
@@ -202,6 +204,7 @@ fn create_evaluator(predicate: &SpatialPredicate) -> Box<dyn GeoPredicateEvaluat
             SpatialRelationType::Overlaps => Box::new(GeoOverlaps),
             SpatialRelationType::Equals => Box::new(GeoEquals),
         },
+        SpatialPredicate::KNearestNeighbors(_) => Box::new(GeoDistance), // Use distance for KNN
     }
 }
 

@@ -17,7 +17,9 @@ use wkb::reader::Wkb;
 
 use sedona_common::option::SpatialJoinOptions;
 
-use crate::spatial_predicate::{DistancePredicate, RelationPredicate, SpatialPredicate};
+use crate::spatial_predicate::{
+    DistancePredicate, KNNPredicate, RelationPredicate, SpatialPredicate,
+};
 
 /// Operand evaluator is for evaluating the operands of a spatial predicate. It can be a distance
 /// operand evaluator or a relation operand evaluator.
@@ -62,6 +64,9 @@ pub(crate) fn create_operand_evaluator(
         }
         SpatialPredicate::Relation(predicate) => {
             Arc::new(RelationOperandEvaluator::new(predicate.clone(), options))
+        }
+        SpatialPredicate::KNearestNeighbors(predicate) => {
+            Arc::new(KNNOperandEvaluator::new(predicate.clone()))
         }
     }
 }
@@ -332,5 +337,40 @@ impl OperandEvaluator for RelationOperandEvaluator {
 
     fn probe_side_expr(&self) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::clone(&self.inner.right))
+    }
+}
+
+/// KNN operand evaluator for evaluating the KNN predicate.
+#[derive(Debug)]
+struct KNNOperandEvaluator {
+    inner: KNNPredicate,
+}
+
+impl KNNOperandEvaluator {
+    fn new(inner: KNNPredicate) -> Self {
+        Self { inner }
+    }
+}
+
+impl OperandEvaluator for KNNOperandEvaluator {
+    fn build_side_expr(&self) -> Result<Arc<dyn PhysicalExpr>> {
+        // For KNN, the left side (queries) is the build side
+        Ok(Arc::clone(&self.inner.left))
+    }
+
+    fn probe_side_expr(&self) -> Result<Arc<dyn PhysicalExpr>> {
+        // For KNN, the right side (objects) is the probe side
+        Ok(Arc::clone(&self.inner.right))
+    }
+
+    /// Resolve the k value for KNN operation
+    fn resolve_distance(
+        &self,
+        _build_distance: &Option<ColumnarValue>,
+        _probe_distance: &Option<ColumnarValue>,
+        _row_idx: usize,
+    ) -> Result<Option<f64>> {
+        // NOTE: We do not support distance-based refinement for KNN predicates in the refiner phase.
+        Ok(None)
     }
 }

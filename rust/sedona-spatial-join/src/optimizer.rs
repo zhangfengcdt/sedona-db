@@ -2,20 +2,21 @@ use std::sync::Arc;
 
 use crate::exec::SpatialJoinExec;
 use crate::spatial_predicate::{
-    DistancePredicate, RelationPredicate, SpatialPredicate, SpatialRelationType,
+    DistancePredicate, KNNPredicate, RelationPredicate, SpatialPredicate, SpatialRelationType,
 };
 use datafusion::physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion::{
     config::ConfigOptions, execution::session_state::SessionStateBuilder,
     physical_optimizer::PhysicalOptimizerRule,
 };
+use datafusion_common::ScalarValue;
 use datafusion_common::{
     tree_node::{Transformed, TreeNode},
     JoinSide,
 };
 use datafusion_common::{HashMap, Result};
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::{BinaryExpr, Column};
+use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 use datafusion_physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
@@ -170,6 +171,10 @@ fn extract_spatial_predicate(
     if let Some(scalar_fn) = expr.as_any().downcast_ref::<ScalarFunctionExpr>() {
         if let Some(relation_predicate) = match_relation_predicate(scalar_fn, column_indices) {
             return Some((SpatialPredicate::Relation(relation_predicate), None));
+        }
+
+        if let Some(knn_predicate) = match_knn_predicate(scalar_fn, column_indices) {
+            return Some((SpatialPredicate::KNearestNeighbors(knn_predicate), None));
         }
     }
 
@@ -338,6 +343,67 @@ fn match_distance_predicate(
     }
 }
 
+/// Match the scalar function expression to a KNN predicate such as ST_KNN(geom1, geom2, k, use_spheroid).
+/// The geometry input arguments of the ST_KNN function should reference columns from different sides.
+/// The k and use_spheroid arguments must be literal values.
+fn match_knn_predicate(
+    scalar_fn: &ScalarFunctionExpr,
+    column_indices: &[ColumnIndex],
+) -> Option<KNNPredicate> {
+    // Check if this is an ST_KNN function
+    if scalar_fn.fun().name() != "st_knn" {
+        return None;
+    }
+
+    let args = scalar_fn.args();
+    if args.len() < 4 {
+        return None; // ST_KNN requires 4 arguments: (queries_geom, objects_geom, k, use_spheroid)
+    }
+
+    let queries_geom = &args[0];
+    let objects_geom = &args[1];
+    let k_expr = &args[2];
+    let use_spheroid_expr = &args[3];
+
+    // Extract literal values for k and use_spheroid
+    let k = extract_literal_u32(k_expr)?;
+    let use_spheroid = extract_literal_bool(use_spheroid_expr)?;
+
+    // Reject if use_spheroid is true since spheroid distance calculation is not supported
+    if use_spheroid {
+        return None;
+    }
+
+    // Collect column references for geometry arguments
+    let queries_refs = collect_column_references(queries_geom, column_indices);
+    let objects_refs = collect_column_references(objects_geom, column_indices);
+
+    let (queries_side, objects_side) =
+        resolve_column_reference_sides(&queries_refs, &objects_refs)?;
+
+    // Reproject geometry arguments to their respective sides
+    let queries_reprojected =
+        reproject_column_references_for_side(queries_geom, column_indices, queries_side);
+    let objects_reprojected =
+        reproject_column_references_for_side(objects_geom, column_indices, objects_side);
+
+    match (queries_side, objects_side) {
+        (JoinSide::Left, JoinSide::Right) => Some(KNNPredicate::new(
+            queries_reprojected,
+            objects_reprojected,
+            k,
+            use_spheroid,
+        )),
+        (JoinSide::Right, JoinSide::Left) => Some(KNNPredicate::new(
+            objects_reprojected,
+            queries_reprojected,
+            k,
+            use_spheroid,
+        )),
+        _ => None,
+    }
+}
+
 fn collect_column_references(
     expr: &Arc<dyn PhysicalExpr>,
     column_indices: &[ColumnIndex],
@@ -429,6 +495,29 @@ fn reproject_column_references_for_side(
         .collect();
 
     reproject_column_references(expr, &index_mapping)
+}
+
+/// Extract a literal u32 value from an expression.
+/// Returns None if the expression is not a literal integer or if it's out of u32 range.
+fn extract_literal_u32(expr: &Arc<dyn PhysicalExpr>) -> Option<u32> {
+    let literal = expr.as_any().downcast_ref::<Literal>()?;
+    match literal.value() {
+        ScalarValue::UInt32(Some(val)) => Some(*val),
+        ScalarValue::Int32(Some(val)) if *val >= 0 => Some(*val as u32),
+        ScalarValue::Int64(Some(val)) if *val >= 0 && *val <= u32::MAX as i64 => Some(*val as u32),
+        ScalarValue::UInt64(Some(val)) if *val <= u32::MAX as u64 => Some(*val as u32),
+        _ => None,
+    }
+}
+
+/// Extract a literal boolean value from an expression.
+/// Returns None if the expression is not a literal boolean.
+fn extract_literal_bool(expr: &Arc<dyn PhysicalExpr>) -> Option<bool> {
+    let literal = expr.as_any().downcast_ref::<Literal>()?;
+    match literal.value() {
+        ScalarValue::Boolean(Some(val)) => Some(*val),
+        _ => None,
+    }
 }
 
 /// Replace the join filter expression with a new expression. The replaced join filter expression
@@ -1454,5 +1543,572 @@ mod tests {
                 side: JoinSide::Right,
             }
         );
+    }
+
+    // Helper to create dummy ST_KNN UDF for testing
+    fn create_dummy_st_knn_udf() -> Arc<ScalarUDF> {
+        Arc::new(ScalarUDF::from(SimpleScalarUDF::new(
+            "st_knn",
+            vec![
+                WKB_GEOMETRY.into(),
+                WKB_GEOMETRY.into(),
+                DataType::Int32,
+                DataType::Boolean,
+            ],
+            DataType::Boolean,
+            datafusion_expr::Volatility::Immutable,
+            Arc::new(|_| Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))))),
+        )))
+    }
+
+    #[test]
+    fn test_match_knn_predicate_basic() {
+        let column_indices = create_test_column_indices();
+
+        // Create ST_KNN(left_geom, right_geom, 5, false)
+        let left_geom = Arc::new(Column::new("left_geom", 1)) as Arc<dyn PhysicalExpr>;
+        let right_geom = Arc::new(Column::new("right_geom", 2)) as Arc<dyn PhysicalExpr>;
+        let k_literal =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))) as Arc<dyn PhysicalExpr>;
+        let use_spheroid_literal =
+            Arc::new(Literal::new(ScalarValue::Boolean(Some(false)))) as Arc<dyn PhysicalExpr>;
+
+        let st_knn_udf = create_dummy_st_knn_udf();
+        let args = vec![left_geom, right_geom, k_literal, use_spheroid_literal];
+        let st_knn = create_spatial_function_expr(st_knn_udf, args);
+
+        let predicate = match_knn_predicate(&st_knn, &column_indices);
+        assert!(predicate.is_some());
+
+        let pred = predicate.unwrap();
+        // Verify left argument is reprojected to left side
+        let left_arg_col = pred.left.as_any().downcast_ref::<Column>().unwrap();
+        assert_eq!(left_arg_col.index(), 1);
+        assert_eq!(left_arg_col.name(), "left_geom");
+
+        // Verify right argument is reprojected to right side
+        let right_arg_col = pred.right.as_any().downcast_ref::<Column>().unwrap();
+        assert_eq!(right_arg_col.index(), 0);
+        assert_eq!(right_arg_col.name(), "right_geom");
+
+        // Verify k is literal value 5
+        assert_eq!(pred.k, 5);
+
+        // Verify use_spheroid is literal value false
+        assert!(!pred.use_spheroid);
+    }
+
+    #[test]
+    fn test_match_knn_predicate_inverted() {
+        let column_indices = create_test_column_indices();
+
+        // Create ST_KNN(right_geom, left_geom, 3, false) - this should be inverted to left, right order
+        let left_geom = Arc::new(Column::new("left_geom", 1)) as Arc<dyn PhysicalExpr>;
+        let right_geom = Arc::new(Column::new("right_geom", 2)) as Arc<dyn PhysicalExpr>;
+        let k_literal =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(3)))) as Arc<dyn PhysicalExpr>;
+        let use_spheroid_literal =
+            Arc::new(Literal::new(ScalarValue::Boolean(Some(false)))) as Arc<dyn PhysicalExpr>;
+
+        let st_knn_udf = create_dummy_st_knn_udf();
+        let args = vec![right_geom, left_geom, k_literal, use_spheroid_literal]; // Note: right, left order
+        let st_knn = create_spatial_function_expr(st_knn_udf, args);
+
+        let predicate = match_knn_predicate(&st_knn, &column_indices);
+        assert!(predicate.is_some());
+
+        let pred = predicate.unwrap();
+        // After inversion, left_arg should be the original left_geom
+        let left_arg_col = pred.left.as_any().downcast_ref::<Column>().unwrap();
+        assert_eq!(left_arg_col.index(), 1);
+        assert_eq!(left_arg_col.name(), "left_geom");
+
+        // After inversion, right_arg should be the original right_geom
+        let right_arg_col = pred.right.as_any().downcast_ref::<Column>().unwrap();
+        assert_eq!(right_arg_col.index(), 0);
+        assert_eq!(right_arg_col.name(), "right_geom");
+    }
+
+    #[test]
+    fn test_match_knn_predicate_same_side_fails() {
+        let column_indices = create_test_column_indices();
+
+        // Create ST_KNN(left_geom, left_id, 5, false) - both from same side, should fail
+        let left_geom = Arc::new(Column::new("left_geom", 1)) as Arc<dyn PhysicalExpr>;
+        let left_id = Arc::new(Column::new("left_id", 0)) as Arc<dyn PhysicalExpr>;
+        let k_literal =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))) as Arc<dyn PhysicalExpr>;
+        let use_spheroid_literal =
+            Arc::new(Literal::new(ScalarValue::Boolean(Some(false)))) as Arc<dyn PhysicalExpr>;
+
+        let st_knn_udf = create_dummy_st_knn_udf();
+        let args = vec![left_geom, left_id, k_literal, use_spheroid_literal];
+        let st_knn = create_spatial_function_expr(st_knn_udf, args);
+
+        let predicate = match_knn_predicate(&st_knn, &column_indices);
+        assert!(predicate.is_none()); // Should fail - both args from same side
+    }
+
+    #[test]
+    fn test_match_knn_predicate_spheroid_true_rejected() {
+        let column_indices = create_test_column_indices();
+
+        // Create ST_KNN(left_geom, right_geom, 5, true) - should be rejected due to use_spheroid=true
+        let left_geom = Arc::new(Column::new("left_geom", 1)) as Arc<dyn PhysicalExpr>;
+        let right_geom = Arc::new(Column::new("right_geom", 2)) as Arc<dyn PhysicalExpr>;
+        let k_literal =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))) as Arc<dyn PhysicalExpr>;
+        let use_spheroid_literal =
+            Arc::new(Literal::new(ScalarValue::Boolean(Some(true)))) as Arc<dyn PhysicalExpr>;
+
+        let st_knn_udf = create_dummy_st_knn_udf();
+        let args = vec![left_geom, right_geom, k_literal, use_spheroid_literal];
+        let st_knn = create_spatial_function_expr(st_knn_udf, args);
+
+        let predicate = match_knn_predicate(&st_knn, &column_indices);
+        assert!(predicate.is_none()); // Should fail - use_spheroid=true is not supported
+    }
+
+    #[test]
+    fn test_extract_spatial_predicate_knn() {
+        let column_indices = create_test_column_indices();
+
+        // Test simple ST_KNN
+        let left_geom = Arc::new(Column::new("left_geom", 1)) as Arc<dyn PhysicalExpr>;
+        let right_geom = Arc::new(Column::new("right_geom", 2)) as Arc<dyn PhysicalExpr>;
+        let k_literal =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))) as Arc<dyn PhysicalExpr>;
+        let use_spheroid_literal =
+            Arc::new(Literal::new(ScalarValue::Boolean(Some(false)))) as Arc<dyn PhysicalExpr>;
+
+        let st_knn_udf = create_dummy_st_knn_udf();
+        let args = vec![left_geom, right_geom, k_literal, use_spheroid_literal];
+        let st_knn = create_spatial_function_expr(st_knn_udf, args);
+        let st_knn_expr = st_knn as Arc<dyn PhysicalExpr>;
+
+        let result = extract_spatial_predicate(&st_knn_expr, &column_indices);
+        assert!(result.is_some());
+
+        let (spatial_pred, remainder) = result.unwrap();
+        let SpatialPredicate::KNearestNeighbors(knn_pred) = spatial_pred else {
+            panic!("Expected SpatialPredicate::KNearestNeighbors");
+        };
+        assert_eq!(
+            knn_pred
+                .left
+                .as_any()
+                .downcast_ref::<Column>()
+                .unwrap()
+                .index(),
+            1
+        );
+        assert_eq!(
+            knn_pred
+                .right
+                .as_any()
+                .downcast_ref::<Column>()
+                .unwrap()
+                .index(),
+            0
+        );
+        assert!(remainder.is_none()); // No remainder for simple predicate
+    }
+
+    #[test]
+    fn test_extract_spatial_predicate_knn_with_and() {
+        let column_indices = create_test_column_indices();
+
+        // Create ST_KNN(left_geom, right_geom, 5, false) AND left_id = 1
+        let left_geom = Arc::new(Column::new("left_geom", 1)) as Arc<dyn PhysicalExpr>;
+        let right_geom = Arc::new(Column::new("right_geom", 2)) as Arc<dyn PhysicalExpr>;
+        let left_id = Arc::new(Column::new("left_id", 0)) as Arc<dyn PhysicalExpr>;
+        let k_literal =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))) as Arc<dyn PhysicalExpr>;
+        let use_spheroid_literal =
+            Arc::new(Literal::new(ScalarValue::Boolean(Some(false)))) as Arc<dyn PhysicalExpr>;
+        let literal_one =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
+
+        let st_knn_udf = create_dummy_st_knn_udf();
+        let st_knn_args = vec![left_geom, right_geom, k_literal, use_spheroid_literal];
+        let st_knn = create_spatial_function_expr(st_knn_udf, st_knn_args);
+        let st_knn_expr = st_knn as Arc<dyn PhysicalExpr>;
+
+        let id_filter =
+            Arc::new(BinaryExpr::new(left_id, Operator::Eq, literal_one)) as Arc<dyn PhysicalExpr>;
+
+        let and_expr = Arc::new(BinaryExpr::new(st_knn_expr, Operator::And, id_filter))
+            as Arc<dyn PhysicalExpr>;
+
+        let result = extract_spatial_predicate(&and_expr, &column_indices);
+        assert!(result.is_some());
+
+        let (spatial_pred, remainder) = result.unwrap();
+        let SpatialPredicate::KNearestNeighbors(knn_pred) = spatial_pred else {
+            panic!("Expected SpatialPredicate::KNearestNeighbors");
+        };
+        assert_eq!(
+            knn_pred
+                .left
+                .as_any()
+                .downcast_ref::<Column>()
+                .unwrap()
+                .index(),
+            1
+        );
+        assert_eq!(
+            knn_pred
+                .right
+                .as_any()
+                .downcast_ref::<Column>()
+                .unwrap()
+                .index(),
+            0
+        );
+        assert!(remainder.is_some()); // Should have remainder (the id filter)
+        let remainder = remainder.unwrap();
+
+        // Remainder should be: left_id = 1
+        let remainder_binary = remainder.as_any().downcast_ref::<BinaryExpr>().unwrap();
+        assert_eq!(remainder_binary.op(), &Operator::Eq);
+
+        // Left side should be left_id column
+        let left_side = remainder_binary.left();
+        let left_col = left_side.as_any().downcast_ref::<Column>().unwrap();
+        assert_eq!(left_col.name(), "left_id");
+        assert_eq!(left_col.index(), 0);
+
+        // Right side should be literal 1
+        let right_side = remainder_binary.right();
+        let literal = right_side.as_any().downcast_ref::<Literal>().unwrap();
+        match literal.value() {
+            ScalarValue::Int32(Some(val)) => assert_eq!(val, &1),
+            _ => panic!("Expected Int32(1) literal"),
+        }
+    }
+
+    #[test]
+    fn test_transform_join_filter_with_knn_predicate() {
+        let schema = create_test_schema();
+        let column_indices = create_test_column_indices();
+
+        // Create ST_KNN expression
+        let left_geom = Arc::new(Column::new("left_geom", 1)) as Arc<dyn PhysicalExpr>;
+        let right_geom = Arc::new(Column::new("right_geom", 2)) as Arc<dyn PhysicalExpr>;
+        let k_literal =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(3)))) as Arc<dyn PhysicalExpr>;
+        let use_spheroid_literal =
+            Arc::new(Literal::new(ScalarValue::Boolean(Some(false)))) as Arc<dyn PhysicalExpr>;
+
+        let st_knn_udf = create_dummy_st_knn_udf();
+        let args = vec![left_geom, right_geom, k_literal, use_spheroid_literal];
+        let st_knn = create_spatial_function_expr(st_knn_udf, args);
+        let st_knn_expr = st_knn as Arc<dyn PhysicalExpr>;
+
+        let join_filter = JoinFilter::new(st_knn_expr, column_indices, schema);
+
+        let result = transform_join_filter(&join_filter);
+        assert!(result.is_some());
+
+        let (spatial_pred, remainder) = result.unwrap();
+        assert!(matches!(
+            spatial_pred,
+            SpatialPredicate::KNearestNeighbors(_)
+        ));
+        assert!(remainder.is_none()); // No remainder for simple spatial predicate
+    }
+
+    #[test]
+    fn test_match_knn_predicate_insufficient_args() {
+        let column_indices = create_test_column_indices();
+
+        // Create ST_KNN with only 3 arguments (insufficient - needs 4)
+        let left_geom = Arc::new(Column::new("left_geom", 1)) as Arc<dyn PhysicalExpr>;
+        let right_geom = Arc::new(Column::new("right_geom", 2)) as Arc<dyn PhysicalExpr>;
+        let k_literal =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))) as Arc<dyn PhysicalExpr>;
+
+        let st_knn_udf = create_dummy_st_knn_udf();
+        let args = vec![left_geom, right_geom, k_literal]; // Missing use_spheroid arg
+        let st_knn = create_spatial_function_expr(st_knn_udf, args);
+
+        let predicate = match_knn_predicate(&st_knn, &column_indices);
+        assert!(predicate.is_none()); // Should fail due to insufficient arguments
+    }
+
+    #[test]
+    fn test_match_knn_predicate_wrong_function_name() {
+        let column_indices = create_test_column_indices();
+
+        // Create a function that's not ST_KNN
+        let left_geom = Arc::new(Column::new("left_geom", 1)) as Arc<dyn PhysicalExpr>;
+        let right_geom = Arc::new(Column::new("right_geom", 2)) as Arc<dyn PhysicalExpr>;
+        let k_literal =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))) as Arc<dyn PhysicalExpr>;
+        let use_spheroid_literal =
+            Arc::new(Literal::new(ScalarValue::Boolean(Some(false)))) as Arc<dyn PhysicalExpr>;
+
+        let st_intersects_udf = create_dummy_st_intersects_udf(); // Wrong function
+        let args = vec![left_geom, right_geom, k_literal, use_spheroid_literal];
+        let st_intersects = create_spatial_function_expr(st_intersects_udf, args);
+
+        let predicate = match_knn_predicate(&st_intersects, &column_indices);
+        assert!(predicate.is_none()); // Should fail due to wrong function name
+    }
+
+    #[test]
+    fn test_match_knn_predicate_non_column_arguments() {
+        let column_indices = create_test_column_indices();
+
+        // Create ST_KNN with literal geometry arguments (not column references)
+        let left_literal = Arc::new(Literal::new(ScalarValue::Binary(Some(
+            b"POINT(0 0)".to_vec(),
+        )))) as Arc<dyn PhysicalExpr>;
+        let right_literal = Arc::new(Literal::new(ScalarValue::Binary(Some(
+            b"POINT(1 1)".to_vec(),
+        )))) as Arc<dyn PhysicalExpr>;
+        let k_literal =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))) as Arc<dyn PhysicalExpr>;
+        let use_spheroid_literal =
+            Arc::new(Literal::new(ScalarValue::Boolean(Some(false)))) as Arc<dyn PhysicalExpr>;
+
+        let st_knn_udf = create_dummy_st_knn_udf();
+        let args = vec![left_literal, right_literal, k_literal, use_spheroid_literal];
+        let st_knn = create_spatial_function_expr(st_knn_udf, args);
+
+        let predicate = match_knn_predicate(&st_knn, &column_indices);
+        assert!(predicate.is_none()); // Should fail - geometry args are not column references
+    }
+
+    #[test]
+    fn test_match_knn_predicate_complex_k_expressions() {
+        let column_indices = create_test_column_indices();
+
+        // Create ST_KNN with complex k expression (column + literal)
+        let left_geom = Arc::new(Column::new("left_geom", 1)) as Arc<dyn PhysicalExpr>;
+        let right_geom = Arc::new(Column::new("right_geom", 2)) as Arc<dyn PhysicalExpr>;
+        let left_id = Arc::new(Column::new("left_id", 0)) as Arc<dyn PhysicalExpr>;
+        let literal_two =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(2)))) as Arc<dyn PhysicalExpr>;
+        let k_expr = Arc::new(BinaryExpr::new(left_id, Operator::Plus, literal_two))
+            as Arc<dyn PhysicalExpr>;
+        let use_spheroid_literal =
+            Arc::new(Literal::new(ScalarValue::Boolean(Some(false)))) as Arc<dyn PhysicalExpr>;
+
+        let st_knn_udf = create_dummy_st_knn_udf();
+        let args = vec![left_geom, right_geom, k_expr, use_spheroid_literal];
+        let st_knn = create_spatial_function_expr(st_knn_udf, args);
+
+        let predicate = match_knn_predicate(&st_knn, &column_indices);
+        assert!(predicate.is_none()); // Should fail - complex k expressions are no longer supported
+    }
+
+    #[test]
+    fn test_match_knn_predicate_complex_use_spheroid_expressions() {
+        let column_indices = create_test_column_indices();
+
+        // Create ST_KNN with complex use_spheroid expression (column comparison)
+        let left_geom = Arc::new(Column::new("left_geom", 1)) as Arc<dyn PhysicalExpr>;
+        let right_geom = Arc::new(Column::new("right_geom", 2)) as Arc<dyn PhysicalExpr>;
+        let k_literal =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))) as Arc<dyn PhysicalExpr>;
+        let left_id = Arc::new(Column::new("left_id", 0)) as Arc<dyn PhysicalExpr>;
+        let literal_one =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let use_spheroid_expr =
+            Arc::new(BinaryExpr::new(left_id, Operator::Gt, literal_one)) as Arc<dyn PhysicalExpr>;
+
+        let st_knn_udf = create_dummy_st_knn_udf();
+        let args = vec![left_geom, right_geom, k_literal, use_spheroid_expr];
+        let st_knn = create_spatial_function_expr(st_knn_udf, args);
+
+        let predicate = match_knn_predicate(&st_knn, &column_indices);
+        assert!(predicate.is_none()); // Should fail - complex use_spheroid expressions are no longer supported
+    }
+
+    #[test]
+    fn test_match_knn_predicate_both_sides_in_k_expression() {
+        let column_indices = create_test_column_indices();
+
+        // Create ST_KNN with k expression that references both sides
+        let left_geom = Arc::new(Column::new("left_geom", 1)) as Arc<dyn PhysicalExpr>;
+        let right_geom = Arc::new(Column::new("right_geom", 2)) as Arc<dyn PhysicalExpr>;
+        let left_id = Arc::new(Column::new("left_id", 0)) as Arc<dyn PhysicalExpr>;
+        let right_distance = Arc::new(Column::new("right_distance", 3)) as Arc<dyn PhysicalExpr>;
+        // k expression that references both left and right sides
+        let k_expr = Arc::new(BinaryExpr::new(left_id, Operator::Plus, right_distance))
+            as Arc<dyn PhysicalExpr>;
+        let use_spheroid_literal =
+            Arc::new(Literal::new(ScalarValue::Boolean(Some(false)))) as Arc<dyn PhysicalExpr>;
+
+        let st_knn_udf = create_dummy_st_knn_udf();
+        let args = vec![left_geom, right_geom, k_expr, use_spheroid_literal];
+        let st_knn = create_spatial_function_expr(st_knn_udf, args);
+
+        let predicate = match_knn_predicate(&st_knn, &column_indices);
+        // Should fail because k expression references both sides, which is not allowed
+        assert!(predicate.is_none());
+    }
+
+    #[test]
+    fn test_extract_spatial_predicate_knn_with_multiple_clauses() {
+        let column_indices = create_test_column_indices();
+
+        // Create complex expression: ST_KNN(...) AND left_id > 0 AND right_distance < 100.0
+        let left_geom = Arc::new(Column::new("left_geom", 1)) as Arc<dyn PhysicalExpr>;
+        let right_geom = Arc::new(Column::new("right_geom", 2)) as Arc<dyn PhysicalExpr>;
+        let left_id = Arc::new(Column::new("left_id", 0)) as Arc<dyn PhysicalExpr>;
+        let right_distance = Arc::new(Column::new("right_distance", 3)) as Arc<dyn PhysicalExpr>;
+        let k_literal =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(3)))) as Arc<dyn PhysicalExpr>;
+        let use_spheroid_literal =
+            Arc::new(Literal::new(ScalarValue::Boolean(Some(false)))) as Arc<dyn PhysicalExpr>;
+        let literal_zero =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(0)))) as Arc<dyn PhysicalExpr>;
+        let literal_hundred =
+            Arc::new(Literal::new(ScalarValue::Float64(Some(100.0)))) as Arc<dyn PhysicalExpr>;
+
+        let st_knn_udf = create_dummy_st_knn_udf();
+        let st_knn_args = vec![left_geom, right_geom, k_literal, use_spheroid_literal];
+        let st_knn = create_spatial_function_expr(st_knn_udf, st_knn_args);
+        let st_knn_expr = st_knn as Arc<dyn PhysicalExpr>;
+
+        let id_filter =
+            Arc::new(BinaryExpr::new(left_id, Operator::Gt, literal_zero)) as Arc<dyn PhysicalExpr>;
+        let distance_filter = Arc::new(BinaryExpr::new(
+            right_distance,
+            Operator::Lt,
+            literal_hundred,
+        )) as Arc<dyn PhysicalExpr>;
+
+        // Build: ST_KNN(...) AND left_id > 0 AND right_distance < 100.0
+        let and1 = Arc::new(BinaryExpr::new(st_knn_expr, Operator::And, id_filter))
+            as Arc<dyn PhysicalExpr>;
+        let and2 = Arc::new(BinaryExpr::new(and1, Operator::And, distance_filter))
+            as Arc<dyn PhysicalExpr>;
+
+        let result = extract_spatial_predicate(&and2, &column_indices);
+        assert!(result.is_some());
+
+        let (spatial_pred, remainder) = result.unwrap();
+        let SpatialPredicate::KNearestNeighbors(knn_pred) = spatial_pred else {
+            panic!("Expected SpatialPredicate::KNearestNeighbors");
+        };
+
+        // Verify KNN predicate parameters
+        assert_eq!(knn_pred.k, 3); // k is a literal value
+        assert!(!knn_pred.use_spheroid); // use_spheroid is a literal value
+
+        // Should have remainder with both filter conditions
+        assert!(remainder.is_some());
+        let remainder_expr = remainder.unwrap();
+
+        // Remainder should be: left_id > 0 AND right_distance < 100.0
+        let remainder_and = remainder_expr
+            .as_any()
+            .downcast_ref::<BinaryExpr>()
+            .unwrap();
+        assert_eq!(remainder_and.op(), &Operator::And);
+    }
+
+    #[test]
+    fn test_match_knn_predicate_nested_expressions() {
+        let column_indices = create_test_column_indices();
+
+        // Create ST_KNN with nested expressions for geometry arguments
+        let left_geom_col = Arc::new(Column::new("left_geom", 1)) as Arc<dyn PhysicalExpr>;
+        let right_geom_col = Arc::new(Column::new("right_geom", 2)) as Arc<dyn PhysicalExpr>;
+
+        // Wrap in IsNotNull expressions (common pattern)
+        let left_geom = Arc::new(IsNotNullExpr::new(left_geom_col)) as Arc<dyn PhysicalExpr>;
+        let right_geom = Arc::new(IsNotNullExpr::new(right_geom_col)) as Arc<dyn PhysicalExpr>;
+
+        let k_literal =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))) as Arc<dyn PhysicalExpr>;
+        let use_spheroid_literal =
+            Arc::new(Literal::new(ScalarValue::Boolean(Some(false)))) as Arc<dyn PhysicalExpr>;
+
+        let st_knn_udf = create_dummy_st_knn_udf();
+        let args = vec![left_geom, right_geom, k_literal, use_spheroid_literal];
+        let st_knn = create_spatial_function_expr(st_knn_udf, args);
+
+        let predicate = match_knn_predicate(&st_knn, &column_indices);
+        assert!(predicate.is_some()); // Should succeed - nested expressions are allowed
+
+        let pred = predicate.unwrap();
+        // The wrapped columns should still be detected correctly
+        let left_is_not_null = pred.left.as_any().downcast_ref::<IsNotNullExpr>().unwrap();
+        let left_col = left_is_not_null
+            .arg()
+            .as_any()
+            .downcast_ref::<Column>()
+            .unwrap();
+        assert_eq!(left_col.name(), "left_geom");
+        assert_eq!(left_col.index(), 1); // reprojected index for left side
+
+        let right_is_not_null = pred.right.as_any().downcast_ref::<IsNotNullExpr>().unwrap();
+        let right_col = right_is_not_null
+            .arg()
+            .as_any()
+            .downcast_ref::<Column>()
+            .unwrap();
+        assert_eq!(right_col.name(), "right_geom");
+        assert_eq!(right_col.index(), 0); // reprojected index for right side
+    }
+
+    #[test]
+    fn test_extract_spatial_predicate_knn_no_remainder() {
+        let column_indices = create_test_column_indices();
+
+        // Test ST_KNN as standalone predicate (no AND/OR combinations)
+        let left_geom = Arc::new(Column::new("left_geom", 1)) as Arc<dyn PhysicalExpr>;
+        let right_geom = Arc::new(Column::new("right_geom", 2)) as Arc<dyn PhysicalExpr>;
+        let k_literal =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(7)))) as Arc<dyn PhysicalExpr>;
+        let use_spheroid_literal =
+            Arc::new(Literal::new(ScalarValue::Boolean(Some(false)))) as Arc<dyn PhysicalExpr>;
+
+        let st_knn_udf = create_dummy_st_knn_udf();
+        let args = vec![left_geom, right_geom, k_literal, use_spheroid_literal];
+        let st_knn = create_spatial_function_expr(st_knn_udf, args);
+        let st_knn_expr = st_knn as Arc<dyn PhysicalExpr>;
+
+        let result = extract_spatial_predicate(&st_knn_expr, &column_indices);
+        assert!(result.is_some());
+
+        let (spatial_pred, remainder) = result.unwrap();
+        let SpatialPredicate::KNearestNeighbors(knn_pred) = spatial_pred else {
+            panic!("Expected SpatialPredicate::KNearestNeighbors");
+        };
+
+        // Verify predicate details
+        assert_eq!(knn_pred.k, 7); // literal k
+        assert!(!knn_pred.use_spheroid); // literal use_spheroid
+
+        // Should have no remainder for standalone KNN predicate
+        assert!(remainder.is_none());
+    }
+
+    #[test]
+    fn test_transform_join_filter_with_complex_knn_predicate() {
+        let schema = create_test_schema();
+        let column_indices = create_test_column_indices();
+
+        // Create complex KNN expression with column-based k value
+        let left_geom = Arc::new(Column::new("left_geom", 1)) as Arc<dyn PhysicalExpr>;
+        let right_geom = Arc::new(Column::new("right_geom", 2)) as Arc<dyn PhysicalExpr>;
+        let left_id = Arc::new(Column::new("left_id", 0)) as Arc<dyn PhysicalExpr>; // Use left_id as k
+        let use_spheroid_literal =
+            Arc::new(Literal::new(ScalarValue::Boolean(Some(false)))) as Arc<dyn PhysicalExpr>;
+
+        let st_knn_udf = create_dummy_st_knn_udf();
+        let args = vec![left_geom, right_geom, left_id, use_spheroid_literal];
+        let st_knn = create_spatial_function_expr(st_knn_udf, args);
+        let st_knn_expr = st_knn as Arc<dyn PhysicalExpr>;
+
+        let join_filter = JoinFilter::new(st_knn_expr, column_indices, schema);
+
+        let result = transform_join_filter(&join_filter);
+        assert!(result.is_none()); // Should fail - k must be a literal value
     }
 }

@@ -47,6 +47,9 @@ config_namespace! {
 
         /// The execution mode determining how prepared geometries are used
         pub execution_mode: ExecutionMode, default = ExecutionMode::Speculative(DEFAULT_SPECULATIVE_THRESHOLD)
+
+        /// Include tie-breakers in KNN join results when there are tied distances
+        pub knn_include_tie_breakers: bool, default = false
     }
 }
 

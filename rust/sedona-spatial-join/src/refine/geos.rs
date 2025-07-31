@@ -76,6 +76,7 @@ impl SelectOptimalMode for GeosOptimalModeSelector {
     fn select_without_probe_stats(&self, build_stats: &GeoStatistics) -> Option<ExecutionMode> {
         match &self.predicate {
             SpatialPredicate::Distance(_) => Some(ExecutionMode::PrepareNone),
+            SpatialPredicate::KNearestNeighbors(_) => Some(ExecutionMode::PrepareNone),
             SpatialPredicate::Relation(predicate) => match predicate.relation_type {
                 SpatialRelationType::Intersects => {
                     // Need probe side statistics to determine optimal execution mode.
@@ -367,6 +368,7 @@ fn create_evaluator(predicate: &SpatialPredicate) -> Box<dyn GeosPredicateEvalua
             SpatialRelationType::Overlaps => Box::new(GeosOverlaps),
             SpatialRelationType::Equals => Box::new(GeosEquals),
         },
+        SpatialPredicate::KNearestNeighbors(_) => Box::new(GeosDistance), // Use distance for KNN
     }
 }
 

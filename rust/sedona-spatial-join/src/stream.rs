@@ -62,6 +62,8 @@ pub(crate) struct SpatialJoinStream {
     spatial_index: Option<Arc<SpatialIndex>>,
     /// The `on` spatial predicate evaluator
     evaluator: Arc<dyn OperandEvaluator>,
+    /// The spatial predicate being evaluated
+    spatial_predicate: SpatialPredicate,
 }
 
 impl SpatialJoinStream {
@@ -96,6 +98,7 @@ impl SpatialJoinStream {
             once_async_spatial_index,
             spatial_index: None,
             evaluator,
+            spatial_predicate: on.clone(),
         }
     }
 }
@@ -384,14 +387,16 @@ impl SpatialJoinStream {
             spatial_index.merge_probe_stats(stats);
         }
 
-        SpatialJoinBatchIterator::new(
-            Arc::clone(spatial_index),
-            probe_batch,
+        SpatialJoinBatchIterator::new(SpatialJoinBatchIteratorParams {
+            spatial_index: spatial_index.clone(),
+            probe_batch: probe_batch.clone(),
             geom_array,
-            self.join_metrics.clone(),
-            self.target_output_batch_size,
-            self.probe_side_ordered,
-        )
+            join_metrics: self.join_metrics.clone(),
+            max_batch_size: self.target_output_batch_size,
+            probe_side_ordered: self.probe_side_ordered,
+            spatial_predicate: self.spatial_predicate.clone(),
+            options: self.options.clone(),
+        })
     }
 }
 
@@ -445,29 +450,40 @@ pub(crate) struct SpatialJoinBatchIterator {
     probe_indices: Vec<u32>,
     /// Whether iteration is complete
     is_complete: bool,
+    /// The spatial predicate being evaluated
+    spatial_predicate: SpatialPredicate,
+    /// The spatial join options
+    options: SpatialJoinOptions,
+}
+
+/// Parameters for creating a SpatialJoinBatchIterator
+pub(crate) struct SpatialJoinBatchIteratorParams {
+    pub spatial_index: Arc<SpatialIndex>,
+    pub probe_batch: RecordBatch,
+    pub geom_array: EvaluatedGeometryArray,
+    pub join_metrics: SpatialJoinProbeMetrics,
+    pub max_batch_size: usize,
+    pub probe_side_ordered: bool,
+    pub spatial_predicate: SpatialPredicate,
+    pub options: SpatialJoinOptions,
 }
 
 impl SpatialJoinBatchIterator {
-    pub(crate) fn new(
-        spatial_index: Arc<SpatialIndex>,
-        probe_batch: RecordBatch,
-        geom_array: EvaluatedGeometryArray,
-        join_metrics: SpatialJoinProbeMetrics,
-        max_batch_size: usize,
-        probe_side_ordered: bool,
-    ) -> Result<Self> {
+    pub(crate) fn new(params: SpatialJoinBatchIteratorParams) -> Result<Self> {
         Ok(Self {
-            spatial_index,
-            probe_batch,
-            geom_array,
+            spatial_index: params.spatial_index,
+            probe_batch: params.probe_batch,
+            geom_array: params.geom_array,
             current_probe_idx: 0,
             current_rect_idx: 0,
-            join_metrics,
-            max_batch_size,
-            probe_side_ordered,
+            join_metrics: params.join_metrics,
+            max_batch_size: params.max_batch_size,
+            probe_side_ordered: params.probe_side_ordered,
             build_batch_positions: Vec::new(),
             probe_indices: Vec::new(),
             is_complete: false,
+            spatial_predicate: params.spatial_predicate,
+            options: params.options,
         })
     }
 
@@ -508,12 +524,31 @@ impl SpatialJoinBatchIterator {
                 let rect = &rects[self.current_rect_idx].1;
                 self.current_rect_idx += 1;
 
-                let join_result_metrics = self.spatial_index.query(
-                    wkb,
-                    rect,
-                    distance,
-                    &mut self.build_batch_positions,
-                )?;
+                let join_result_metrics = match &self.spatial_predicate {
+                    SpatialPredicate::KNearestNeighbors(knn_predicate) => {
+                        // Extract k and use_spheroid from the knn_predicate
+                        let k = knn_predicate.k;
+                        let use_spheroid = knn_predicate.use_spheroid;
+                        let include_tie_breakers = self.options.knn_include_tie_breakers;
+
+                        self.spatial_index.query_knn(
+                            wkb,
+                            k,
+                            use_spheroid,
+                            include_tie_breakers,
+                            &mut self.build_batch_positions,
+                        )?
+                    }
+                    _ => {
+                        // Regular spatial join query
+                        self.spatial_index.query(
+                            wkb,
+                            rect,
+                            distance,
+                            &mut self.build_batch_positions,
+                        )?
+                    }
+                };
 
                 self.probe_indices.extend(std::iter::repeat_n(
                     self.current_probe_idx as u32,

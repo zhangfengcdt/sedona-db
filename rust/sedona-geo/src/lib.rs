@@ -1,3 +1,4 @@
+pub mod centroid;
 pub mod register;
 mod st_area;
 mod st_intersection_aggr;
