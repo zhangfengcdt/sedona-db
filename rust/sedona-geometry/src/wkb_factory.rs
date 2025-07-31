@@ -212,6 +212,98 @@ where
     Ok(())
 }
 
+/// Create WKB representing a MULTIPOINT
+///
+/// A convenience wrapper for [write_wkb_multipoint] that creates a Vec,
+/// which is useful for creating DataFusion scalar values.
+pub fn wkb_multipoint<I>(points: I) -> Result<Vec<u8>, SedonaGeometryError>
+where
+    I: ExactSizeIterator<Item = (f64, f64)>,
+{
+    // Base size + points count
+    let capacity = 5 + 4 + points.len() * 16;
+    let mut out_wkb = Vec::with_capacity(capacity);
+    write_wkb_multipoint(&mut out_wkb, points)?;
+    Ok(out_wkb)
+}
+
+/// Write WKB representing a MULTIPOINT into a buffer
+///
+/// A convenience wrapper for [write_wkb_multipoint] that creates a Vec,
+/// which is useful for creating DataFusion scalar values.
+pub fn write_wkb_multipoint<I>(buf: &mut impl Write, points: I) -> Result<(), SedonaGeometryError>
+where
+    I: ExactSizeIterator<Item = (f64, f64)>,
+{
+    let num_points: u32 = points.len().try_into()?;
+
+    // Write header: byte order (little endian) and geometry type (4 for MultiPoint)
+    buf.write_all(&[0x01, 0x04, 0x00, 0x00, 0x00])?;
+
+    // Write number of points
+    buf.write_all(&num_points.to_le_bytes())?;
+
+    // For each point, write a complete point WKB
+    for point in points {
+        // Each point needs its own byte order and type
+        buf.write_all(&[0x01, 0x01, 0x00, 0x00, 0x00])?;
+
+        buf.write_all(&point.0.to_le_bytes())?;
+        buf.write_all(&point.1.to_le_bytes())?;
+    }
+
+    Ok(())
+}
+
+/// Write WKB header for GEOMETRYCOLLECTION
+pub fn write_wkb_geometrycollection_header(
+    buf: &mut impl Write,
+    count: usize,
+) -> Result<(), SedonaGeometryError> {
+    buf.write_all(&[0x01, 0x07, 0x00, 0x00, 0x00])?;
+
+    buf.write_all(&count_to_u32(count)?.to_le_bytes())?;
+    Ok(())
+}
+
+/// Write WKB header for MULTIPOLYGON
+pub fn write_wkb_multipolygon_header(
+    buf: &mut impl Write,
+    count: usize,
+) -> Result<(), SedonaGeometryError> {
+    buf.write_all(&[0x01, 0x06, 0x00, 0x00, 0x00])?;
+    buf.write_all(&count_to_u32(count)?.to_le_bytes())?;
+    Ok(())
+}
+
+/// Write WKB header for MULTIPOINT
+pub fn write_wkb_multipoint_header(
+    buf: &mut impl Write,
+    count: usize,
+) -> Result<(), SedonaGeometryError> {
+    buf.write_all(&[0x01, 0x04, 0x00, 0x00, 0x00])?;
+    buf.write_all(&count_to_u32(count)?.to_le_bytes())?;
+    Ok(())
+}
+
+/// Write WKB header for MULTILINESTRING
+pub fn write_wkb_multilinestring_header(
+    buf: &mut impl Write,
+    count: usize,
+) -> Result<(), SedonaGeometryError> {
+    buf.write_all(&[0x01, 0x05, 0x00, 0x00, 0x00])?;
+    buf.write_all(&count_to_u32(count)?.to_le_bytes())?;
+    Ok(())
+}
+
+fn count_to_u32(count: usize) -> Result<u32, SedonaGeometryError> {
+    count.try_into().map_err(|_| {
+        SedonaGeometryError::Invalid(
+            "Collection contains too many elements for WKB format".to_string(),
+        )
+    })
+}
+
 #[cfg(test)]
 mod test {
 
@@ -298,5 +390,113 @@ mod test {
         ];
 
         assert_eq!(wkb_multipolygon(polygons.into_iter()).unwrap(), wkb);
+    }
+
+    #[test]
+    fn test_wkb_multipoint() {
+        let wkt: Wkt = Wkt::from_str("MULTIPOINT EMPTY").unwrap();
+        let mut wkb = vec![];
+        write_geometry(&mut wkb, &wkt, wkb::Endianness::LittleEndian).unwrap();
+        assert_eq!(wkb_multipoint([].into_iter()).unwrap(), wkb);
+
+        let wkt: Wkt = Wkt::from_str("MULTIPOINT ((0 0), (1 1))").unwrap();
+        let mut wkb = vec![];
+        write_geometry(&mut wkb, &wkt, wkb::Endianness::LittleEndian).unwrap();
+
+        let points = vec![(0.0, 0.0), (1.0, 1.0)];
+        assert_eq!(wkb_multipoint(points.into_iter()).unwrap(), wkb);
+    }
+
+    #[test]
+    fn test_wkb_multilinestring_header() {
+        // Test empty header
+        let mut wkb = Vec::new();
+        write_wkb_multilinestring_header(&mut wkb, 0).unwrap();
+
+        // Expected bytes for empty multilinestring:
+        // - 0x01 for little endian byte order
+        // - 0x05, 0x00, 0x00, 0x00 for geometry type 5 (MultiLineString)
+        // - 0x00, 0x00, 0x00, 0x00 for count of 0 linestrings
+        let expected = vec![0x01, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        assert_eq!(wkb, expected);
+
+        // Test non-empty header
+        let mut wkb = Vec::new();
+        write_wkb_multilinestring_header(&mut wkb, 3).unwrap();
+
+        // Expected bytes for multilinestring with 3 linestrings:
+        // - 0x01 for little endian byte order
+        // - 0x05, 0x00, 0x00, 0x00 for geometry type 5 (MultiLineString)
+        // - 0x03, 0x00, 0x00, 0x00 for count of 3 linestrings
+        let expected = vec![0x01, 0x05, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00];
+        assert_eq!(wkb, expected);
+    }
+
+    #[test]
+    fn test_wkb_multipoint_header() {
+        // Test empty header
+        let mut wkb = Vec::new();
+        write_wkb_multipoint_header(&mut wkb, 0).unwrap();
+
+        // Expected bytes for empty multipoint:
+        // - 0x01 for little endian byte order
+        // - 0x04, 0x00, 0x00, 0x00 for geometry type 4 (MultiPoint)
+        // - 0x00, 0x00, 0x00, 0x00 for count of 0 points
+        let expected = vec![0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        assert_eq!(wkb, expected);
+
+        // Test non-empty header
+        let mut wkb = Vec::new();
+        write_wkb_multipoint_header(&mut wkb, 5).unwrap();
+
+        // Expected bytes for multipoint with 5 points:
+        // - 0x01 for little endian byte order
+        // - 0x04, 0x00, 0x00, 0x00 for geometry type 4 (MultiPoint)
+        // - 0x05, 0x00, 0x00, 0x00 for count of 5 points
+        let expected = vec![0x01, 0x04, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00];
+        assert_eq!(wkb, expected);
+    }
+
+    #[test]
+    fn test_wkb_multipolygon_header() {
+        // Test empty header
+        let mut wkb = Vec::new();
+        write_wkb_multipolygon_header(&mut wkb, 0).unwrap();
+
+        // Expected bytes for empty multipolygon:
+        // - 0x01 for little endian byte order
+        // - 0x06, 0x00, 0x00, 0x00 for geometry type 6 (MultiPolygon)
+        // - 0x00, 0x00, 0x00, 0x00 for count of 0 polygons
+        let expected = vec![0x01, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        assert_eq!(wkb, expected);
+
+        // Test non-empty header
+        let mut wkb = Vec::new();
+        write_wkb_multipolygon_header(&mut wkb, 4).unwrap();
+
+        // Expected bytes for multipolygon with 4 polygons:
+        // - 0x01 for little endian byte order
+        // - 0x06, 0x00, 0x00, 0x00 for geometry type 6 (MultiPolygon)
+        // - 0x04, 0x00, 0x00, 0x00 for count of 4 polygons
+        let expected = vec![0x01, 0x06, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00];
+        assert_eq!(wkb, expected);
+    }
+
+    #[test]
+    fn test_wkb_geometrycollection_header() {
+        let mut wkb = Vec::new();
+        write_wkb_geometrycollection_header(&mut wkb, 0).unwrap();
+        let expected = vec![0x01, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        assert_eq!(wkb, expected);
+
+        let mut wkb = Vec::new();
+        write_wkb_geometrycollection_header(&mut wkb, 2).unwrap();
+
+        // Expected bytes:
+        // - 0x01 for little endian byte order
+        // - 0x07, 0x00, 0x00, 0x00 for geometry type 7 (GeometryCollection)
+        // - 0x02, 0x00, 0x00, 0x00 for count of 2 geometries
+        let expected = vec![0x01, 0x07, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00];
+        assert_eq!(wkb, expected);
     }
 }

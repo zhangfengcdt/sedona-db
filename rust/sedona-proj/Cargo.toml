@@ -1,0 +1,14 @@
+[package]
+name = "sedona-proj"
+version = "0.1.0"  # or use workspace version with: version.workspace = true
+edition = "2021"   # or use workspace edition with: edition.workspace = true
+
+[dev-dependencies]
+approx = { workspace = true }
+geo-types = { workspace = true }
+wkb = { workspace = true }
+
+[dependencies]
+proj = { workspace = true }
+geo-traits = { workspace = true }
+sedona-geometry = { path = "../sedona-geometry" }
