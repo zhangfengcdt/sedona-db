@@ -45,5 +45,6 @@ repos:
     rev: v19.1.4
     hooks:
     - id: clang-format
+      types_or: [c, c++]
       # Don't run on vendored files
       exclude: "^c/(sedona-geoarrow-c/src/geoarrow|sedona-geoarrow-c/src/nanoarrow|sedona-tg/src/tg)/.*"

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Union, Optional
+from typing import TYPE_CHECKING, Union, Optional, Any
 
 from sedonadb._options import global_options
 
@@ -11,8 +11,9 @@ if TYPE_CHECKING:
 class DataFrame:
     """Representation of a (lazy) collection of columns
 
-    This object is usually constructed from a [`SedonaContext`][] by
-    importing an object, reading a file, or executing SQL.
+    This object is usually constructed from a
+    SedonaContext][sedonadb.context.SedonaContext] by importing an object,
+    reading a file, or executing SQL.
     """
 
     def __init__(self, ctx, impl):
@@ -29,7 +30,6 @@ class DataFrame:
 
         Examples:
 
-            ```
             >>> import sedonadb
             >>> con = sedonadb.connect()
             >>> df = con.sql("SELECT * FROM (VALUES ('one'), ('two'), ('three')) AS t(val)")
@@ -54,7 +54,6 @@ class DataFrame:
 
         Examples:
 
-            ```
             >>> import sedonadb
             >>> con = sedonadb.connect()
             >>> df = con.sql("SELECT * FROM (VALUES ('one'), ('two'), ('three')) AS t(val)")
@@ -74,7 +73,6 @@ class DataFrame:
             │ three │
             └───────┘
 
-            ```
         """
         return DataFrame(self._ctx, self._impl.limit(n, offset))
 
@@ -83,14 +81,12 @@ class DataFrame:
 
         Examples:
 
-            ```
             >>> import sedonadb
             >>> con = sedonadb.connect()
             >>> df = con.sql("SELECT * FROM (VALUES ('one'), ('two'), ('three')) AS t(val)")
             >>> df.count()
             3
 
-            ```
         """
         return self._impl.count()
 
@@ -104,7 +100,7 @@ class DataFrame:
         """
         return self._impl.__arrow_c_schema__()
 
-    def __arrow_c_stream__(self, requested_schema=None):
+    def __arrow_c_stream__(self, requested_schema: Any = None):
         """ArrowArrayStream Stream PyCapsule interface
 
         Returns a PyCapsule wrapping an Arrow C ArrayStream for interoperability
@@ -129,11 +125,10 @@ class DataFrame:
 
         Examples:
 
-            ```python
-            import sedonadb
-            con = sedonadb.connect()
-            con.sql("SELECT ST_Point(0, 1) as geom").to_view("foofy")
-            con.view("foofy").show()
+            >>> import sedonadb
+            >>> con = sedonadb.connect()
+            >>> con.sql("SELECT ST_Point(0, 1) as geom").to_view("foofy")
+            >>> con.view("foofy").show()
             ┌────────────┐
             │    geom    │
             │     wkb    │
@@ -141,7 +136,6 @@ class DataFrame:
             │ POINT(0 1) │
             └────────────┘
 
-            ```
         """
         self._impl.to_view(self._ctx, name, overwrite)
 
@@ -153,7 +147,6 @@ class DataFrame:
 
         Examples:
 
-            ```python
             >>> import sedonadb
             >>> con = sedonadb.connect()
             >>> con.sql("SELECT ST_Point(0, 1) as geom").collect().show()
@@ -164,15 +157,13 @@ class DataFrame:
             │ POINT(0 1) │
             └────────────┘
 
-            ```
-
         """
         return DataFrame(self._ctx, self._impl.collect(self._ctx))
 
     def __datafusion_table_provider__(self):
         return self._impl.__datafusion_table_provider__()
 
-    def to_arrow_table(self, schema=None) -> "pyarrow.Table":
+    def to_arrow_table(self, schema: Any = None) -> "pyarrow.Table":
         """Execute and collect results as a PyArrow Table
 
         Executes the logical plan represented by this object and returns a
@@ -184,7 +175,6 @@ class DataFrame:
 
         Examples:
 
-            ```python
             >>> import sedonadb
             >>> con = sedonadb.connect()
             >>> con.sql("SELECT ST_Point(0, 1) as geometry").to_arrow_table()
@@ -193,7 +183,6 @@ class DataFrame:
             ----
             geometry: [[01010000000000000000000000000000000000F03F]]
 
-            ```
         """
         import pyarrow as pa
         import geoarrow.pyarrow  # noqa: F401
@@ -220,14 +209,12 @@ class DataFrame:
 
         Examples:
 
-            ```python
             >>> import sedonadb
             >>> con = sedonadb.connect()
             >>> con.sql("SELECT ST_Point(0, 1) as geometry").to_pandas()
                   geometry
             0  POINT (0 1)
 
-            ```
         """
         table = self.to_arrow_table()
 
@@ -253,14 +240,13 @@ class DataFrame:
             limit: The number of rows to display. Using None will display the
                 entire table which may result in very large output.
             width: The number of characters to use to display the output.
-                If None, uses [`Options.width'][] or detects the value from the
+                If None, uses `Options.width` or detects the value from the
                 current terminal if available. The default width is 100 characters
                 if a width is not set by another mechanism.
             ascii: Use True to disable UTF-8 characters in the output.
 
         Examples:
 
-            ```python
             >>> import sedonadb
             >>> con = sedonadb.connect()
             >>> con.sql("SELECT ST_Point(0, 1) as geometry").show()
@@ -271,7 +257,6 @@ class DataFrame:
             │ POINT(0 1) │
             └────────────┘
 
-            ```
         """
         width = _out_width(width)
         print(self._impl.show(self._ctx, limit, width, ascii), end="")

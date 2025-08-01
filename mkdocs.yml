@@ -1,9 +1,13 @@
-site_name: SedonaDB Staging
-site_description: "This is the staging area for sedonadb"
+site_name: SedonaDB
+site_description: "Documentation for Apache SedonaDB"
 nav:
    - Home: index.md
-   - Reference:
-      - Navigation Subsection: test-reference.md
+   - CLI Quickstart: quickstart-cli.md
+   - Python Quickstart: quickstart-python.ipynb
+   - Development: development.md
+   - API Reference:
+      - Python: reference/python.md
+      - SQL: reference/sql.md
 theme:
   name: material
   font:
@@ -94,5 +98,23 @@ plugins:
         background: white
         shadow: false
         manual: false
-   - tags:
-        tags_file: tags.md
+   - tags
+   - mkdocstrings:
+        enable_inventory: true
+        handlers:
+          python:
+            paths: [python/sedonadb]
+            inventories:
+              - https://docs.python.org/3/objects.inv
+              - https://geopandas.org/en/stable/objects.inv
+              - https://pandas.pydata.org/docs/objects.inv
+            options:
+              docstring_section_style: list
+              docstring_style: google
+              line_length: 80
+              separate_signature: true
+              show_root_heading: true
+              show_signature_annotations: true
+              show_source: false
+              show_symbol_type_toc: true
+              signature_crossrefs: true

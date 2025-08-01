@@ -20,7 +20,7 @@ class SedonaContext:
         return _create_data_frame(self._impl, obj, schema)
 
     def view(self, name: str) -> DataFrame:
-        """Create a [`DataFrame`][] from a named view
+        """Create a [DataFrame][sedonadb.dataframe.DataFrame] from a named view
 
         Refer to a named view registered with this context.
 
@@ -29,7 +29,6 @@ class SedonaContext:
 
         Examples:
 
-            ```python
             >>> import sedonadb
             >>> con = sedonadb.connect()
             >>> con.sql("SELECT ST_Point(0, 1) as geom").to_view("foofy")
@@ -42,7 +41,6 @@ class SedonaContext:
             └────────────┘
             >>> con.drop_view("foofy")
 
-            ```
         """
         return DataFrame(self._impl, self._impl.view(name))
 
@@ -54,18 +52,16 @@ class SedonaContext:
 
         Examples:
 
-            ```python
             >>> import sedonadb
             >>> con = sedonadb.connect()
             >>> con.sql("SELECT ST_Point(0, 1) as geom").to_view("foofy")
             >>> con.drop_view("foofy")
 
-            ```
         """
         self._impl.drop_view(name)
 
     def read_parquet(self, table_paths: Union[str, Path, Iterable[str]]) -> DataFrame:
-        """Create a [`DataFrame`][] from one or more Parquet files
+        """Create a [DataFrame][sedonadb.dataframe.DataFrame] from one or more Parquet files
 
         Args:
             table_paths: A str, Path, or iterable of paths containing URLs to Parquet
@@ -73,13 +69,11 @@ class SedonaContext:
 
         Examples:
 
-            ```python
             >>> import sedonadb
             >>> url = "https://github.com/apache/sedona-testing/raw/refs/heads/main/data/parquet/geoparquet-1.1.0.parquet"
             >>> sedonadb.connect().read_parquet(url)
             <sedonadb.dataframe.DataFrame object at ...>
 
-            ```
         """
         if isinstance(table_paths, (str, Path)):
             table_paths = [table_paths]
@@ -89,7 +83,7 @@ class SedonaContext:
         )
 
     def sql(self, sql: str) -> DataFrame:
-        """Create a [`DataFrame`][] by executing SQL
+        """Create a [DataFrame][sedonadb.dataframe.DataFrame] by executing SQL
 
         Parses a SQL string into a logical plan and returns a DataFrame
         that can be used to request results or further modify the query.
@@ -99,16 +93,14 @@ class SedonaContext:
 
         Examples:
 
-            ```python
             >>> import sedonadb
             >>> sedonadb.connect().sql("SELECT ST_Point(0, 1) as geom")
             <sedonadb.dataframe.DataFrame object at ...>
 
-            ```
         """
         return DataFrame(self._impl, self._impl.sql(sql))
 
 
 def connect() -> SedonaContext:
-    """Create a new [`SedonaContext`][]"""
+    """Create a new [SedonaContext][sedonadb.context.SedonaContext]"""
     return SedonaContext()

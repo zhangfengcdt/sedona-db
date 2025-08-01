@@ -1,0 +1,83 @@
+
+# Development
+
+## Rust
+
+SedonaDB is written and Rust and is a standard `cargo` workspace. You can
+install a recent version of the Rust compiler and cargo from
+[rustup.rs](https://rustup.rs/) and run tests using `cargo test`. A local
+development version of the CLI can be run with `cargo run --bin sedona-cli`.
+
+Some tests require submodules that contain test data or pinned versions of
+external dependencies. These submodules can be initialized with:
+
+```shell
+git submodule init
+git submodule update --recursive
+```
+
+Some crates wrap external native libraries and require system dependencies
+to build. At this time the only crate that requires this is the sedona-s2geography
+crate, which requires [CMake](https://cmake.org),
+[Abseil](https://github.com/abseil/abseil-cpp) and OpenSSL. These can be installed
+on MacOS with [Homebrew](https://brew.sh):
+
+```shell
+brew install abseil openssl cmake geos
+```
+
+On Linux and Windows, it is recommended to use [vcpkg](https://github.com/microsoft/vcpkg)
+to provide external dependencies. This can be done by setting the `CMAKE_TOOLCHAIN_FILE`
+environment variable:
+
+```shell
+export CMAKE_TOOLCHAIN_FILE=/path/to/vcpkg/scripts/buildsystems/vcpkg.cmake
+```
+
+When using VSCode, it may be necessary to set this environment variable in settings.json
+such that it can be found by rust-analyzer when running build/run tasks:
+
+```json
+{
+    "rust-analyzer.runnables.extraEnv": {
+        "CMAKE_TOOLCHAIN_FILE": "/path/to/vcpkg/scripts/buildsystems/vcpkg.cmake"
+    },
+    "rust-analyzer.cargo.extraEnv": {
+        "CMAKE_TOOLCHAIN_FILE": "/path/to/vcpkg/scripts/buildsystems/vcpkg.cmake"
+    }
+}
+```
+
+## Python
+
+Python bindings to SedonaDB are built with the [Maturin](https://www.maturin.rs) build
+backend. Installing a development version of the main Python bindings the first time
+can be done with:
+
+```shell
+cd python/sedonadb
+pip install -e ".[test]"
+```
+
+If editing Rust code in either SedonaDB or the Python bindings, you can recompile the
+native component with:
+
+```shell
+maturin develop
+```
+
+## Debugging
+
+Debugging Rust code is most easily done by writing or finding a test that triggers
+the desired behavior and running it using the *Debug* selection in
+[VSCode](https://code.visualstudio.com/) with the
+[rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+extension. Rust code can also debugged using the CLI by finding the `main()` function in
+sedona-cli and choosing the *Debug* run option.
+
+Installation of Python bindings with `maturin develop` ensures a debug-friendly build for
+debugging Rust, Python, or C/C++ code. Python code can be debugged using breakpoints in
+any IDE that supports debugging an editable Python package installation (e.g., VSCode);
+Rust, C, or C++ code can be debugged using the
+[CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb)
+*Attach to Process...* command from the command palette in VSCode.

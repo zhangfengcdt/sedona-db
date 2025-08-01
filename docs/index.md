@@ -1,9 +1,12 @@
-# Welcome to MkDocs
 
-For full documentation visit [mkdocs.org](https://www.mkdocs.org) and [mkdocs-material](https://squidfunk.github.io/mkdocs-material/reference/).
+# SedonaDB
 
-## Staging commands
+SedonaDB is a high-performance, dependency-free geospatial compute engine.
 
-* `mkdocs serve` - Start the live-reloading docs server.
-* `mkdocs build` - Build the documentation site.
-* `mkdocs -h` - Print help message and exit.
+```python
+# pip install apache-sedona[db]
+import sedona.db
+
+sd = sedona.db.connect()
+sd.sql("SELECT ST_Point(0, 1) as geom")
+```
