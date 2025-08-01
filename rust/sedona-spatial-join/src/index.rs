@@ -724,6 +724,13 @@ impl SpatialIndex {
             });
         }
 
+        if index_query_results.is_empty() {
+            return Ok(JoinResultMetrics {
+                count: 0,
+                candidate_count,
+            });
+        }
+
         let results = self.refiner.refine(probe_wkb, &index_query_results)?;
         let num_results = results.len();
         build_batch_positions.extend(results);

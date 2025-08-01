@@ -2363,6 +2363,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "filetime"
+version = "0.2.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "35c0522e981e68cbfa8c3f978441a5f34b30b96e146b33cd3359176b50fe8586"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "libredox",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "fixedbitset"
 version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3427,6 +3439,17 @@ checksum = "4488594b9328dee448adb906d8b126d9b7deb7cf5c22161ee591610bb1be83c0"
 dependencies = [
  "bitflags",
  "libc",
+ "redox_syscall",
+]
+
+[[package]]
+name = "libsqlite3-sys"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fbb8270bb4060bd76c6e96f20c52d80620f1d82a3470885694e41e0f81ef6fe7"
+dependencies = [
+ "pkg-config",
+ "vcpkg",
 ]
 
 [[package]]
@@ -3436,6 +3459,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "172a788537a2221661b480fee8dc5f96c580eb34fa88764d3205dc356c7e4221"
 dependencies = [
  "zlib-rs",
+]
+
+[[package]]
+name = "link-cplusplus"
+version = "1.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a6f6da007f968f9def0d65a05b187e2960183de70c160204ecfccf0ee330212"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -3995,6 +4027,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "02b3e5e68a3a1a02aad3ec490a98007cbc13c37cbe84a3cd7b8e406d76e7f778"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "proj"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58e0c01de214d7ea50ee6519969be9efdc6f0dc5ce6c64fbd4f054ea26d43ca4"
+dependencies = [
+ "geo-types",
+ "libc",
+ "num-traits",
+ "proj-sys",
+ "thiserror 2.0.12",
+]
+
+[[package]]
+name = "proj-sys"
+version = "0.26.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a208129995443a4c475464c33308274be1578993b0ad266c9139188ed0dc7e91"
+dependencies = [
+ "cmake",
+ "flate2",
+ "libsqlite3-sys",
+ "link-cplusplus",
+ "pkg-config",
+ "tar",
 ]
 
 [[package]]
@@ -4821,6 +4880,7 @@ name = "sedona-geometry"
 version = "0.0.1"
 dependencies = [
  "geo-traits 0.2.0",
+ "geo-types",
  "rstest",
  "serde",
  "serde_json",
@@ -4859,6 +4919,18 @@ dependencies = [
  "serde_with",
  "tokio",
  "url",
+]
+
+[[package]]
+name = "sedona-proj"
+version = "0.1.0"
+dependencies = [
+ "approx",
+ "geo-traits 0.2.0",
+ "geo-types",
+ "proj",
+ "sedona-geometry",
+ "wkb",
 ]
 
 [[package]]
@@ -5301,6 +5373,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tar"
+version = "0.4.44"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d863878d212c87a19c1a610eb53bb01fe12951c0501cf5a0d65f724914a667a"
+dependencies = [
+ "filetime",
+ "libc",
+ "xattr",
+]
+
+[[package]]
 name = "target-lexicon"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5720,6 +5803,12 @@ dependencies = [
  "serde",
  "wasm-bindgen",
 ]
+
+[[package]]
+name = "vcpkg"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "version_check"
@@ -6149,12 +6238,13 @@ dependencies = [
 [[package]]
 name = "wkb"
 version = "0.8.0"
-source = "git+https://github.com/wherobots/wkb.git?branch=generic-alg#71846afb39b7e7576287dc00a282059f818aeeca"
+source = "git+https://github.com/wherobots/wkb.git?branch=generic-alg#08b7c438436e86c14d1eaac1da6e707e3f8e9c7b"
 dependencies = [
  "byteorder",
  "geo-traits 0.2.0",
  "geo-traits-ext",
  "geo-types",
+ "geos",
  "num_enum",
  "thiserror 1.0.69",
 ]
@@ -6188,6 +6278,16 @@ name = "writeable"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea2f10b9bb0928dfb1b42b65e1f9e36f7f54dbdf08457afefb38afcdec4fa2bb"
+
+[[package]]
+name = "xattr"
+version = "1.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af3a19837351dc82ba89f8a125e22a3c475f05aba604acc023d62b2739ae2909"
+dependencies = [
+ "libc",
+ "rustix 1.0.8",
+]
 
 [[package]]
 name = "xmlparser"
