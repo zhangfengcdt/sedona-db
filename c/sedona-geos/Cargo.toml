@@ -1,5 +1,5 @@
 [package]
-name = "sedona-tg"
+name = "sedona-geos"
 version.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -10,32 +10,19 @@ readme.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
-[build-dependencies]
-bindgen = "0.71.0"
-cc = { version = "1" }
-
 [dev-dependencies]
 criterion = { workspace = true }
-rstest = { workspace = true }
 sedona = { path = "../../rust/sedona" }
 sedona-testing = { path = "../../rust/sedona-testing" }
-wkb = { workspace = true }
-geo = { workspace = true }
+rstest = { workspace = true }
 
 [dependencies]
 arrow-schema = { workspace = true }
-arrow-array = { workspace = true, features = ["ffi"] }
+arrow-array = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
+geos = { workspace = true }
 sedona-expr = { path = "../../rust/sedona-expr" }
 sedona-functions = { path = "../../rust/sedona-functions" }
 sedona-schema = { path = "../../rust/sedona-schema" }
-thiserror = { workspace = true }
-
-[[bench]]
-harness = false
-name = "geo-predicates"
-
-[[bench]]
-harness = false
-name = "parse-wkb"
+wkb = { workspace = true }

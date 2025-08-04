@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "c/sedona-geoarrow-c",
+    "c/sedona-geos",
     "c/sedona-s2geography",
     "c/sedona-tg",
     "rust/sedona-adbc",

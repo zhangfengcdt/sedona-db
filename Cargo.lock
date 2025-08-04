@@ -4922,6 +4922,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "sedona-geos"
+version = "0.0.1"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "criterion",
+ "datafusion-common",
+ "datafusion-expr",
+ "geos",
+ "rstest",
+ "sedona",
+ "sedona-expr",
+ "sedona-functions",
+ "sedona-schema",
+ "sedona-testing",
+ "wkb",
+]
+
+[[package]]
 name = "sedona-proj"
 version = "0.1.0"
 dependencies = [
