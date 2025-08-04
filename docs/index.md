@@ -3,10 +3,81 @@
 
 SedonaDB is a high-performance, dependency-free geospatial compute engine.
 
-```python
-# pip install apache-sedona[db]
-import sedona.db
+=== "SQL"
 
-sd = sedona.db.connect()
-sd.sql("SELECT ST_Point(0, 1) as geom")
-```
+	```sql
+	SELECT ST_Point(0, 1) as geom
+	```
+
+=== "Python"
+
+	```python
+	import seonda.db
+
+	sd = sedona.db.connect()
+	sd.sql("SELECT ST_Point(0, 1) as geom")
+	```
+
+=== "Rust"
+
+	```Rust
+	use datafusion::prelude::*
+	use sedona::context{SedonaContext, SedonaDataFrame};
+
+	let ctx = SedonaContext::new_local_interactive().await?;
+        let batches = ctx
+            .sql("SELECT ST_Point(0, 1) as geom")
+            .await?
+            .show_sedona(&cts, None, Default::default())
+            .await?;
+	```
+
+=== "R"
+
+	```r
+	library(sedonadb)
+
+        sd_sql("SELECT ST_Point(0, 1) as geom")
+	```
+
+## Key features
+
+* **Blazing fast**: SedonaDB runs on a single machine, optimized for geospatial workflows.
+* SedonaDB is a **dependency-free**, **small binary** that is only XX KB.
+* Supports **various file formats**, including GeoJSON, Shapefile, GeoParquet, CSV, and PostGIS.
+* Exposes **several language APIs,** including SQL, Python, Rust, and R.
+* **Portable**: Easy to run on the command line, locally or in the cloud with AWS Sagemaker, AWS Lambda, Azure Functions, Azure Machine Learning, or Google Colab.
+* **Extensible**: You can extend SedonaDB to build your own geospatial compute engine custom for your needs.
+* **Open source**: Apache Sedona is an open-source project managed according to the Apache Software Foundation's guidelines.
+
+## Installation
+
+Here’s how to install SedonaDB with various build tools:
+
+=== "pip"
+
+	```bash
+	pip install "apache-sedona[db]"
+	```
+
+=== "Rust"
+
+	```rust
+	cargo add sedona
+	```
+
+=== "R"
+
+	```bash
+	install.packages("sedonadb", repos = "https://community.r-multiverse.org")
+	```
+
+## SedonaDB example with vector data
+
+TODO
+
+## Have questions?
+
+Feel free to start a GitHub Discussion or join the Discord community to ask the developers any questions you may have.
+
+We look forward to collaborating with you!

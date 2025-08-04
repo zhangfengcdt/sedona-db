@@ -81,3 +81,9 @@ any IDE that supports debugging an editable Python package installation (e.g., V
 Rust, C, or C++ code can be debugged using the
 [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb)
 *Attach to Process...* command from the command palette in VSCode.
+
+## Documentation
+
+* `mkdocs serve` - Start the live-reloading docs server.
+* `mkdocs build` - Build the documentation site.
+* `mkdocs -h` - Print help message and exit.
