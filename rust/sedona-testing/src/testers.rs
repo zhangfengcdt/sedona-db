@@ -10,7 +10,10 @@ use datafusion_expr::{
 use datafusion_physical_expr::{expressions::Column, LexOrdering, PhysicalExpr};
 use sedona_schema::datatypes::SedonaType;
 
-use crate::create::{create_array, create_scalar};
+use crate::{
+    compare::assert_scalar_equal,
+    create::{create_array, create_scalar},
+};
 
 /// Low-level tester for aggregate functions
 ///
@@ -150,6 +153,30 @@ impl ScalarUdfTester {
         Self { udf, arg_types }
     }
 
+    /// Assert the return type of the function for the argument types used
+    /// to construct this tester
+    ///
+    /// Both [SedonaType] or [DataType] objects can be used as the expected
+    /// data type.
+    pub fn assert_return_type(&self, data_type: impl TryInto<SedonaType>) {
+        let expected = match data_type.try_into() {
+            Ok(t) => t,
+            Err(_) => panic!("Failed to convert to SedonaType"),
+        };
+        assert_eq!(self.return_type().unwrap(), expected)
+    }
+
+    /// Assert the result of invoking this function
+    ///
+    /// Both actual and expected are interpreted according to the calculated
+    /// return type (notably, WKT is interpreted as geometry or geography output).
+    pub fn assert_scalar_result_equals(&self, actual: impl Literal, expected: impl Literal) {
+        let return_type = self.return_type().unwrap();
+        let actual = Self::scalar_lit(actual, &return_type).unwrap();
+        let expected = Self::scalar_lit(expected, &return_type).unwrap();
+        assert_scalar_equal(&actual, &expected);
+    }
+
     /// Compute the return type
     pub fn return_type(&self) -> Result<SedonaType> {
         let arg_data_types = self
@@ -162,7 +189,7 @@ impl ScalarUdfTester {
     }
 
     /// Invoke this function with a scalar
-    pub fn invoke_scalar<T: Literal>(&self, arg: T) -> Result<ScalarValue> {
+    pub fn invoke_scalar(&self, arg: impl Literal) -> Result<ScalarValue> {
         let args = vec![Self::scalar_arg(arg, &self.arg_types[0])?];
 
         if let ColumnarValue::Scalar(scalar) = self.invoke(args)? {
@@ -291,8 +318,27 @@ impl ScalarUdfTester {
     }
 
     fn scalar_arg(arg: impl Literal, sedona_type: &SedonaType) -> Result<ColumnarValue> {
+        Ok(ColumnarValue::Scalar(Self::scalar_lit(arg, sedona_type)?))
+    }
+
+    fn scalar_lit(arg: impl Literal, sedona_type: &SedonaType) -> Result<ScalarValue> {
         if let Expr::Literal(scalar, _) = arg.lit() {
-            ColumnarValue::Scalar(scalar).cast_to(&sedona_type.data_type(), None)
+            if matches!(
+                sedona_type,
+                SedonaType::Wkb(_, _) | SedonaType::WkbView(_, _)
+            ) {
+                if let ScalarValue::Utf8(expected_wkt) = scalar {
+                    Ok(create_scalar(expected_wkt.as_deref(), sedona_type))
+                } else if scalar.data_type() == sedona_type.data_type() {
+                    Ok(scalar)
+                } else if scalar.is_null() {
+                    Ok(create_scalar(None, sedona_type))
+                } else {
+                    internal_err!("Can't interpret scalar {scalar} as type {sedona_type}")
+                }
+            } else {
+                scalar.cast_to(&sedona_type.data_type())
+            }
         } else {
             internal_err!("Can't use test scalar invoke where .lit() returns non-literal")
         }
