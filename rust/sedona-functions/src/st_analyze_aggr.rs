@@ -24,7 +24,7 @@ use sedona_geometry::types::GeometryTypeAndDimensions;
 use sedona_schema::datatypes::SedonaType;
 use wkb::reader::Wkb;
 
-use crate::executor::GenericExecutor;
+use crate::executor::WkbExecutor;
 
 /// ST_Analyze_Aggr() aggregate UDF implementation
 ///
@@ -352,10 +352,10 @@ impl AnalyzeAccumulator {
         }
     }
 
-    fn execute_update(&mut self, executor: GenericExecutor) -> Result<()> {
-        executor.execute_wkb_void(|_i, maybe_item| {
+    fn execute_update(&mut self, executor: WkbExecutor) -> Result<()> {
+        executor.execute_wkb_void(|maybe_item| {
             if let Some(item) = maybe_item {
-                self.update_statistics(item, item.buf().len())?;
+                self.update_statistics(&item, item.buf().len())?;
             }
             Ok(())
         })?;
@@ -374,7 +374,7 @@ impl Accumulator for AnalyzeAccumulator {
         let args = [ColumnarValue::Array(
             self.input_type.unwrap_array(&values[0])?,
         )];
-        let executor = GenericExecutor::new(&arg_types, &args);
+        let executor = WkbExecutor::new(&arg_types, &args);
         self.execute_update(executor)?;
         Ok(())
     }

@@ -11,7 +11,7 @@ use geo::{BooleanOps, Intersects};
 use geo_traits::to_geo::ToGeoGeometry;
 use sedona_expr::aggregate_udf::SedonaAccumulatorRef;
 use sedona_expr::{aggregate_udf::SedonaAccumulator, scalar_udf::ArgMatcher};
-use sedona_functions::executor::GenericExecutor;
+use sedona_functions::executor::WkbExecutor;
 use sedona_schema::datatypes::{SedonaType, WKB_GEOMETRY};
 use wkb::reader::Wkb;
 use wkb::writer::write_geometry;
@@ -134,10 +134,10 @@ impl IntersectionAccumulator {
             .and_then(|geom| self.geometry_to_wkb(geom)))
     }
 
-    fn execute_update(&mut self, executor: GenericExecutor) -> Result<()> {
-        executor.execute_wkb_void(|_i, maybe_item| {
+    fn execute_update(&mut self, executor: WkbExecutor) -> Result<()> {
+        executor.execute_wkb_void(|maybe_item| {
             if let Some(item) = maybe_item {
-                self.update_intersection(item)?;
+                self.update_intersection(&item)?;
             }
             Ok(())
         })?;
@@ -156,7 +156,7 @@ impl Accumulator for IntersectionAccumulator {
         let args = [ColumnarValue::Array(
             self.input_type.unwrap_array(&values[0])?,
         )];
-        let executor = GenericExecutor::new(&arg_types, &args);
+        let executor = WkbExecutor::new(&arg_types, &args);
         self.execute_update(executor)?;
         Ok(())
     }
@@ -201,7 +201,7 @@ impl Accumulator for IntersectionAccumulator {
         let array = &states[0];
         let args = [ColumnarValue::Array(array.clone())];
         let arg_types = [WKB_GEOMETRY.clone()];
-        let executor = GenericExecutor::new(&arg_types, &args);
+        let executor = WkbExecutor::new(&arg_types, &args);
         self.execute_update(executor)?;
         Ok(())
     }

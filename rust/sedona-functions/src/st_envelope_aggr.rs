@@ -1,6 +1,6 @@
 use std::{sync::Arc, vec};
 
-use crate::executor::GenericExecutor;
+use crate::executor::WkbExecutor;
 use arrow_array::ArrayRef;
 use arrow_schema::FieldRef;
 use datafusion_common::{
@@ -144,8 +144,8 @@ impl BoundsAccumulator2D {
     }
 
     // Execute the update operation for the accumulator.
-    fn execute_update(&mut self, executor: GenericExecutor) -> Result<(), DataFusionError> {
-        executor.execute_wkb_void(|_i, maybe_item| {
+    fn execute_update(&mut self, executor: WkbExecutor) -> Result<(), DataFusionError> {
+        executor.execute_wkb_void(|maybe_item| {
             if let Some(item) = maybe_item {
                 geo_traits_update_xy_bounds(item, &mut self.x, &mut self.y)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -163,7 +163,7 @@ impl Accumulator for BoundsAccumulator2D {
         let args = [ColumnarValue::Array(
             self.input_type.unwrap_array(&values[0])?,
         )];
-        let executor = GenericExecutor::new(&arg_types, &args);
+        let executor = WkbExecutor::new(&arg_types, &args);
         self.execute_update(executor)?;
         Ok(())
     }
@@ -188,7 +188,7 @@ impl Accumulator for BoundsAccumulator2D {
         let array = &states[0];
         let args = [ColumnarValue::Array(array.clone())];
         let arg_types = [WKB_GEOMETRY.clone()];
-        let executor = GenericExecutor::new(&arg_types, &args);
+        let executor = WkbExecutor::new(&arg_types, &args);
         self.execute_update(executor)?;
         Ok(())
     }

@@ -1,6 +1,6 @@
 use std::{sync::Arc, vec};
 
-use crate::executor::GenericExecutor;
+use crate::executor::WkbExecutor;
 use arrow_array::builder::StringBuilder;
 use arrow_schema::DataType;
 use datafusion_common::error::{DataFusionError, Result};
@@ -52,7 +52,7 @@ impl SedonaScalarKernel for STAsText {
         arg_types: &[SedonaType],
         args: &[ColumnarValue],
     ) -> Result<ColumnarValue> {
-        let executor = GenericExecutor::new(arg_types, args);
+        let executor = WkbExecutor::new(arg_types, args);
 
         // Estimate the minimum probable memory requirement of the output.
         // Here, the shortest full precision non-empty/non-null value would be
@@ -63,7 +63,7 @@ impl SedonaScalarKernel for STAsText {
         let mut builder =
             StringBuilder::with_capacity(executor.num_iterations(), min_probable_wkt_size);
 
-        executor.execute_wkb_void(|_i, maybe_item| {
+        executor.execute_wkb_void(|maybe_item| {
             match maybe_item {
                 Some(item) => {
                     wkt::to_wkt::write_geometry(&mut builder, &item)

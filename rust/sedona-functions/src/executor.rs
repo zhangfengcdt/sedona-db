@@ -10,13 +10,16 @@ use wkb::reader::Wkb;
 
 /// Helper for writing general kernel implementations with geometry
 ///
-/// The GenericExecutor wraps a set of arguments and their types and provides helpers
+/// The [GenericExecutor] wraps a set of arguments and their types and provides helpers
 /// to make writing general compute functions less verbose. Broadly, kernel implementations
 /// must consider multiple input data types (e.g., Wkb/WkbView or Float32/Float64) and
-/// multiple combinations of Array or ScalarValue inputs. The pattern supported by the
-/// GenericExecutor is:
+/// multiple combinations of Array or ScalarValue inputs. This executor is generic on
+/// a [GeometryFactory] to support iterating over geometries from multiple libraries;
+/// however, the most commonly used version is the [WkbExecutor].
 ///
-/// - Create a GenericExecutor with `new()`
+/// The pattern supported by the [GenericExecutor] is:
+///
+/// - Create a [GenericExecutor] with `new()`
 /// - Create an Arrow builder of the appropriate output type using
 ///   `with_capacity(executor.num_iterations()`
 /// - Use `execute_wkb()` with a lambda whose contents appends to the builder
@@ -30,24 +33,41 @@ use wkb::reader::Wkb;
 /// to float64 or an integer to int64) and cheaper to access by element or iterator
 /// compared to most geometry operations that require them.
 ///
-/// The GenericExecutor is not built to be completely general and UDF implementers are
+/// The [GenericExecutor] is not built to be completely general and UDF implementers are
 /// free to use other mechanisms to implement UDFs with geometry arguments. The balance
 /// between optimizing iteration speed, minimizing dispatch overhead, and maximizing
 /// readability of kernel implementations is difficult to achieve and future utilities
 /// may provide alternatives optimized for a different balance than was chosen here.
-pub struct GenericExecutor<'a, 'b> {
-    arg_types: &'a [SedonaType],
-    args: &'b [ColumnarValue],
+///
+/// This executor accepts two factories (supporting kernels accepting 0, 1, or 2
+/// geometry arguments), which can also support implementations that wish to "prepare"
+/// one side or the other (e.g., for binary predicates).
+///
+/// A critical optimization is iterating over two arguments where one argument is a
+/// scalar. In this case, [GeometryFactory::try_from_wkb] is called exactly once on the
+/// scalar side (e.g., whatever parsing needs to occur for the scalar only occurs once).
+pub struct GenericExecutor<'a, 'b, Factory0, Factory1> {
+    pub arg_types: &'a [SedonaType],
+    pub args: &'b [ColumnarValue],
     num_iterations: usize,
+    factory0: Factory0,
+    factory1: Factory1,
 }
 
-impl<'a, 'b> GenericExecutor<'a, 'b> {
+/// Alias for an executor that iterates over geometries as [Wkb]
+pub type WkbExecutor<'a, 'b> = GenericExecutor<'a, 'b, WkbGeometryFactory, WkbGeometryFactory>;
+
+impl<'a, 'b, Factory0: GeometryFactory, Factory1: GeometryFactory>
+    GenericExecutor<'a, 'b, Factory0, Factory1>
+{
     /// Create a new [GenericExecutor]
-    pub fn new(arg_types: &'a [SedonaType], args: &'b [ColumnarValue]) -> GenericExecutor<'a, 'b> {
+    pub fn new(arg_types: &'a [SedonaType], args: &'b [ColumnarValue]) -> Self {
         Self {
             arg_types,
             args,
             num_iterations: Self::calc_num_iterations(args),
+            factory0: Factory0::default(),
+            factory1: Factory1::default(),
         }
     }
 
@@ -65,13 +85,20 @@ impl<'a, 'b> GenericExecutor<'a, 'b> {
     /// a [Wkb] scalar. For [SedonaType::Wkb] and [SedonaType::WkbView] arrays, this
     /// is the conversion that would normally happen. For other future supported geometry
     /// array types, this may incur a cast of item-wise conversion overhead.
-    pub fn execute_wkb_void<F: FnMut(usize, Option<&Wkb>) -> Result<()>>(
+    pub fn execute_wkb_void<F: FnMut(Option<Factory0::Geom<'b>>) -> Result<()>>(
         &self,
         mut func: F,
     ) -> Result<()> {
-        self.args[0].iter_as_wkb(&self.arg_types[0], self.num_iterations, |i, wkb| {
-            func(i, wkb.as_ref())
-        })
+        let factory = Factory0::default();
+        match &self.args[0] {
+            ColumnarValue::Array(array) => {
+                array.iter_with_factory(&factory, &self.arg_types[0], self.num_iterations, func)
+            }
+            ColumnarValue::Scalar(scalar_value) => {
+                let wkb0 = scalar_value.scalar_from_factory(&self.factory0)?;
+                func(wkb0)
+            }
+        }
     }
 
     /// Execute a binary geometry function by iterating over [Wkb] scalars in the
@@ -81,32 +108,42 @@ impl<'a, 'b> GenericExecutor<'a, 'b> {
     /// scalars. [SedonaType::Wkb] and [SedonaType::WkbView] arrays are iterated over
     /// in place; however, future supported geometry array types may incur conversion
     /// overhead.
-    pub fn execute_wkb_wkb_void<F: FnMut(usize, Option<&Wkb>, Option<&Wkb>) -> Result<()>>(
+    pub fn execute_wkb_wkb_void<
+        F: FnMut(Option<&Factory0::Geom<'b>>, Option<&Factory1::Geom<'b>>) -> Result<()>,
+    >(
         &self,
         mut func: F,
     ) -> Result<()> {
         match (&self.args[0], &self.args[1]) {
             (ColumnarValue::Array(array0), ColumnarValue::Array(array1)) => iter_wkb_wkb_array(
+                &self.factory0,
+                &self.factory1,
                 (&self.arg_types[0], &self.arg_types[1]),
                 (array0, array1),
                 func,
             ),
             (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar_value)) => {
-                let wkb1 = scalar_value.scalar_as_wkb()?;
-                array.iter_as_wkb(&self.arg_types[0], self.num_iterations(), |i, wkb0| {
-                    func(i, wkb0.as_ref(), wkb1.as_ref())
-                })
+                let wkb1 = scalar_value.scalar_from_factory(&self.factory1)?;
+                array.iter_with_factory(
+                    &self.factory0,
+                    &self.arg_types[0],
+                    self.num_iterations(),
+                    |wkb0| func(wkb0.as_ref(), wkb1.as_ref()),
+                )
             }
             (ColumnarValue::Scalar(scalar_value), ColumnarValue::Array(array)) => {
-                let wkb0 = scalar_value.scalar_as_wkb()?;
-                array.iter_as_wkb(&self.arg_types[1], self.num_iterations(), |i, wkb1| {
-                    func(i, wkb0.as_ref(), wkb1.as_ref())
-                })
+                let wkb0 = scalar_value.scalar_from_factory(&self.factory0)?;
+                array.iter_with_factory(
+                    &self.factory1,
+                    &self.arg_types[1],
+                    self.num_iterations(),
+                    |wkb1| func(wkb0.as_ref(), wkb1.as_ref()),
+                )
             }
             (ColumnarValue::Scalar(scalar_value0), ColumnarValue::Scalar(scalar_value1)) => {
-                let wkb0 = scalar_value0.scalar_as_wkb()?;
-                let wkb1 = scalar_value1.scalar_as_wkb()?;
-                func(0, wkb0.as_ref(), wkb1.as_ref())
+                let wkb0 = scalar_value0.scalar_from_factory(&self.factory0)?;
+                let wkb1 = scalar_value1.scalar_from_factory(&self.factory1)?;
+                func(wkb0.as_ref(), wkb1.as_ref())
             }
         }
     }
@@ -149,34 +186,114 @@ impl<'a, 'b> GenericExecutor<'a, 'b> {
     }
 }
 
+/// Factory object to help the [GenericExecutor] iterate over
+/// various concrete geometry objects
+pub trait GeometryFactory: Default {
+    /// The concrete geometry type (e.g., [Wkb])
+    ///
+    /// Usually this is some type whose conversion from raw WKB bytes incurs some cost.
+    /// The lifetime ensure that types that are a "view" of their input [ArrayRef] or
+    /// [ScalarValue] can be used here; however, this type may also own its own data.
+    type Geom<'a>;
+
+    /// Parse bytes of WKB or EWKB into [GeometryFactory::Geom]
+    fn try_from_wkb<'a>(&self, wkb_bytes: &'a [u8]) -> Result<Self::Geom<'a>>;
+
+    /// Helper that calls [GeometryFactory::try_from_wkb] on an
+    /// `Option<>`.
+    fn try_from_maybe_wkb<'a>(
+        &self,
+        maybe_wkb_bytes: Option<&'a [u8]>,
+    ) -> Result<Option<Self::Geom<'a>>> {
+        match maybe_wkb_bytes {
+            Some(wkb_bytes) => Ok(Some(self.try_from_wkb(wkb_bytes)?)),
+            None => Ok(None),
+        }
+    }
+}
+
+/// A [GeometryFactory] whose geometry type is [Wkb]
+///
+/// Using this geometry factory iterates over items as references to [Wkb]
+/// objects (which are the fastest objects when iterating over WKB input
+/// that implement geo-traits).
+#[derive(Default)]
+pub struct WkbGeometryFactory {}
+
+impl GeometryFactory for WkbGeometryFactory {
+    type Geom<'a> = Wkb<'a>;
+
+    fn try_from_wkb<'a>(&self, wkb_bytes: &'a [u8]) -> Result<Self::Geom<'a>> {
+        wkb::reader::read_wkb(wkb_bytes).map_err(|e| DataFusionError::External(Box::new(e)))
+    }
+}
+
 /// Trait for iterating over a container type as geometry scalars
 ///
 /// Currently the only scalar type supported is [Wkb]; however, for future
 /// geometry array types it may make sense to offer other scalar types over
 /// which to iterate.
 pub trait IterGeo {
-    /// Apply a function for each element of self as an optional [Wkb]
-    ///
-    /// The function will always be called num_iteration types to support
-    /// efficient iteration over scalar containers (e.g., so that implementations
-    /// can parse the Wkb once and reuse the object).
-    fn iter_as_wkb<'a, F: FnMut(usize, Option<Wkb<'a>>) -> Result<()>>(
+    fn iter_as_wkb_bytes<'a, F: FnMut(Option<&'a [u8]>) -> Result<()>>(
         &'a self,
         sedona_type: &SedonaType,
         num_iterations: usize,
         func: F,
     ) -> Result<()>;
+
+    fn iter_with_factory<
+        'a,
+        Factory: GeometryFactory,
+        F: FnMut(Option<Factory::Geom<'a>>) -> Result<()>,
+    >(
+        &'a self,
+        factory: &Factory,
+        sedona_type: &SedonaType,
+        num_iterations: usize,
+        mut func: F,
+    ) -> Result<()> {
+        self.iter_as_wkb_bytes(
+            sedona_type,
+            num_iterations,
+            |maybe_bytes| match maybe_bytes {
+                Some(wkb_bytes) => {
+                    let geom = factory.try_from_wkb(wkb_bytes)?;
+                    func(Some(geom))
+                }
+                None => func(None),
+            },
+        )
+    }
+
+    /// Apply a function for each element of self as an optional [Wkb]
+    ///
+    /// The function will always be called num_iteration types to support
+    /// efficient iteration over scalar containers (e.g., so that implementations
+    /// can parse the Wkb once and reuse the object).
+    fn iter_as_wkb<'a, F: FnMut(Option<Wkb<'a>>) -> Result<()>>(
+        &'a self,
+        sedona_type: &SedonaType,
+        num_iterations: usize,
+        func: F,
+    ) -> Result<()> {
+        let factory = WkbGeometryFactory {};
+        self.iter_with_factory(&factory, sedona_type, num_iterations, func)
+    }
 }
 
 /// Trait for obtaining geometry scalars from containers
 ///
 /// Currently this is internal and only implemented for the [ScalarValue].
 trait ScalarGeo {
-    fn scalar_as_wkb(&self) -> Result<Option<Wkb<'_>>>;
+    fn scalar_as_wkb_bytes(&self) -> Result<Option<&[u8]>>;
+
+    fn scalar_from_factory<T: GeometryFactory>(&self, factory: &T) -> Result<Option<T::Geom<'_>>> {
+        factory.try_from_maybe_wkb(self.scalar_as_wkb_bytes()?)
+    }
 }
 
 impl IterGeo for ArrayRef {
-    fn iter_as_wkb<'a, F: FnMut(usize, Option<Wkb<'a>>) -> Result<()>>(
+    fn iter_as_wkb_bytes<'a, F: FnMut(Option<&'a [u8]>) -> Result<()>>(
         &'a self,
         sedona_type: &SedonaType,
         num_iterations: usize,
@@ -202,63 +319,13 @@ impl IterGeo for ArrayRef {
     }
 }
 
-impl IterGeo for ScalarValue {
-    fn iter_as_wkb<'a, F: FnMut(usize, Option<Wkb<'a>>) -> Result<()>>(
-        &'a self,
-        sedona_type: &SedonaType,
-        num_iterations: usize,
-        mut func: F,
-    ) -> Result<()> {
-        if !matches!(
-            sedona_type,
-            SedonaType::Wkb(_, _) | SedonaType::WkbView(_, _)
-        ) {
-            // We could cast here as a fallback, iterate and cast per-element, or
-            // implement iter_as_something_else()/supports_iter_xxx() when more geo array types
-            // are supported.
-            return internal_err!("Can't iterate over {:?} type as WKB", self);
-        }
-
-        if num_iterations == 0 {
-            return Ok(());
-        }
-
-        let wkb = self.scalar_as_wkb()?;
-        for i in 0..(num_iterations - 1) {
-            func(i, wkb.clone())?;
-        }
-        func(num_iterations - 1, wkb)?;
-
-        Ok(())
-    }
-}
-
 impl ScalarGeo for ScalarValue {
-    fn scalar_as_wkb(&self) -> Result<Option<Wkb<'_>>> {
+    fn scalar_as_wkb_bytes(&self) -> Result<Option<&[u8]>> {
         match self {
-            ScalarValue::Binary(maybe_item) | ScalarValue::BinaryView(maybe_item) => {
-                parse_wkb_item(maybe_item.as_deref())
-            }
-            _ => internal_err!(
-                "Can't iterate over {:?} ScalarValue as Wkb or WkbView",
-                self
-            ),
-        }
-    }
-}
-
-impl IterGeo for ColumnarValue {
-    fn iter_as_wkb<'a, F: FnMut(usize, Option<Wkb<'a>>) -> Result<()>>(
-        &'a self,
-        sedona_type: &SedonaType,
-        num_rows: usize,
-        func: F,
-    ) -> Result<()> {
-        match self {
-            ColumnarValue::Array(array) => array.iter_as_wkb(sedona_type, num_rows, func),
-            ColumnarValue::Scalar(scalar_value) => {
-                scalar_value.iter_as_wkb(sedona_type, num_rows, func)
-            }
+            ScalarValue::Binary(maybe_item)
+            | ScalarValue::BinaryView(maybe_item)
+            | ScalarValue::LargeBinary(maybe_item) => Ok(maybe_item.as_deref()),
+            _ => internal_err!("Can't iterate over {:?} ScalarValue as &[u8]", self),
         }
     }
 }
@@ -266,27 +333,44 @@ impl IterGeo for ColumnarValue {
 /// Helper to dispatch binary iteration over two arrays. The Scalar/Array,
 /// Array/Scalar, and Scalar/Scalar case are handled using the unary iteration
 /// infrastructure.
-fn iter_wkb_wkb_array<F: FnMut(usize, Option<&Wkb>, Option<&Wkb>) -> Result<()>>(
+fn iter_wkb_wkb_array<
+    'a,
+    Factory0: GeometryFactory,
+    Factory1: GeometryFactory,
+    F: FnMut(Option<&Factory0::Geom<'a>>, Option<&Factory1::Geom<'a>>) -> Result<()>,
+>(
+    factory0: &Factory0,
+    factory1: &Factory1,
     types: (&SedonaType, &SedonaType),
-    arrays: (&ArrayRef, &ArrayRef),
+    arrays: (&'a ArrayRef, &'a ArrayRef),
     func: F,
 ) -> Result<()> {
     let (array0, array1) = arrays;
     match types {
-        (SedonaType::Wkb(_, _), SedonaType::Wkb(_, _)) => {
-            iter_wkb_wkb_binary(as_binary_array(array0)?, as_binary_array(array1)?, func)
-        }
+        (SedonaType::Wkb(_, _), SedonaType::Wkb(_, _)) => iter_wkb_wkb_binary(
+            factory0,
+            factory1,
+            as_binary_array(array0)?,
+            as_binary_array(array1)?,
+            func,
+        ),
         (SedonaType::Wkb(_, _), SedonaType::WkbView(_, _)) => iter_wkb_wkb_binary(
+            factory0,
+            factory1,
             as_binary_array(array0)?,
             as_binary_view_array(array1)?,
             func,
         ),
         (SedonaType::WkbView(_, _), SedonaType::Wkb(_, _)) => iter_wkb_wkb_binary(
+            factory0,
+            factory1,
             as_binary_view_array(array0)?,
             as_binary_array(array1)?,
             func,
         ),
         (SedonaType::WkbView(_, _), SedonaType::WkbView(_, _)) => iter_wkb_wkb_binary(
+            factory0,
+            factory1,
             as_binary_view_array(array0)?,
             as_binary_view_array(array1)?,
             func,
@@ -307,18 +391,22 @@ fn iter_wkb_wkb_array<F: FnMut(usize, Option<&Wkb>, Option<&Wkb>) -> Result<()>>
 /// (e.g., various concrete array types)
 fn iter_wkb_wkb_binary<
     'a,
+    Factory0: GeometryFactory,
+    Factory1: GeometryFactory,
     T0: IntoIterator<Item = Option<&'a [u8]>>,
     T1: IntoIterator<Item = Option<&'a [u8]>>,
-    F: FnMut(usize, Option<&Wkb>, Option<&Wkb>) -> Result<()>,
+    F: FnMut(Option<&Factory0::Geom<'a>>, Option<&Factory1::Geom<'a>>) -> Result<()>,
 >(
+    factory0: &Factory0,
+    factory1: &Factory1,
     iterable0: T0,
     iterable1: T1,
     mut func: F,
 ) -> Result<()> {
-    for (i, (item0, item1)) in zip(iterable0, iterable1).enumerate() {
-        let wkb0 = parse_wkb_item(item0)?;
-        let wkb1 = parse_wkb_item(item1)?;
-        func(i, wkb0.as_ref(), wkb1.as_ref())?;
+    for (item0, item1) in zip(iterable0, iterable1) {
+        let wkb0 = factory0.try_from_maybe_wkb(item0)?;
+        let wkb1 = factory1.try_from_maybe_wkb(item1)?;
+        func(wkb0.as_ref(), wkb1.as_ref())?;
     }
 
     Ok(())
@@ -329,29 +417,16 @@ fn iter_wkb_wkb_binary<
 fn iter_wkb_binary<
     'a,
     T: IntoIterator<Item = Option<&'a [u8]>>,
-    F: FnMut(usize, Option<Wkb<'a>>) -> Result<()>,
+    F: FnMut(Option<&'a [u8]>) -> Result<()>,
 >(
     iterable: T,
     mut func: F,
 ) -> Result<()> {
-    for (i, item) in iterable.into_iter().enumerate() {
-        let wkb = parse_wkb_item(item)?;
-        func(i, wkb)?;
+    for item in iterable.into_iter() {
+        func(item)?;
     }
 
     Ok(())
-}
-
-/// Parse a single wkb item
-fn parse_wkb_item(maybe_item: Option<&[u8]>) -> Result<Option<Wkb<'_>>> {
-    match maybe_item {
-        Some(item) => {
-            let geometry = wkb::reader::read_wkb(item)
-                .map_err(|err| DataFusionError::External(Box::new(err)))?;
-            Ok(Some(geometry))
-        }
-        None => Ok(None),
-    }
 }
 
 #[cfg(test)]
@@ -394,9 +469,10 @@ mod tests {
         builder.append_null();
         builder.append_value(POINT);
         let wkb_array = builder.finish();
+        let wkb_array_ref: ArrayRef = Arc::new(wkb_array.clone());
 
         let mut out = Vec::new();
-        iter_wkb_binary(&wkb_array, |_i, x| {
+        iter_wkb_binary(&wkb_array, |x| {
             out.push(x.is_some());
             Ok(())
         })
@@ -404,15 +480,17 @@ mod tests {
         assert_eq!(out, vec![true, false, true]);
 
         let mut wkt_out = String::new();
-        ColumnarValue::Array(Arc::new(wkb_array.clone()))
-            .iter_as_wkb(&WKB_GEOMETRY, 3, |i, maybe_geom| {
+        let mut i = 0;
+        wkb_array_ref
+            .iter_as_wkb(&WKB_GEOMETRY, 3, |maybe_geom| {
                 write_to_test_output(&mut wkt_out, i, maybe_geom.as_ref()).unwrap();
+                i += 1;
                 Ok(())
             })
             .unwrap();
         assert_eq!(wkt_out, " 0: POINT(1 2) 1: None 2: POINT(1 2)");
 
-        let wkb_view_array_ref = ColumnarValue::Array(Arc::new(wkb_array))
+        let wkb_view_array_ref = ColumnarValue::Array(wkb_array_ref)
             .cast_to(&DataType::BinaryView, None)
             .unwrap()
             .to_array(3)
@@ -420,7 +498,7 @@ mod tests {
         let wkb_view_array = as_binary_view_array(&wkb_view_array_ref).unwrap();
 
         let mut out = Vec::new();
-        iter_wkb_binary(wkb_view_array, |_i, x| {
+        iter_wkb_binary(wkb_view_array, |x| {
             out.push(x.is_some());
             Ok(())
         })
@@ -428,9 +506,11 @@ mod tests {
         assert_eq!(out, vec![true, false, true]);
 
         let mut wkt_out = String::new();
-        ColumnarValue::Array(Arc::new(wkb_view_array.clone()))
-            .iter_as_wkb(&WKB_VIEW_GEOMETRY, 3, |i, maybe_geom| {
+        let mut i = 0;
+        wkb_view_array_ref
+            .iter_as_wkb(&WKB_VIEW_GEOMETRY, 3, |maybe_geom| {
                 write_to_test_output(&mut wkt_out, i, maybe_geom.as_ref()).unwrap();
+                i += 1;
                 Ok(())
             })
             .unwrap();
@@ -473,13 +553,15 @@ mod tests {
 
         let arg_types = [left_type, right_type];
         let args = [value0, value1];
-        let executor = GenericExecutor::new(&arg_types, &args);
+        let executor = WkbExecutor::new(&arg_types, &args);
 
         let mut wkt_out = String::new();
+        let mut i = 0;
         executor
-            .execute_wkb_wkb_void(|i, maybe_geom0, maybe_geom1| {
+            .execute_wkb_wkb_void(|maybe_geom0, maybe_geom1| {
                 write_to_test_output(&mut wkt_out, i, maybe_geom0)?;
                 write_to_test_output(&mut wkt_out, i, maybe_geom1)?;
+                i += 1;
                 Ok(())
             })
             .unwrap();
@@ -501,13 +583,15 @@ mod tests {
 
         let arg_types = [WKB_GEOMETRY, WKB_GEOMETRY];
         let args = [wkb_array_value.clone(), wkb_scalar_value.clone()];
-        let executor = GenericExecutor::new(&arg_types, &args);
+        let executor = WkbExecutor::new(&arg_types, &args);
 
         let mut wkt_out = String::new();
+        let mut i = 0;
         executor
-            .execute_wkb_wkb_void(|i, maybe_geom0, maybe_geom1| {
+            .execute_wkb_wkb_void(|maybe_geom0, maybe_geom1| {
                 write_to_test_output(&mut wkt_out, i, maybe_geom0)?;
                 write_to_test_output(&mut wkt_out, i, maybe_geom1)?;
+                i += 1;
                 Ok(())
             })
             .unwrap();
@@ -517,13 +601,15 @@ mod tests {
         );
 
         let args = [wkb_array_value.clone(), wkb_scalar_value.clone()];
-        let executor = GenericExecutor::new(&arg_types, &args);
+        let executor = WkbExecutor::new(&arg_types, &args);
 
         let mut wkt_out = String::new();
+        let mut i = 0;
         executor
-            .execute_wkb_wkb_void(|i, maybe_geom0, maybe_geom1| {
+            .execute_wkb_wkb_void(|maybe_geom0, maybe_geom1| {
                 write_to_test_output(&mut wkt_out, i, maybe_geom0)?;
                 write_to_test_output(&mut wkt_out, i, maybe_geom1)?;
+                i += 1;
                 Ok(())
             })
             .unwrap();
@@ -533,26 +619,30 @@ mod tests {
         );
 
         let args = [wkb_array_value.clone(), wkb_array_value.clone()];
-        let executor = GenericExecutor::new(&arg_types, &args);
+        let executor = WkbExecutor::new(&arg_types, &args);
 
         let mut wkt_out = String::new();
+        let mut i = 0;
         executor
-            .execute_wkb_wkb_void(|i, maybe_geom0, maybe_geom1| {
+            .execute_wkb_wkb_void(|maybe_geom0, maybe_geom1| {
                 write_to_test_output(&mut wkt_out, i, maybe_geom0)?;
                 write_to_test_output(&mut wkt_out, i, maybe_geom1)?;
+                i += 1;
                 Ok(())
             })
             .unwrap();
         assert_eq!(wkt_out, " 0: POINT(1 2) 0: POINT(1 2) 1: None 1: None");
 
         let args = [wkb_scalar_null_value.clone(), wkb_scalar_value.clone()];
-        let executor = GenericExecutor::new(&arg_types, &args);
+        let executor = WkbExecutor::new(&arg_types, &args);
 
         let mut wkt_out = String::new();
+        let mut i = 0;
         executor
-            .execute_wkb_wkb_void(|i, maybe_geom0, maybe_geom1| {
+            .execute_wkb_wkb_void(|maybe_geom0, maybe_geom1| {
                 write_to_test_output(&mut wkt_out, i, maybe_geom0)?;
                 write_to_test_output(&mut wkt_out, i, maybe_geom1)?;
+                i += 1;
                 Ok(())
             })
             .unwrap();
@@ -562,33 +652,33 @@ mod tests {
     #[test]
     fn wkb_array_errors() {
         let not_geometry_array: ArrayRef = create_array!(Int32, [0, 1, 2]);
-        let err = ColumnarValue::Array(not_geometry_array.clone())
-            .iter_as_wkb(
-                &SedonaType::Arrow(DataType::Int32),
-                3,
-                |_, _| unreachable!(),
-            )
+        let err = not_geometry_array
+            .iter_as_wkb(&SedonaType::Arrow(DataType::Int32), 3, |_| unreachable!())
             .unwrap_err();
         assert!(err.message().contains("Can't iterate over"));
 
-        let err = ColumnarValue::Array(not_geometry_array.clone())
+        let err = not_geometry_array
             .iter_as_wkb(
                 &SedonaType::Arrow(DataType::Int32),
                 1000000,
-                |_, _| unreachable!(),
+                |_| unreachable!(),
             )
             .unwrap_err();
         assert!(err
             .message()
             .contains("Expected 1000000 items but got Array with 3 items"));
 
+        let factory0 = WkbGeometryFactory::default();
+        let factory1 = WkbGeometryFactory::default();
         let err = iter_wkb_wkb_array(
+            &factory0,
+            &factory1,
             (
                 &SedonaType::Arrow(DataType::Int32),
                 &SedonaType::Arrow(DataType::Int32),
             ),
             (&not_geometry_array, &not_geometry_array),
-            |_, _, _| unreachable!(),
+            |_, _| unreachable!(),
         )
         .unwrap_err();
         assert!(err.message().contains(
@@ -598,56 +688,42 @@ mod tests {
 
     #[test]
     fn wkb_scalar() {
-        assert!(ScalarValue::Binary(None).scalar_as_wkb().unwrap().is_none());
+        let factory = WkbGeometryFactory::default();
+        assert!(ScalarValue::Binary(None)
+            .scalar_from_factory(&factory)
+            .unwrap()
+            .is_none());
 
         let mut wkt_out = String::new();
         let binary_scalar = ScalarValue::Binary(Some(POINT.to_vec()));
 
-        let wkb_item = binary_scalar.scalar_as_wkb().unwrap().unwrap();
+        let wkb_item = binary_scalar
+            .scalar_from_factory(&factory)
+            .unwrap()
+            .unwrap();
         wkt::to_wkt::write_geometry(&mut wkt_out, &wkb_item).unwrap();
         assert_eq!(wkt_out, "POINT(1 2)");
         drop(wkb_item);
-
-        let mut wkt_out = String::new();
-        ColumnarValue::Scalar(binary_scalar)
-            .iter_as_wkb(&WKB_GEOMETRY, 1, |i, maybe_geom| {
-                write_to_test_output(&mut wkt_out, i, maybe_geom.as_ref()).unwrap();
-                Ok(())
-            })
-            .unwrap();
-        assert_eq!(wkt_out, " 0: POINT(1 2)");
 
         let mut wkt_out = String::new();
         let binary_scalar = ScalarValue::BinaryView(Some(POINT.to_vec()));
 
-        let wkb_item = binary_scalar.scalar_as_wkb().unwrap().unwrap();
+        let wkb_item = binary_scalar
+            .scalar_from_factory(&factory)
+            .unwrap()
+            .unwrap();
         wkt::to_wkt::write_geometry(&mut wkt_out, &wkb_item).unwrap();
         assert_eq!(wkt_out, "POINT(1 2)");
         drop(wkb_item);
 
-        let mut wkt_out = String::new();
-        ColumnarValue::Scalar(binary_scalar)
-            .iter_as_wkb(&WKB_VIEW_GEOMETRY, 1, |i, maybe_geom| {
-                write_to_test_output(&mut wkt_out, i, maybe_geom.as_ref()).unwrap();
-                Ok(())
-            })
-            .unwrap();
-        assert_eq!(wkt_out, " 0: POINT(1 2)");
+        let err = ScalarValue::Binary(Some(vec![]))
+            .scalar_from_factory(&factory)
+            .unwrap_err();
+        assert_eq!(err.message(), "failed to fill whole buffer");
 
-        let err = ScalarValue::Date32(Some(1)).scalar_as_wkb().unwrap_err();
+        let err = ScalarValue::Date32(Some(1))
+            .scalar_from_factory(&factory)
+            .unwrap_err();
         assert!(err.message().contains("Can't iterate over"));
-    }
-
-    #[test]
-    fn wkb_item() {
-        assert!(parse_wkb_item(None).unwrap().is_none());
-
-        let wkb_item = parse_wkb_item(Some(&POINT)).unwrap().unwrap();
-        let mut wkt_out = String::new();
-        wkt::to_wkt::write_geometry(&mut wkt_out, &wkb_item).unwrap();
-        assert_eq!(wkt_out, "POINT(1 2)");
-
-        let err = parse_wkb_item(Some(&[])).unwrap_err();
-        assert_eq!(err.message(), "failed to fill whole buffer")
     }
 }

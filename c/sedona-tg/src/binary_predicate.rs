@@ -1,14 +1,13 @@
-use std::{iter::zip, sync::Arc};
+use std::sync::Arc;
 
 use arrow_array::builder::BooleanBuilder;
 use arrow_schema::DataType;
-use datafusion_common::{cast::as_binary_view_array, error::Result, internal_err, ScalarValue};
+use datafusion_common::error::Result;
 use datafusion_expr::ColumnarValue;
 use sedona_expr::scalar_udf::{ArgMatcher, ScalarKernelRef, SedonaScalarKernel};
-use sedona_functions::executor::GenericExecutor;
 use sedona_schema::datatypes::SedonaType;
 
-use crate::tg;
+use crate::{executor::TgGeomExecutor, tg};
 
 /// ST_Equals() implementation using tg
 pub fn st_equals_impl() -> ScalarKernelRef {
@@ -50,19 +49,9 @@ pub fn st_touches_impl() -> ScalarKernelRef {
     Arc::new(TgPredicate::<tg::Touches>::default())
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct TgPredicate<Op> {
     _op: Op,
-    index: tg::IndexType,
-}
-
-impl<Op: Default> Default for TgPredicate<Op> {
-    fn default() -> Self {
-        Self {
-            _op: Default::default(),
-            index: tg::IndexType::YStripes,
-        }
-    }
 }
 
 impl<Op: tg::BinaryPredicate> SedonaScalarKernel for TgPredicate<Op> {
@@ -80,102 +69,19 @@ impl<Op: tg::BinaryPredicate> SedonaScalarKernel for TgPredicate<Op> {
         arg_types: &[SedonaType],
         args: &[ColumnarValue],
     ) -> Result<ColumnarValue> {
-        let executor = GenericExecutor::new(arg_types, args);
+        let executor = TgGeomExecutor::new(arg_types, args);
         let mut builder = BooleanBuilder::with_capacity(executor.num_iterations());
-
-        eval_value_value::<Op>(
-            &args[0],
-            &args[1],
-            executor.num_iterations(),
-            self.index,
-            &mut builder,
-        )?;
-
+        executor.execute_wkb_wkb_void(|lhs, rhs| {
+            match (lhs, rhs) {
+                (Some(lhs), Some(rhs)) => {
+                    builder.append_value(Op::evaluate(lhs, rhs));
+                }
+                _ => builder.append_null(),
+            };
+            Ok(())
+        })?;
         executor.finish(Arc::new(builder.finish()))
     }
-}
-
-fn eval_value_value<Op: tg::BinaryPredicate>(
-    lhs: &ColumnarValue,
-    rhs: &ColumnarValue,
-    iterations: usize,
-    index: tg::IndexType,
-    builder: &mut BooleanBuilder,
-) -> Result<()> {
-    let lhs = lhs.cast_to(&DataType::BinaryView, None)?;
-    let rhs = rhs.cast_to(&DataType::BinaryView, None)?;
-    match (&lhs, &rhs) {
-        (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar_value))
-        | (ColumnarValue::Scalar(scalar_value), ColumnarValue::Array(array)) => {
-            let array = as_binary_view_array(&array)?;
-
-            if let ScalarValue::BinaryView(value) = scalar_value {
-                return eval_array_scalar::<Op>(
-                    array.iter(),
-                    value.as_deref(),
-                    tg::IndexType::Unindexed,
-                    index,
-                    builder,
-                );
-            } else {
-                return internal_err!("Unexpected scalar value: {scalar_value:?}");
-            }
-        }
-        _ => {}
-    }
-
-    let lhs_array = lhs.to_array(iterations)?;
-    let rhs_array = rhs.to_array(iterations)?;
-    let lhs = as_binary_view_array(&lhs_array)?;
-    let rhs = as_binary_view_array(&rhs_array)?;
-
-    eval_array_array::<Op>(lhs.iter(), rhs.iter(), index, index, builder)
-}
-
-fn eval_array_scalar<'a, 'b, Op: tg::BinaryPredicate>(
-    lhs_iter: impl ExactSizeIterator<Item = Option<&'a [u8]>>,
-    rhs: Option<&'b [u8]>,
-    lhs_index: tg::IndexType,
-    rhs_index: tg::IndexType,
-    builder: &mut BooleanBuilder,
-) -> Result<()> {
-    if let Some(rhs) = rhs {
-        let rhs_geom = tg::Geom::parse_wkb(rhs, rhs_index)?;
-
-        for lhs in lhs_iter {
-            if let Some(lhs) = lhs {
-                let lhs_geom = tg::Geom::parse_wkb(lhs, lhs_index)?;
-                builder.append_value(Op::evaluate(&lhs_geom, &rhs_geom));
-            } else {
-                builder.append_null();
-            }
-        }
-    } else {
-        builder.append_nulls(lhs_iter.len());
-    }
-
-    Ok(())
-}
-
-fn eval_array_array<'a, 'b, Op: tg::BinaryPredicate>(
-    lhs_iter: impl ExactSizeIterator<Item = Option<&'a [u8]>>,
-    rhs_iter: impl ExactSizeIterator<Item = Option<&'b [u8]>>,
-    lhs_index: tg::IndexType,
-    rhs_index: tg::IndexType,
-    builder: &mut BooleanBuilder,
-) -> Result<()> {
-    for (lhs, rhs) in zip(lhs_iter, rhs_iter) {
-        match (lhs, rhs) {
-            (Some(lhs), Some(rhs)) => {
-                let lhs_geom = tg::Geom::parse_wkb(lhs, lhs_index)?;
-                let rhs_geom = tg::Geom::parse_wkb(rhs, rhs_index)?;
-                builder.append_value(Op::evaluate(&lhs_geom, &rhs_geom));
-            }
-            _ => builder.append_null(),
-        }
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

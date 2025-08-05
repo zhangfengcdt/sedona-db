@@ -1,41 +1,47 @@
-use datafusion_common::{error::Result, not_impl_err};
-use datafusion_expr::ColumnarValue;
+use datafusion_common::{error::Result, not_impl_err, DataFusionError};
 use geo_traits::{
     to_geo::{
         ToGeoLineString, ToGeoMultiLineString, ToGeoMultiPoint, ToGeoMultiPolygon, ToGeoPoint,
         ToGeoPolygon,
     },
-    GeometryTrait,
+    GeometryCollectionTrait, GeometryTrait,
     GeometryType::*,
 };
 use geo_types::Geometry;
-use sedona_functions::executor::IterGeo;
-use sedona_schema::datatypes::SedonaType;
+use sedona_functions::executor::{GenericExecutor, GeometryFactory};
 
-pub fn scalar_arg_to_geometry(
-    arg_type: &SedonaType,
-    arg: &ColumnarValue,
-) -> Result<Option<Geometry>> {
-    let mut out: Option<Geometry> = None;
-    arg.iter_as_wkb(arg_type, 1, |_i, maybe_item| -> Result<()> {
-        match maybe_item {
-            Some(item) => {
-                out = Some(item_to_geometry(item)?);
-            }
-            None => {
-                out = None;
-            }
-        }
+/// A [GenericExecutor] that iterates over [Geometry] objects
+pub type GeoTypesExecutor<'a, 'b> =
+    GenericExecutor<'a, 'b, GeoTypesGeometryFactory, GeoTypesGeometryFactory>;
 
-        Ok(())
-    })?;
+/// A [GeometryFactory] for use with the [GenericExecutor] that iterates over [Geometry]
+/// objects.
+#[derive(Default)]
+pub struct GeoTypesGeometryFactory {}
 
-    Ok(out)
+impl GeometryFactory for GeoTypesGeometryFactory {
+    type Geom<'a> = Geometry;
+
+    fn try_from_wkb<'a>(&self, wkb_bytes: &'a [u8]) -> Result<Self::Geom<'a>> {
+        let wkb =
+            wkb::reader::read_wkb(wkb_bytes).map_err(|e| DataFusionError::External(Box::new(e)))?;
+        item_to_geometry(wkb)
+    }
 }
 
-pub fn item_to_geometry(item_a: impl GeometryTrait<T = f64>) -> Result<Geometry> {
-    if let Some(geom_a) = to_geometry(item_a) {
-        Ok(geom_a)
+/// Convert a [GeometryTrait] into a [Geometry]
+///
+/// This implementation avoid issues with some versions of the Rust compiler in release mode.
+/// Note that [Geometry] does not support all valid [GeometryTrait] objects (notably: the
+/// empty point and a multipoint with an empty child).
+///
+/// This implementation does not currently support arbitrarily recursive GeometryCollections
+/// (the recursion for which is the reason some versions of the Rust compiler fail to
+/// compile the version of this function in the geo-traits crate). This implementation limits
+/// the recursion to 1 level deep (e.g., GEOMETRYCOLLECTION (...)).
+pub fn item_to_geometry(geo: impl GeometryTrait<T = f64>) -> Result<Geometry> {
+    if let Some(geo) = to_geometry(geo) {
+        Ok(geo)
     } else {
         not_impl_err!(
             "geo kernel implementation on {}, {}, or {} not supported",
@@ -48,8 +54,7 @@ pub fn item_to_geometry(item_a: impl GeometryTrait<T = f64>) -> Result<Geometry>
 
 // GeometryCollection causes issues because it has a recursive definition and won't work
 // with cargo run --release. Thus, we need our own version of this that limits the
-// recursion supported in a GeometryCollection. This version just disallows collections
-// for now.
+// recursion supported in a GeometryCollection.
 fn to_geometry(item: impl GeometryTrait<T = f64>) -> Option<Geometry> {
     match item.as_type() {
         Point(geom) => geom.try_to_point().map(Geometry::Point),
@@ -58,45 +63,60 @@ fn to_geometry(item: impl GeometryTrait<T = f64>) -> Option<Geometry> {
         MultiPoint(geom) => geom.try_to_multi_point().map(Geometry::MultiPoint),
         MultiLineString(geom) => Some(Geometry::MultiLineString(geom.to_multi_line_string())),
         MultiPolygon(geom) => Some(Geometry::MultiPolygon(geom.to_multi_polygon())),
+        GeometryCollection(geom) => {
+            let geometries = geom
+                .geometries()
+                .filter_map(|child| match child.as_type() {
+                    Point(geom) => geom.try_to_point().map(Geometry::Point),
+                    LineString(geom) => Some(Geometry::LineString(geom.to_line_string())),
+                    Polygon(geom) => Some(Geometry::Polygon(geom.to_polygon())),
+                    MultiPoint(geom) => geom.try_to_multi_point().map(Geometry::MultiPoint),
+                    MultiLineString(geom) => {
+                        Some(Geometry::MultiLineString(geom.to_multi_line_string()))
+                    }
+                    MultiPolygon(geom) => Some(Geometry::MultiPolygon(geom.to_multi_polygon())),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+
+            // If any child conversions failed, also return None
+            if geometries.len() != geom.num_geometries() {
+                return None;
+            }
+
+            Some(Geometry::GeometryCollection(geo_types::GeometryCollection(
+                geometries,
+            )))
+        }
         _ => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use datafusion_expr::ColumnarValue;
     use geo_traits::to_geo::ToGeoGeometry;
     use rstest::rstest;
     use sedona_schema::datatypes::WKB_GEOMETRY;
-    use sedona_testing::create::create_scalar_storage;
+    use sedona_testing::create::create_array_storage;
     use std::str::FromStr;
     use wkt::Wkt;
 
     use super::*;
 
     #[test]
-    fn scalar_null() {
-        assert!(scalar_arg_to_geometry(
-            &WKB_GEOMETRY,
-            &create_scalar_storage(None, &WKB_GEOMETRY).into(),
-        )
-        .unwrap()
-        .is_none());
-    }
-
-    #[test]
     fn unsupported() {
-        let err = scalar_arg_to_geometry(
-            &WKB_GEOMETRY,
-            &create_scalar_storage(Some("POINT EMPTY"), &WKB_GEOMETRY).into(),
-        )
-        .unwrap_err();
+        let unsupported = Wkt::from_str("POINT EMPTY").unwrap();
+        let err = item_to_geometry(unsupported).unwrap_err();
         assert!(err.message().starts_with("geo kernel implementation"));
 
-        let err = scalar_arg_to_geometry(
-            &WKB_GEOMETRY,
-            &create_scalar_storage(Some("GEOMETRYCOLLECTION (POINT (1 2))"), &WKB_GEOMETRY).into(),
-        )
-        .unwrap_err();
+        let unsupported =
+            Wkt::from_str("GEOMETRYCOLLECTION (GEOMETRYCOLLECTION(POINT (1 2)))").unwrap();
+        let err = item_to_geometry(unsupported).unwrap_err();
+        assert!(err.message().starts_with("geo kernel implementation"));
+
+        let unsupported = Wkt::from_str("GEOMETRYCOLLECTION (POINT EMPTY)").unwrap();
+        let err = item_to_geometry(unsupported).unwrap_err();
         assert!(err.message().starts_with("geo kernel implementation"));
     }
 
@@ -108,11 +128,47 @@ mod tests {
             "POLYGON ((0 0, 1 0, 0 1, 0 0))",
             "MULTIPOINT (1 2, 3 4)",
             "MULTILINESTRING ((1 2, 3 4))",
-            "MULTIPOLYGON (((0 0, 1 0, 0 1, 0 0)))"
+            "MULTIPOLYGON (((0 0, 1 0, 0 1, 0 0)))",
+            "GEOMETRYCOLLECTION(POINT (1 2))"
         )]
         wkt_value: &str,
     ) {
         let geom = Wkt::<f64>::from_str(wkt_value).unwrap();
         assert_eq!(geom.to_geometry(), to_geometry(geom).unwrap())
+    }
+
+    #[test]
+    fn test_executor() {
+        let items = vec![
+            Some("POINT (0 1)"),
+            Some("LINESTRING (1 2, 3 4)"),
+            Some("POLYGON ((0 0, 1 0, 0 1, 0 0))"),
+            Some("MULTIPOINT (1 2, 3 4)"),
+            Some("MULTILINESTRING ((1 2, 3 4))"),
+            Some("MULTIPOLYGON (((0 0, 1 0, 0 1, 0 0)))"),
+            Some("GEOMETRYCOLLECTION(POINT (1 2))"),
+            None,
+        ];
+        let args = vec![ColumnarValue::Array(create_array_storage(
+            &items,
+            &WKB_GEOMETRY,
+        ))];
+
+        let expected_items = items
+            .iter()
+            .map(|maybe_item| {
+                maybe_item.map(|item| Wkt::<f64>::from_str(item).unwrap().to_geometry())
+            })
+            .collect::<Vec<_>>();
+
+        let mut actual_items = Vec::new();
+        let executor = GeoTypesExecutor::new(&[WKB_GEOMETRY], &args);
+        executor
+            .execute_wkb_void(|geo| {
+                actual_items.push(geo);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(actual_items, expected_items)
     }
 }

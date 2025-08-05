@@ -101,7 +101,8 @@ impl EvaluatedGeometryArray {
         let sedona_type: SedonaType = geometry_array.data_type().try_into()?;
         let wkb_array = sedona_type.unwrap_array(&geometry_array)?;
         let mut wkbs = Vec::with_capacity(num_rows);
-        wkb_array.iter_as_wkb(&sedona_type, num_rows, |idx, wkb_opt| {
+        let mut idx = 0;
+        wkb_array.iter_as_wkb(&sedona_type, num_rows, |wkb_opt| {
             if let Some(wkb) = &wkb_opt {
                 if let Some(rect) = wkb.bounding_rect() {
                     let min = rect.min();
@@ -113,6 +114,7 @@ impl EvaluatedGeometryArray {
                 }
             }
             wkbs.push(wkb_opt);
+            idx += 1;
             Ok(())
         })?;
 

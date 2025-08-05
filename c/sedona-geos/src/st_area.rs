@@ -6,7 +6,7 @@ use datafusion_common::{error::Result, DataFusionError};
 use datafusion_expr::ColumnarValue;
 use geos::Geom;
 use sedona_expr::scalar_udf::{ArgMatcher, ScalarKernelRef, SedonaScalarKernel};
-use sedona_functions::executor::GenericExecutor;
+use sedona_functions::executor::WkbExecutor;
 use sedona_schema::datatypes::SedonaType;
 use wkb::reader::Wkb;
 
@@ -33,12 +33,12 @@ impl SedonaScalarKernel for STArea {
         arg_types: &[SedonaType],
         args: &[ColumnarValue],
     ) -> Result<ColumnarValue> {
-        let executor = GenericExecutor::new(arg_types, args);
+        let executor = WkbExecutor::new(arg_types, args);
         let mut builder = Float64Builder::with_capacity(executor.num_iterations());
-        executor.execute_wkb_void(|_i, maybe_wkb| {
+        executor.execute_wkb_void(|maybe_wkb| {
             match maybe_wkb {
                 Some(wkb) => {
-                    builder.append_value(invoke_scalar(wkb)?);
+                    builder.append_value(invoke_scalar(&wkb)?);
                 }
                 _ => builder.append_null(),
             }

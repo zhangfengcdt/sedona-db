@@ -1,6 +1,6 @@
 use std::{sync::Arc, vec};
 
-use crate::executor::GenericExecutor;
+use crate::executor::WkbExecutor;
 use arrow_array::builder::Float64Builder;
 use arrow_schema::DataType;
 use datafusion_common::error::{DataFusionError, Result};
@@ -82,15 +82,15 @@ impl SedonaScalarKernel for STXy {
             _ => unreachable!(),
         };
 
-        let executor = GenericExecutor::new(arg_types, args);
+        let executor = WkbExecutor::new(arg_types, args);
         let mut builder = Float64Builder::with_capacity(executor.num_iterations());
 
         // We can do quite a lot better than this with some vectorized WKB processing,
         // but for now we just do a slow iteration
-        executor.execute_wkb_void(|_i, maybe_item| {
+        executor.execute_wkb_void(|maybe_item| {
             match maybe_item {
                 Some(item) => {
-                    builder.append_option(invoke_scalar(item, dim_index)?);
+                    builder.append_option(invoke_scalar(&item, dim_index)?);
                 }
                 None => builder.append_null(),
             }

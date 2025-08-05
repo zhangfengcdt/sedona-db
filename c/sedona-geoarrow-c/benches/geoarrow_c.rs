@@ -30,7 +30,7 @@ pub fn benchmark_st_geomfromwkb(c: &mut Criterion) {
         .unwrap();
     let sizes = batches.iter().map(|batch| batch.len()).collect::<Vec<_>>();
 
-    c.bench_function("st_geomfromwkb", |b| {
+    c.bench_function("geoarrow_c-st_geomfromwkb", |b| {
         b.iter(|| {
             let binary = binary.clone();
             for i in 0..batches.len() {
@@ -58,7 +58,7 @@ pub fn benchmark_st_geomfromwkt(c: &mut Criterion) {
         .unwrap();
     let sizes = batches.iter().map(|batch| batch.len()).collect::<Vec<_>>();
 
-    c.bench_function("st_geomfromwkt", |b| {
+    c.bench_function("geoarrow_c-st_geomfromwkt", |b| {
         b.iter(|| {
             let text = text.clone();
             for i in 0..batches.len() {
@@ -79,7 +79,7 @@ pub fn benchmark_st_astext(c: &mut Criterion) {
     let batches = read_geoarrow_data_geometry("ns-water", "water-junc", &options).unwrap();
     let sizes = batches.iter().map(|batch| batch.len()).collect::<Vec<_>>();
 
-    c.bench_function("st_astext-wkb_points", |b| {
+    c.bench_function("geoarrow_c-st_astext-wkb_points", |b| {
         b.iter(|| {
             let mut out: usize = 0;
 
@@ -116,7 +116,7 @@ pub fn benchmark_st_geomfromwkb_via_ffi(c: &mut Criterion) {
         .unwrap();
     let sizes = batches.iter().map(|batch| batch.len()).collect::<Vec<_>>();
 
-    c.bench_function("st_geomfromwkb_via_ffi", |b| {
+    c.bench_function("geoarrow_c-st_geomfromwkb_via_ffi", |b| {
         b.iter(|| {
             let binary = binary.clone();
             for i in 0..batches.len() {

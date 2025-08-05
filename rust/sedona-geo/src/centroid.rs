@@ -3,8 +3,11 @@
 use datafusion_common::{error::DataFusionError, Result};
 use geo_generic_alg::Centroid;
 use geo_generic_alg::HasDimensions;
-use geo_traits::to_geo::ToGeoGeometry;
-use wkb::reader::Wkb;
+use geo_traits::CoordTrait;
+use geo_traits::GeometryTrait;
+use geo_traits::PointTrait;
+
+use crate::to_geo::item_to_geometry;
 
 /// Extract the centroid from a WKB geometry in 2D space.
 ///
@@ -19,17 +22,18 @@ use wkb::reader::Wkb;
 /// * `Ok((x, y))` - The centroid coordinates
 /// * `Err` - If the WKB cannot be parsed or no valid centroid can be extracted
 ///
-pub fn extract_centroid_2d(wkb: &Wkb) -> Result<(f64, f64)> {
-    // Convert WKB to geometry
-    let geom = wkb
-        .try_to_geometry()
-        .ok_or_else(|| DataFusionError::Internal("Cannot parse WKB geometry".to_string()))?;
-
-    // For points, return the coordinate directly
-    match geom {
-        geo_types::Geometry::Point(point) => Ok((point.x(), point.y())),
+pub fn extract_centroid_2d(geo: impl GeometryTrait<T = f64>) -> Result<(f64, f64)> {
+    match geo.as_type() {
+        geo_traits::GeometryType::Point(point) => {
+            if let Some(coord) = PointTrait::coord(point) {
+                Ok((coord.x(), coord.y()))
+            } else {
+                Ok((f64::NAN, f64::NAN))
+            }
+        }
         // For other geometries, compute centroid
         _ => {
+            let geom = item_to_geometry(geo)?;
             if let Some(centroid) = geom.centroid() {
                 Ok((centroid.x(), centroid.y()))
             } else if geom.is_empty() {
@@ -48,6 +52,7 @@ pub fn extract_centroid_2d(wkb: &Wkb) -> Result<(f64, f64)> {
 mod tests {
     use super::*;
     use sedona_testing::create::make_wkb;
+    use wkb::reader::Wkb;
 
     fn create_wkb_from_wkt(wkt: &str) -> Vec<u8> {
         make_wkb(wkt)

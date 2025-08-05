@@ -6,7 +6,7 @@ use datafusion_common::error::Result;
 use datafusion_expr::ColumnarValue;
 use geo_generic_alg::Intersects;
 use sedona_expr::scalar_udf::{ArgMatcher, ScalarKernelRef, SedonaScalarKernel};
-use sedona_functions::executor::GenericExecutor;
+use sedona_functions::executor::WkbExecutor;
 use sedona_schema::datatypes::SedonaType;
 use wkb::reader::Wkb;
 
@@ -33,9 +33,9 @@ impl SedonaScalarKernel for STIntersects {
         arg_types: &[SedonaType],
         args: &[ColumnarValue],
     ) -> Result<ColumnarValue> {
-        let executor = GenericExecutor::new(arg_types, args);
+        let executor = WkbExecutor::new(arg_types, args);
         let mut builder = BooleanBuilder::with_capacity(executor.num_iterations());
-        executor.execute_wkb_wkb_void(|_i, maybe_wkb0, maybe_wkb1| {
+        executor.execute_wkb_wkb_void(|maybe_wkb0, maybe_wkb1| {
             match (maybe_wkb0, maybe_wkb1) {
                 (Some(wkb0), Some(wkb1)) => {
                     builder.append_value(invoke_scalar(wkb0, wkb1)?);

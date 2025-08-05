@@ -11,7 +11,7 @@ use datafusion_expr::{
 use sedona_expr::scalar_udf::{ArgMatcher, SedonaScalarKernel, SedonaScalarUDF};
 use sedona_schema::datatypes::{SedonaType, WKB_GEOGRAPHY, WKB_GEOMETRY};
 
-use crate::executor::GenericExecutor;
+use crate::executor::WkbExecutor;
 
 /// ST_Point() scalar UDF implementation
 ///
@@ -77,7 +77,7 @@ impl SedonaScalarKernel for STGeoFromPoint {
         arg_types: &[SedonaType],
         args: &[ColumnarValue],
     ) -> Result<ColumnarValue> {
-        let executor = GenericExecutor::new(arg_types, args);
+        let executor = WkbExecutor::new(arg_types, args);
 
         let x = &args[0].cast_to(&DataType::Float64, None)?;
         let y = &args[1].cast_to(&DataType::Float64, None)?;

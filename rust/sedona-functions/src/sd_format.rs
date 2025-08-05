@@ -1,6 +1,6 @@
 use std::{sync::Arc, vec};
 
-use crate::executor::GenericExecutor;
+use crate::executor::WkbExecutor;
 use arrow_array::builder::StringBuilder;
 use arrow_schema::DataType;
 use datafusion_common::{
@@ -113,7 +113,7 @@ impl SedonaScalarKernel for SDFormatGeometry {
             }
         }
 
-        let executor = GenericExecutor::new(&arg_types[0..1], &args[0..1]);
+        let executor = WkbExecutor::new(&arg_types[0..1], &args[0..1]);
 
         let min_output_size = match maybe_width_hint {
             Some(width_hint) => executor.num_iterations() * width_hint,
@@ -123,7 +123,7 @@ impl SedonaScalarKernel for SDFormatGeometry {
         // Initialize an output builder of the appropriate type
         let mut builder = StringBuilder::with_capacity(executor.num_iterations(), min_output_size);
 
-        executor.execute_wkb_void(|_i, maybe_item| {
+        executor.execute_wkb_void(|maybe_item| {
             match maybe_item {
                 Some(item) => {
                     let mut builder_wrapper = LimitedSizeOutput::new(

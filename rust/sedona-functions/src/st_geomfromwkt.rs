@@ -12,7 +12,7 @@ use sedona_schema::datatypes::{SedonaType, WKB_GEOGRAPHY, WKB_GEOMETRY};
 use wkb::writer::write_geometry;
 use wkt::Wkt;
 
-use crate::executor::GenericExecutor;
+use crate::executor::WkbExecutor;
 
 /// ST_GeomFromWKT() UDF implementation
 ///
@@ -78,7 +78,7 @@ impl SedonaScalarKernel for STGeoFromWKT {
         arg_types: &[SedonaType],
         args: &[ColumnarValue],
     ) -> Result<ColumnarValue> {
-        let executor = GenericExecutor::new(arg_types, args);
+        let executor = WkbExecutor::new(arg_types, args);
         let arg_array = args[0]
             .cast_to(&DataType::Utf8View, None)?
             .to_array(executor.num_iterations())?;

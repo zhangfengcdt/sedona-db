@@ -4,7 +4,7 @@ use arrow_schema::DataType;
 use datafusion_common::error::Result;
 use datafusion_expr::ColumnarValue;
 use sedona_expr::scalar_udf::{ArgMatcher, ScalarKernelRef, SedonaScalarKernel};
-use sedona_functions::executor::GenericExecutor;
+use sedona_functions::executor::WkbExecutor;
 use sedona_schema::datatypes::{SedonaType, WKB_GEOGRAPHY, WKB_GEOMETRY};
 
 use crate::geoarrow_c::{ArrayReader, ArrayWriter, CError, Visitor};
@@ -95,7 +95,7 @@ impl SedonaScalarKernel for GeoArrowCCast {
         arg_types: &[SedonaType],
         args: &[ColumnarValue],
     ) -> Result<ColumnarValue> {
-        let executor = GenericExecutor::new(arg_types, args);
+        let executor = WkbExecutor::new(arg_types, args);
         let array_in = args[0].to_array(executor.num_iterations())?;
 
         let mut error = CError::new();
