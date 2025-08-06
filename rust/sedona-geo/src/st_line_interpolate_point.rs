@@ -93,8 +93,6 @@ mod tests {
 
     #[rstest]
     fn udf(#[values(WKB_GEOMETRY, WKB_VIEW_GEOMETRY)] sedona_type: SedonaType) {
-        use sedona_testing::create::create_scalar;
-
         let mut udf = st_area_udf();
         udf.add_kernel(st_line_interpolate_point_impl());
         let tester = ScalarUdfTester::new(
@@ -106,10 +104,7 @@ mod tests {
 
         assert_scalar_equal_wkb_geometry(
             &tester
-                .invoke_scalar_scalar(
-                    create_scalar(Some("LINESTRING (0 0, 1 0)"), &WKB_GEOMETRY),
-                    0.5,
-                )
+                .invoke_scalar_scalar("LINESTRING (0 0, 1 0)", 0.5)
                 .unwrap(),
             Some("POINT (0.5 0)"),
         );
