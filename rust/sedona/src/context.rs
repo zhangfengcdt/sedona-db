@@ -35,6 +35,7 @@ use crate::{
     catalog::DynamicObjectStoreCatalog,
     object_storage::ensure_object_store_registered,
     projection::{unwrap_df, wrap_df},
+    random_geometry_provider::RandomGeometryFunction,
     show::{show_batches, DisplayTableOptions},
 };
 use crate::{exec::create_plan_from_sql, projection::unwrap_stream};
@@ -106,6 +107,12 @@ impl SedonaContext {
             ctx,
             functions: FunctionSet::new(),
         };
+
+        // Register table functions
+        out.ctx.register_udtf(
+            "sd_random_geometry",
+            Arc::new(RandomGeometryFunction::default()),
+        );
 
         // Always register default function set
         out.register_function_set(sedona_functions::register::default_function_set());

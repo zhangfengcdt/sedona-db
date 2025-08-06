@@ -4,6 +4,7 @@ mod exec;
 pub mod ffi;
 mod object_storage;
 mod projection;
+pub mod random_geometry_provider;
 pub mod reader;
 pub mod record_batch_reader_provider;
 pub mod show;
