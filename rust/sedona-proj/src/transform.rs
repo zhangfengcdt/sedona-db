@@ -64,14 +64,14 @@ impl ProjTransform {
 }
 
 impl CrsTransform for ProjTransform {
-    fn transform_coords(
-        &mut self,
-        coords: &mut Vec<(f64, f64)>,
-    ) -> Result<(), SedonaGeometryError> {
-        self.proj
-            .convert_array(coords)
-            .map_err(|e| SedonaGeometryError::Invalid(format!("PROJ transformation failed: {e}")))
-            .map(|_| ())?;
+    fn transform_coord(&mut self, coord: &mut (f64, f64)) -> Result<(), SedonaGeometryError> {
+        let res = self.proj.convert(*coord).map_err(|e| {
+            SedonaGeometryError::Invalid(format!(
+                "PROJ coordinate transformation failed with error: {e}"
+            ))
+        })?;
+        coord.0 = res.0;
+        coord.1 = res.1;
         Ok(())
     }
 }
@@ -92,11 +92,8 @@ impl ProjCrsToCrsTransform {
 }
 
 impl CrsTransform for ProjCrsToCrsTransform {
-    fn transform_coords(
-        &mut self,
-        coords: &mut Vec<(f64, f64)>,
-    ) -> Result<(), SedonaGeometryError> {
-        self.transform.transform_coords(coords)
+    fn transform_coord(&mut self, coord: &mut (f64, f64)) -> Result<(), SedonaGeometryError> {
+        self.transform.transform_coord(coord)
     }
 }
 
@@ -116,11 +113,8 @@ impl ProjPipelineTransform {
 }
 
 impl CrsTransform for ProjPipelineTransform {
-    fn transform_coords(
-        &mut self,
-        coords: &mut Vec<(f64, f64)>,
-    ) -> Result<(), SedonaGeometryError> {
-        self.transform.transform_coords(coords)
+    fn transform_coord(&mut self, coord: &mut (f64, f64)) -> Result<(), SedonaGeometryError> {
+        self.transform.transform_coord(coord)
     }
 }
 
@@ -132,7 +126,6 @@ mod test {
     use geo_types::Point;
     use sedona_geometry::transform::transform;
     use wkb::reader::read_wkb;
-
     #[test]
     fn proj_crs_to_crs() {
         let engine = ProjCrsEngine;
@@ -178,23 +171,21 @@ mod test {
     }
 
     #[test]
-    fn transform_coords() {
+    fn transform_coord() {
         let engine = ProjCrsEngine;
         let mut trans = engine
             .get_transform_crs_to_crs("EPSG:2230", "EPSG:26946", None, "")
             .unwrap();
 
-        let mut coords = vec![(4_760_096.4, 3_744_293.5), (4_760_096.6, 3_744_293.7)];
-        trans.transform_coords(&mut coords).unwrap();
-        assert_relative_eq!(coords[0].x(), 1_450_880.284_378, epsilon = 1e-6);
-        assert_relative_eq!(coords[0].y(), 1_141_262.941_224, epsilon = 1e-6);
-        assert_relative_eq!(coords[1].x(), 1_450_880.345_339, epsilon = 1e-6);
-        assert_relative_eq!(coords[1].y(), 1_141_263.002_184, epsilon = 1e-6);
+        let mut coord = (4_760_096.4, 3_744_293.5);
+        trans.transform_coord(&mut coord).unwrap();
+        assert_relative_eq!(coord.x(), 1_450_880.284_378, epsilon = 1e-6);
+        assert_relative_eq!(coord.y(), 1_141_262.941_224, epsilon = 1e-6);
 
-        coords = vec![(f64::NAN, f64::NAN)];
-        trans.transform_coords(&mut coords).unwrap();
+        coord = (f64::NAN, f64::NAN);
+        trans.transform_coord(&mut coord).unwrap();
         assert!(
-            coords[0].0.is_nan() && coords[0].1.is_nan(),
+            coord.x().is_nan() && coord.y().is_nan(),
             "Expected NaN coordinates"
         );
     }

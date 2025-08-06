@@ -3,8 +3,10 @@ use std::io::Write;
 use crate::bounding_box::BoundingBox;
 use crate::error::SedonaGeometryError;
 use crate::wkb_factory::{
-    write_wkb_geometrycollection_header, write_wkb_linestring, write_wkb_multilinestring_header,
-    write_wkb_multipoint_header, write_wkb_multipolygon_header, write_wkb_point, write_wkb_polygon,
+    write_wkb_coord, write_wkb_empty_point, write_wkb_geometrycollection_header,
+    write_wkb_linestring_header, write_wkb_multilinestring_header, write_wkb_multipoint_header,
+    write_wkb_multipolygon_header, write_wkb_point_header, write_wkb_polygon_header,
+    write_wkb_polygon_ring_header,
 };
 use geo_traits::{
     CoordTrait, Dimensions, GeometryCollectionTrait, GeometryTrait, GeometryType, LineStringTrait,
@@ -29,16 +31,13 @@ pub trait CrsEngine: Send + Sync {
 
 /// Trait for transforming coordinates in a geometry from one CRS to another.
 pub trait CrsTransform: std::fmt::Debug {
-    fn transform_coords(&mut self, coords: &mut Vec<(f64, f64)>)
-        -> Result<(), SedonaGeometryError>;
+    fn transform_coord(&mut self, coord: &mut (f64, f64)) -> Result<(), SedonaGeometryError>;
 }
 
+/// A boxed trait object for dynamic dispatch of CRS transformations.
 impl CrsTransform for Box<dyn CrsTransform> {
-    fn transform_coords(
-        &mut self,
-        coords: &mut Vec<(f64, f64)>,
-    ) -> Result<(), SedonaGeometryError> {
-        self.as_mut().transform_coords(coords)
+    fn transform_coord(&mut self, coord: &mut (f64, f64)) -> Result<(), SedonaGeometryError> {
+        self.as_mut().transform_coord(coord)
     }
 }
 
@@ -51,84 +50,49 @@ pub fn transform(
     let dims = geom.dim();
     match geom.as_type() {
         GeometryType::Point(pt) => {
-            let (x, y) = if let Some(coord) = pt.coord() {
-                let mut xy_coord = vec![(coord.x(), coord.y())];
-                trans.transform_coords(&mut xy_coord)?;
-                xy_coord[0]
+            if pt.coord().is_some() {
+                write_wkb_point_header(out, dims)?;
+                transform_and_write_coords(out, trans, pt.coord().into_iter())?;
             } else {
-                // NANs are the standard for empty points in WKB
-                (f64::NAN, f64::NAN)
-            };
-            match dims {
-                Dimensions::Xy => write_wkb_point(out, (x, y))?,
-                _ => {
-                    return Err(SedonaGeometryError::Invalid(
-                        "Unsupported dimensions for transformation".to_string(),
-                    ));
-                }
+                write_wkb_empty_point(out, dims)?;
             }
         }
         GeometryType::LineString(ls) => {
-            let mut xy_coords: Vec<(f64, f64)> =
-                ls.coords().map(|coord| (coord.x(), coord.y())).collect();
-            trans.transform_coords(&mut xy_coords)?;
-
-            match dims {
-                Dimensions::Xy => write_wkb_linestring(out, xy_coords.into_iter())?,
-                _ => {
-                    return Err(SedonaGeometryError::Invalid(
-                        "Unsupported dimensions for transformation".to_string(),
-                    ));
-                }
-            }
+            write_wkb_linestring_header(out, ls.dim(), ls.coords().count())?;
+            transform_and_write_coords(out, trans, ls.coords())?;
         }
         GeometryType::Polygon(pl) => {
-            if pl.interiors().count() > 0 {
-                return Err(SedonaGeometryError::Invalid(
-                    "Polygon with interior rings not yet supported for transformation".to_string(),
-                ));
-            }
-            if pl.exterior().is_none() {
-                write_wkb_polygon(out, [].into_iter())?;
-                return Ok(());
-            }
-            let mut ex_xy_coords: Vec<(f64, f64)> = pl
-                .exterior()
-                .unwrap()
-                .coords()
-                .map(|coord| (coord.x(), coord.y()))
-                .collect();
-            trans.transform_coords(&mut ex_xy_coords)?;
+            let num_rings = pl.interiors().count() + pl.exterior().is_some() as usize;
+            write_wkb_polygon_header(out, pl.dim(), num_rings)?;
 
-            match dims {
-                Dimensions::Xy => write_wkb_polygon(out, ex_xy_coords.into_iter())?,
-                _ => {
-                    return Err(SedonaGeometryError::Invalid(
-                        "Unsupported dimensions for transformation".to_string(),
-                    ));
-                }
+            if let Some(exterior) = pl.exterior() {
+                transform_and_write_ring(out, trans, exterior)?;
+            }
+
+            for interior in pl.interiors() {
+                transform_and_write_ring(out, trans, interior)?;
             }
         }
         GeometryType::MultiPoint(multi_pt) => {
-            write_wkb_multipoint_header(out, multi_pt.points().count())?;
+            write_wkb_multipoint_header(out, dims, multi_pt.points().count())?;
             for pt in multi_pt.points() {
                 transform(pt, trans, out)?;
             }
         }
         GeometryType::MultiLineString(multi_ls) => {
-            write_wkb_multilinestring_header(out, multi_ls.line_strings().count())?;
+            write_wkb_multilinestring_header(out, dims, multi_ls.line_strings().count())?;
             for ls in multi_ls.line_strings() {
                 transform(ls, trans, out)?;
             }
         }
         GeometryType::MultiPolygon(multi_pl) => {
-            write_wkb_multipolygon_header(out, multi_pl.polygons().count())?;
+            write_wkb_multipolygon_header(out, dims, multi_pl.polygons().count())?;
             for pl in multi_pl.polygons() {
                 transform(pl, trans, out)?;
             }
         }
         GeometryType::GeometryCollection(collection) => {
-            write_wkb_geometrycollection_header(out, collection.geometries().count())?;
+            write_wkb_geometrycollection_header(out, dims, collection.geometries().count())?;
             for geom in collection.geometries() {
                 transform(geom, trans, out)?;
             }
@@ -143,23 +107,72 @@ pub fn transform(
     Ok(())
 }
 
+fn transform_and_write_ring<'a, L>(
+    buf: &mut impl Write,
+    trans: &mut dyn CrsTransform,
+    ring: L,
+) -> Result<(), SedonaGeometryError>
+where
+    L: LineStringTrait<T = f64> + 'a,
+{
+    let num_points = ring.coords().count();
+    write_wkb_polygon_ring_header(buf, num_points)?;
+    transform_and_write_coords(buf, trans, ring.coords())?;
+    Ok(())
+}
+
+fn transform_and_write_coords<'a, C, I>(
+    buf: &mut impl Write,
+    trans: &mut dyn CrsTransform,
+    coords: I,
+) -> Result<(), SedonaGeometryError>
+where
+    C: CoordTrait<T = f64> + 'a,
+    I: Iterator<Item = C>,
+{
+    for coord in coords {
+        let mut xy: (f64, f64) = (coord.x(), coord.y());
+        trans.transform_coord(&mut xy)?;
+
+        match coord.dim() {
+            Dimensions::Xy => {
+                write_wkb_coord(buf, (xy.0, xy.1))?;
+            }
+            Dimensions::Xyz => {
+                write_wkb_coord(buf, (xy.0, xy.1, coord.nth_or_panic(2)))?;
+            }
+            Dimensions::Xym => {
+                write_wkb_coord(buf, (xy.0, xy.1, coord.nth_or_panic(2)))?;
+            }
+            Dimensions::Xyzm => {
+                write_wkb_coord(
+                    buf,
+                    (xy.0, xy.1, coord.nth_or_panic(2), coord.nth_or_panic(3)),
+                )?;
+            }
+            _ => {
+                return Err(SedonaGeometryError::Invalid(
+                    "Unsupported dimensions for coordinate transformation".to_string(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
+    use std::str::FromStr;
     use wkb::reader::read_wkb;
+    use wkt::Wkt;
 
     #[derive(Debug)]
     struct MockTransform {}
     impl CrsTransform for MockTransform {
-        fn transform_coords(
-            &mut self,
-            coords: &mut Vec<(f64, f64)>,
-        ) -> Result<(), SedonaGeometryError> {
-            // Apply a simple transformation to verify it was called
-            for coord in coords.iter_mut() {
-                coord.0 += 10.0;
-                coord.1 += 20.0;
-            }
+        fn transform_coord(&mut self, coord: &mut (f64, f64)) -> Result<(), SedonaGeometryError> {
+            coord.0 += 10.0;
+            coord.1 += 20.0;
             Ok(())
         }
     }
@@ -175,8 +188,8 @@ mod test {
 
     #[test]
     fn test_transform_linestring() {
-        let linestring = geo_types::LineString::from(vec![(1.0, 2.0), (3.0, 4.0)]);
-        test_transform(linestring, "LINESTRING(11 22,13 24)");
+        let linestring_xy = geo_types::LineString::from(vec![(1.0, 2.0), (3.0, 4.0)]);
+        test_transform(linestring_xy, "LINESTRING(11 22,13 24)");
 
         let empty_linestring = geo_types::LineString::new(vec![]);
         test_transform(empty_linestring, "LINESTRING EMPTY");
@@ -189,6 +202,20 @@ mod test {
             vec![],
         );
         test_transform(polygon, "POLYGON((11 22,13 24,15 26,17 28,11 22))");
+
+        let polygon_multi_rings = geo_types::Polygon::new(
+            geo_types::LineString::from(vec![(1.0, 2.0), (3.0, 4.0), (5.0, 6.0), (7.0, 8.0)]),
+            vec![geo_types::LineString::from(vec![
+                (9.0, 10.0),
+                (11.0, 12.0),
+                (13.0, 14.0),
+                (15.0, 16.0),
+            ])],
+        );
+        test_transform(
+            polygon_multi_rings,
+            "POLYGON((11 22,13 24,15 26,17 28,11 22),(19 30,21 32,23 34,25 36,19 30))",
+        );
 
         let empty_polygon = geo_types::Polygon::new(geo_types::LineString::new(vec![]), vec![]);
         test_transform(empty_polygon, "POLYGON EMPTY");
@@ -263,6 +290,25 @@ mod test {
 
         let empty_collection = geo_types::GeometryCollection::new_from(vec![]);
         test_transform(empty_collection, "GEOMETRYCOLLECTION EMPTY");
+    }
+
+    #[test]
+    fn test_transform_dimensions() {
+        let ls_xy_wkt = "LINESTRING(1.0 2.0, 3.0 4.0)";
+        let ls_xy: Wkt = Wkt::from_str(ls_xy_wkt).unwrap();
+        test_transform(ls_xy, "LINESTRING(11 22,13 24)");
+
+        let ls_xyz_wkt = "LINESTRING Z(1.0 2.0 3.0, 4.0 5.0 6.0)";
+        let ls_xyz: Wkt = Wkt::from_str(ls_xyz_wkt).unwrap();
+        test_transform(ls_xyz, "LINESTRING Z(11 22 3,14 25 6)");
+
+        let ls_xym_wkt = "LINESTRING M(1.0 2.0 3.0, 4.0 5.0 6.0)";
+        let ls_xym: Wkt = Wkt::from_str(ls_xym_wkt).unwrap();
+        test_transform(ls_xym, "LINESTRING M(11 22 3,14 25 6)");
+
+        let ls_xyzm_wkt = "LINESTRING ZM(1.0 2.0 3.0 4.0, 5.0 6.0 7.0 8.0)";
+        let ls_xyzm: Wkt = Wkt::from_str(ls_xyzm_wkt).unwrap();
+        test_transform(ls_xyzm, "LINESTRING ZM(11 22 3 4,15 26 7 8)");
     }
 
     fn test_transform(geom: impl GeometryTrait<T = f64>, expected: &str) {
