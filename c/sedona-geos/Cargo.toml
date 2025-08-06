@@ -25,4 +25,4 @@ geos = { workspace = true }
 sedona-expr = { path = "../../rust/sedona-expr" }
 sedona-functions = { path = "../../rust/sedona-functions" }
 sedona-schema = { path = "../../rust/sedona-schema" }
-wkb = { workspace = true }
+wkb = { workspace = true, features = ["geos"] }

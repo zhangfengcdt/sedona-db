@@ -1,0 +1,66 @@
+use datafusion_common::{DataFusionError, Result};
+use sedona_functions::executor::{GenericExecutor, GeometryFactory};
+
+/// A [GenericExecutor] that iterates over [geos::Geometry]
+pub type GeosExecutor<'a, 'b> = GenericExecutor<'a, 'b, GeosGeometryFactory, GeosGeometryFactory>;
+
+/// [GeometryFactory] implementation for iterating over [geos::Geometry]
+#[derive(Default)]
+pub struct GeosGeometryFactory {
+    inner: wkb::reader::to_geos::GEOSWkbFactory,
+}
+
+impl GeometryFactory for GeosGeometryFactory {
+    type Geom<'a> = geos::Geometry;
+
+    fn try_from_wkb<'a>(&self, wkb_bytes: &'a [u8]) -> Result<Self::Geom<'a>> {
+        let wkb =
+            wkb::reader::read_wkb(wkb_bytes).map_err(|e| DataFusionError::External(Box::new(e)))?;
+        self.inner
+            .create(&wkb)
+            .map_err(|e| DataFusionError::External(Box::new(e)))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use datafusion_expr::ColumnarValue;
+    use geos::Geom;
+    use sedona_schema::datatypes::WKB_GEOMETRY;
+    use sedona_testing::create::create_array_storage;
+
+    use super::*;
+
+    #[test]
+    fn test_executor() {
+        let items = vec![
+            Some("POINT (0 1)"),
+            Some("LINESTRING (1 2, 3 4)"),
+            Some("POLYGON ((0 0, 1 0, 0 1, 0 0))"),
+            Some("MULTIPOINT ((1 2), (3 4))"),
+            Some("MULTILINESTRING ((1 2, 3 4))"),
+            Some("MULTIPOLYGON (((0 0, 1 0, 0 1, 0 0)))"),
+            Some("GEOMETRYCOLLECTION (POINT (1 2))"),
+            None,
+        ];
+        let args = vec![ColumnarValue::Array(create_array_storage(
+            &items,
+            &WKB_GEOMETRY,
+        ))];
+
+        let expected_items = items
+            .iter()
+            .map(|item| item.map(|item| item.to_string()))
+            .collect::<Vec<_>>();
+
+        let mut actual_items = Vec::new();
+        let executor = GeosExecutor::new(&[WKB_GEOMETRY], &args);
+        executor
+            .execute_wkb_void(|geo| {
+                actual_items.push(geo.map(|geo| geo.to_wkt().unwrap()));
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(actual_items, expected_items);
+    }
+}

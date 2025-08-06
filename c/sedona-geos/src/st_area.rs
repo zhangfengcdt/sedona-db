@@ -6,9 +6,9 @@ use datafusion_common::{error::Result, DataFusionError};
 use datafusion_expr::ColumnarValue;
 use geos::Geom;
 use sedona_expr::scalar_udf::{ArgMatcher, ScalarKernelRef, SedonaScalarKernel};
-use sedona_functions::executor::WkbExecutor;
 use sedona_schema::datatypes::SedonaType;
-use wkb::reader::Wkb;
+
+use crate::executor::GeosExecutor;
 
 /// ST_Area() implementation using the geos crate
 pub fn st_area_impl() -> ScalarKernelRef {
@@ -33,7 +33,7 @@ impl SedonaScalarKernel for STArea {
         arg_types: &[SedonaType],
         args: &[ColumnarValue],
     ) -> Result<ColumnarValue> {
-        let executor = WkbExecutor::new(arg_types, args);
+        let executor = GeosExecutor::new(arg_types, args);
         let mut builder = Float64Builder::with_capacity(executor.num_iterations());
         executor.execute_wkb_void(|maybe_wkb| {
             match maybe_wkb {
@@ -50,10 +50,7 @@ impl SedonaScalarKernel for STArea {
     }
 }
 
-fn invoke_scalar(wkb: &Wkb) -> Result<f64> {
-    let geos_geom = geos::Geometry::new_from_wkb(wkb.buf()).map_err(|e| {
-        DataFusionError::Execution(format!("Failed to create GEOS geometry from WKB: {e}"))
-    })?;
+fn invoke_scalar(geos_geom: &geos::Geometry) -> Result<f64> {
     geos_geom
         .area()
         .map_err(|e| DataFusionError::Execution(format!("Failed to calculate area: {e}")))
@@ -62,9 +59,8 @@ fn invoke_scalar(wkb: &Wkb) -> Result<f64> {
 #[cfg(test)]
 mod tests {
     use arrow_array::{create_array, ArrayRef};
-    use datafusion_common::scalar::ScalarValue;
     use rstest::rstest;
-    use sedona_functions::register::stubs::st_area_udf;
+    use sedona_expr::scalar_udf::SedonaScalarUDF;
     use sedona_schema::datatypes::{WKB_GEOMETRY, WKB_VIEW_GEOMETRY};
     use sedona_testing::testers::ScalarUdfTester;
 
@@ -72,21 +68,19 @@ mod tests {
 
     #[rstest]
     fn udf(#[values(WKB_GEOMETRY, WKB_VIEW_GEOMETRY)] sedona_type: SedonaType) {
-        let mut udf = st_area_udf();
-        udf.add_kernel(st_area_impl());
+        use datafusion_common::ScalarValue;
+
+        let udf = SedonaScalarUDF::from_kernel("st_area", st_area_impl());
         let tester = ScalarUdfTester::new(udf.into(), vec![sedona_type]);
+        tester.assert_return_type(DataType::Float64);
 
-        assert_eq!(
-            tester.return_type().unwrap(),
-            SedonaType::Arrow(DataType::Float64)
-        );
+        let result = tester
+            .invoke_scalar("POLYGON  ((0 0, 1 0, 0 1, 0 0))")
+            .unwrap();
+        tester.assert_scalar_result_equals(result, 0.5);
 
-        assert_eq!(
-            tester
-                .invoke_wkb_scalar(Some("POLYGON ((0 0, 1 0, 0 1, 0 0))"))
-                .unwrap(),
-            ScalarValue::Float64(Some(0.5))
-        );
+        let result = tester.invoke_scalar(ScalarValue::Null).unwrap();
+        assert!(result.is_null());
 
         let input_wkt = vec![
             Some("POINT(1 2)"),
