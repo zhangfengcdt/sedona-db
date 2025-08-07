@@ -8,37 +8,34 @@ nav:
    - API Reference:
       - Python: reference/python.md
       - SQL: reference/sql.md
+repo_url: https://github.com/apache/sedona-db
+repo_name: apache/sedona-db
 theme:
   name: material
   font:
-    text: Roboto
-    code: Roboto Mono
+    font: false
+    name: 'material'
   palette:
-    # Palette toggle for light mode
-    - scheme: default
-      primary: orange
-      accent: orange
-      toggle:
-        icon: material/brightness-7
-        name: Switch to dark mode
-    # Palette toggle for dark mode
-    - scheme: slate
-      primary: orange
-      accent: orange
-      toggle:
-        icon: material/brightness-4
-        name: Switch to light mode
+    primary: 'deep orange'
+    accent: 'green'
+  favicon: image/sedona_logo_symbol.png
+  logo: image/sedona_logo_symbol_white.svg
+  icon:
+    logo: fontawesome/solid/earth-americas
+    repo: fontawesome/brands/github
   features:
-    - navigation.instant
-    - navigation.tabs
-    - navigation.top
-    - navigation.footer
-    - navigation.tabs.sticky
-    - search.suggest
+    - content.code.copy
+    - content.action.edit
     - search.highlight
     - search.share
-    - content.code.copy
-    - navigation.expand
+    - search.suggest
+    - navigation.footer
+    - navigation.instant
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.top
+
+copyright: Copyright © 2025 The Apache Software Foundation. Apache Sedona, Sedona, Apache, the Apache feather logo, and the Apache Sedona project logo are either registered trademarks or trademarks of The Apache Software Foundation in the United States and other countries. All other marks mentioned may be trademarks or registered trademarks of their respective owners. Please visit <a href="https://www.apache.org/">Apache Software Foundation</a> for more details.<img referrerpolicy="no-referrer-when-downgrade" src="https://static.scarf.sh/a.png?x-pxid=f3e121f6-c909-4592-8be6-5bd345768cba" /><img referrerpolicy="no-referrer-when-downgrade" src="https://analytics.apache.org/matomo.php?idsite=74&rec=1" />
 
 exclude_docs: |
      snippets/*
