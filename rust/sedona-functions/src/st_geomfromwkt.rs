@@ -19,13 +19,14 @@ use crate::executor::WkbExecutor;
 /// An implementation of WKT reading using GeoRust's wkt crate.
 /// See [`st_geogfromwkt_udf`] for the corresponding geography function.
 pub fn st_geomfromwkt_udf() -> SedonaScalarUDF {
-    SedonaScalarUDF::new(
+    SedonaScalarUDF::new_with_aliases(
         "st_geomfromwkt",
         vec![Arc::new(STGeoFromWKT {
             out_type: WKB_GEOMETRY,
         })],
         Volatility::Immutable,
         Some(doc("ST_GeomFromWKT", "Geometry")),
+        vec!["st_geomfromtext".to_string()],
     )
 }
 
@@ -34,13 +35,14 @@ pub fn st_geomfromwkt_udf() -> SedonaScalarUDF {
 /// An implementation of WKT reading using GeoRust's wkt crate.
 /// See [`st_geomfromwkt_udf`] for the corresponding geometry function.
 pub fn st_geogfromwkt_udf() -> SedonaScalarUDF {
-    SedonaScalarUDF::new(
+    SedonaScalarUDF::new_with_aliases(
         "st_geogfromwkt",
         vec![Arc::new(STGeoFromWKT {
             out_type: WKB_GEOGRAPHY,
         })],
         Volatility::Immutable,
         Some(doc("ST_GeogFromWKT", "Geography")),
+        vec!["st_geogfromtext".to_string()],
     )
 }
 
@@ -178,5 +180,14 @@ mod tests {
             &tester.invoke_scalar("POINT (1 2)").unwrap(),
             &create_scalar(Some("POINT (1 2)"), &WKB_GEOGRAPHY),
         );
+    }
+
+    #[test]
+    fn aliases() {
+        let udf: ScalarUDF = st_geomfromwkt_udf().into();
+        assert!(udf.aliases().contains(&"st_geomfromtext".to_string()));
+
+        let udf: ScalarUDF = st_geogfromwkt_udf().into();
+        assert!(udf.aliases().contains(&"st_geogfromtext".to_string()));
     }
 }

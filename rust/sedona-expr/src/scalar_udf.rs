@@ -22,6 +22,7 @@ pub struct SedonaScalarUDF {
     signature: Signature,
     kernels: Vec<ScalarKernelRef>,
     documentation: Option<Documentation>,
+    aliases: Vec<String>,
 }
 
 /// User-defined function implementation
@@ -368,6 +369,24 @@ impl SedonaScalarUDF {
             signature,
             kernels,
             documentation,
+            aliases: vec![],
+        }
+    }
+
+    pub fn new_with_aliases(
+        name: &str,
+        kernels: Vec<ScalarKernelRef>,
+        volatility: Volatility,
+        documentation: Option<Documentation>,
+        aliases: Vec<String>,
+    ) -> SedonaScalarUDF {
+        let signature = Signature::user_defined(volatility);
+        Self {
+            name: name.to_string(),
+            signature,
+            kernels,
+            documentation,
+            aliases,
         }
     }
 
@@ -487,6 +506,10 @@ impl ScalarUDFImpl for SedonaScalarUDF {
             .collect();
         let result = kernel.invoke_batch(&arg_physical_types, &args_unwrapped?)?;
         out_type.wrap_arg(&result)
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
     }
 }
 
