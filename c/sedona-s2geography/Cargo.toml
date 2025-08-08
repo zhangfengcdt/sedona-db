@@ -19,7 +19,7 @@ regex = { workspace = true }
 criterion = { workspace = true }
 rstest = { workspace = true }
 sedona = { path = "../../rust/sedona" }
-sedona-testing = { path = "../../rust/sedona-testing" }
+sedona-testing = { path = "../../rust/sedona-testing", features = ["criterion"] }
 
 [dependencies]
 arrow-schema = { workspace = true }
@@ -32,3 +32,7 @@ sedona-functions = { path = "../../rust/sedona-functions" }
 sedona-schema = { path = "../../rust/sedona-schema" }
 thiserror = { workspace = true }
 paste = "1.0.15"
+
+[[bench]]
+harness = false
+name = "s2geography-functions"

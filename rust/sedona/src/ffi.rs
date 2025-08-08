@@ -494,7 +494,7 @@ mod test {
         let tester = AggregateUdfTester::new(agg.clone().into(), vec![WKB_GEOMETRY]);
         assert_eq!(tester.return_type().unwrap(), WKB_GEOMETRY);
         assert_scalar_equal(
-            &tester.aggregate(vec![array_value.clone()]).unwrap(),
+            &tester.aggregate(&vec![array_value.clone()]).unwrap(),
             &scalar_envelope,
         );
 
@@ -510,7 +510,7 @@ mod test {
         let tester = AggregateUdfTester::new(agg_from_ffi.into(), vec![WKB_GEOMETRY]);
         assert_eq!(tester.return_type().unwrap(), WKB_GEOMETRY);
         assert_scalar_equal(
-            &tester.aggregate(vec![array_value.clone()]).unwrap(),
+            &tester.aggregate(&vec![array_value.clone()]).unwrap(),
             &scalar_envelope,
         );
     }

@@ -18,7 +18,7 @@ cc = { version = "1" }
 criterion = { workspace = true }
 rstest = { workspace = true }
 sedona = { path = "../../rust/sedona" }
-sedona-testing = { path = "../../rust/sedona-testing" }
+sedona-testing = { path = "../../rust/sedona-testing", features = ["criterion"] }
 
 [dependencies]
 arrow-schema = { workspace = true }
@@ -33,4 +33,4 @@ thiserror = { workspace = true }
 
 [[bench]]
 harness = false
-name = "geoarrow_c"
+name = "geoarrow_c-functions"

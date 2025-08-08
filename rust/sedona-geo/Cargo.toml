@@ -16,7 +16,7 @@ criterion = { workspace = true }
 rstest = { workspace = true }
 sedona-geometry = { path = "../sedona-geometry" }
 sedona-schema = { path = "../sedona-schema" }
-sedona-testing = { path = "../sedona-testing" }
+sedona-testing = { path = "../sedona-testing", features = ["criterion"] }
 wkt = { workspace = true }
 
 [dependencies]
@@ -33,10 +33,6 @@ sedona-functions = { path = "../sedona-functions" }
 sedona-geometry = { path = "../sedona-geometry" }
 sedona-schema = { path = "../sedona-schema" }
 wkb = { workspace = true }
-
-[[bench]]
-harness = false
-name = "geo-predicates"
 
 [[bench]]
 name = "geo-functions"

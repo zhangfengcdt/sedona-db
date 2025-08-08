@@ -3,7 +3,8 @@ use std::ffi::CStr;
 mod error;
 mod geoarrow_c;
 mod geoarrow_c_bindgen;
-pub mod kernels;
+mod kernels;
+pub mod register;
 
 pub fn geoarrow_c_version() -> String {
     let char_ptr = unsafe { geoarrow_c_bindgen::SedonaDBGeoArrowVersion() };

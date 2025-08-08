@@ -1,52 +1,49 @@
-use arrow_array::ArrayRef;
 use criterion::{criterion_group, criterion_main, Criterion};
-use datafusion_common::Result;
-use datafusion_expr::ColumnarValue;
-use sedona_expr::{function_set::FunctionSet, scalar_udf::SedonaScalarUDF};
-use sedona_schema::datatypes::WKB_GEOMETRY;
-use sedona_testing::{
-    data::test_geoparquet,
-    read::{read_geoarrow_data_geometry, TestReadOptions},
-};
-
-// These benchmarks are all on ~10,000 geometries
-const ARRAY_SIZE: usize = 10000;
-
-pub fn invoke_unary_geometry(udf: &SedonaScalarUDF, batches: &Vec<ArrayRef>) -> Result<usize> {
-    let mut out: usize = 0;
-
-    for batch in batches {
-        let result = udf.invoke_batch(&[ColumnarValue::Array(batch.clone())], batch.len())?;
-        out += result.into_array(batch.len())?.len()
-    }
-
-    Ok(out)
-}
-
-fn benchmark_st_area(c: &mut Criterion, functions: &FunctionSet) {
-    let udf = functions.scalar_udf("st_area").unwrap().clone();
-
-    let options = TestReadOptions::new(WKB_GEOMETRY).with_output_size(ARRAY_SIZE);
-    let batches = read_geoarrow_data_geometry("ns-water", "water-poly", &options).unwrap();
-
-    c.bench_function("st_area-wkb_polygons", |b| {
-        b.iter(|| invoke_unary_geometry(&udf, &batches))
-    });
-}
+use sedona_expr::function_set::FunctionSet;
+use sedona_testing::benchmark_util::{benchmark, BenchmarkArgSpec::*, BenchmarkArgs::*};
 
 fn criterion_benchmark(c: &mut Criterion) {
-    // Don't require CI to download asset files for geoarrow-data
-    if test_geoparquet("ns-water", "water-poly").is_err() {
-        return;
-    }
-
-    let mut functions = sedona_functions::register::default_function_set();
+    let mut f = FunctionSet::new();
     for (name, kernel) in sedona_geo::register::scalar_kernels() {
-        functions.add_scalar_udf_kernel(name, kernel).unwrap();
+        f.add_scalar_udf_kernel(name, kernel).unwrap();
     }
 
-    benchmark_st_area(c, &functions);
+    benchmark::scalar(c, &f, "geo", "st_area", Polygon(10));
+    benchmark::scalar(c, &f, "geo", "st_area", Polygon(500));
+
+    benchmark::scalar(
+        c,
+        &f,
+        "geo",
+        "st_intersects",
+        ArrayScalar(Point, Polygon(10)),
+    );
+    benchmark::scalar(
+        c,
+        &f,
+        "geo",
+        "st_intersects",
+        ArrayScalar(Point, Polygon(500)),
+    );
+}
+
+fn criterion_benchmark_aggr(c: &mut Criterion) {
+    let mut f = sedona_functions::register::default_function_set();
+    for (name, kernel) in sedona_geo::register::aggregate_kernels() {
+        f.add_aggregate_udf_kernel(name, kernel).unwrap();
+    }
+
+    // st_intersection_aggr would need its own configuration because most of the generated
+    // polygons would not intersect and result in empty output almost immediately
+    benchmark::aggregate(c, &f, "geo", "st_union_aggr", Polygon(10));
 }
 
 criterion_group!(benches, criterion_benchmark);
-criterion_main!(benches);
+criterion_group! {
+    name = benches_aggr;
+    // These are currently very slow, so only run 10 samples
+    config = Criterion::default().sample_size(10);
+    targets = criterion_benchmark_aggr
+}
+
+criterion_main!(benches, benches_aggr);

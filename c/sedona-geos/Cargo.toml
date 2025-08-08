@@ -13,7 +13,7 @@ rust-version.workspace = true
 [dev-dependencies]
 criterion = { workspace = true }
 sedona = { path = "../../rust/sedona" }
-sedona-testing = { path = "../../rust/sedona-testing" }
+sedona-testing = { path = "../../rust/sedona-testing", features = ["criterion"] }
 rstest = { workspace = true }
 
 [dependencies]
@@ -26,3 +26,7 @@ sedona-expr = { path = "../../rust/sedona-expr" }
 sedona-functions = { path = "../../rust/sedona-functions" }
 sedona-schema = { path = "../../rust/sedona-schema" }
 wkb = { workspace = true, features = ["geos"] }
+
+[[bench]]
+harness = false
+name = "geos-functions"

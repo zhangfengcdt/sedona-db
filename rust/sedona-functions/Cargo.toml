@@ -15,7 +15,7 @@ result_large_err = "allow"
 arrow-json = { workspace = true }
 criterion = { workspace = true }
 rstest = { workspace = true }
-sedona-testing = { path = "../sedona-testing" }
+sedona-testing = { path = "../sedona-testing", features = ["criterion"] }
 
 [dependencies]
 arrow-schema = { workspace = true }
@@ -32,8 +32,4 @@ serde_json = { workspace = true }
 
 [[bench]]
 harness = false
-name = "constructors"
-
-[[bench]]
-harness = false
-name = "exporters"
+name = "native-functions"

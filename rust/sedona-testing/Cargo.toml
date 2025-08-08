@@ -14,10 +14,15 @@ result_large_err = "allow"
 [dev-dependencies]
 rstest = { workspace = true }
 
+[features]
+default = []
+criterion = ["dep:criterion"]
+
 [dependencies]
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-cast = { workspace = true }
+criterion = { workspace = true, optional = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-expr = { workspace = true }
@@ -26,6 +31,7 @@ geo-types = { workspace = true }
 parquet = { workspace = true, features = ["arrow", "snap", "zstd"] }
 rand = { workspace = true }
 sedona-geometry = { path = "../sedona-geometry" }
+sedona-expr = { path = "../sedona-expr" }
 sedona-schema = { path = "../sedona-schema" }
 wkb = { workspace = true }
 wkt = { workspace = true }

@@ -1,3 +1,4 @@
+pub mod benchmark_util;
 pub mod compare;
 pub mod create;
 pub mod data;

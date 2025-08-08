@@ -229,7 +229,7 @@ mod test {
         );
 
         // Empty input
-        assert_scalar_equal_wkb_geometry(&tester.aggregate(vec![]).unwrap(), None);
+        assert_scalar_equal_wkb_geometry(&tester.aggregate(&vec![]).unwrap(), None);
 
         // Single polygon input
         assert_scalar_equal_wkb_geometry(

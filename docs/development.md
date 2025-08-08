@@ -82,6 +82,47 @@ Rust, C, or C++ code can be debugged using the
 [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb)
 *Attach to Process...* command from the command palette in VSCode.
 
+## Low-level benchmarking
+
+Low-level Rust benchmarks use [criterion](https://github.com/bheisler/criterion.rs).
+In general, there is at least one benchmark for every implementation of a function
+(some functions have more than one implementation provided by different libraries),
+and a few other benchmarks for low-level iteration where work was done to optimize
+specific cases.
+
+Briefly, benchmarks for a specific crate can be run with `cargo bench`:
+
+```shell
+cd rust/sedona-geo
+cargo bench
+```
+
+Benchmarks for a specific function can be run with a filter. These can be run
+from the workspace or a specific crate (although the output is usually easier
+to read for a specific crate).
+
+```shell
+cargo bench -- st_area
+```
+
+By default, criterion saves the last run and will report the difference between the
+current benchmark and the last time it was run (although there are options to
+save and load various baselines). A report containing the last run for any
+benchmark that was ever run can be opened with:
+
+```shell
+# MacOS
+open target/criterion/report/index.html
+# Ubuntu
+xdg-open target/criterion/report/index.html
+```
+
+All previous saved benchmark runs can be cleared with:
+
+```shell
+rm -rf target/criterion
+```
+
 ## Documentation
 
 * `mkdocs serve` - Start the live-reloading docs server.

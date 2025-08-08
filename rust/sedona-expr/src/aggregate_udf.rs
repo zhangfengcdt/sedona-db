@@ -236,7 +236,7 @@ mod test {
             DataType::Boolean.try_into().unwrap()
         );
 
-        let err = tester.aggregate(vec![]).unwrap_err();
+        let err = tester.aggregate(&vec![]).unwrap_err();
         assert_eq!(
             err.message(),
             "Implementation for stubby([]) was not registered"

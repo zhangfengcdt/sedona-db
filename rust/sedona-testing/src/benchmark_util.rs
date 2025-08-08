@@ -1,0 +1,574 @@
+use std::{fmt::Debug, sync::Arc, vec};
+
+use arrow_array::{ArrayRef, Float64Array};
+use arrow_schema::DataType;
+
+use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_expr::{AggregateUDF, ScalarUDF};
+use geo_types::Rect;
+use rand::{distributions::Uniform, rngs::StdRng, Rng, SeedableRng};
+
+use sedona_geometry::types::GeometryTypeId;
+use sedona_schema::datatypes::{SedonaType, WKB_GEOMETRY};
+
+use crate::{
+    datagen::RandomPartitionedDataBuilder,
+    testers::{AggregateUdfTester, ScalarUdfTester},
+};
+
+/// The default number of rows per batch (the same as the DataFusion default)
+pub const ROWS_PER_BATCH: usize = 8192;
+
+/// The default number of batches to use for small size benchmarks
+///
+/// This was chosen to ensure that most benchmarks run nicely with criterion
+/// defaults (target 5s, 100 samples).
+pub const NUM_BATCHES_SMALL: usize = 16;
+
+#[cfg(feature = "criterion")]
+pub mod benchmark {
+    use super::*;
+    use criterion::Criterion;
+    use sedona_expr::function_set::FunctionSet;
+
+    /// Benchmark a [ScalarUDF] using [Criterion]
+    ///
+    /// When built with the criterion feature, provides utilities for running a
+    /// basic benchmark on a [ScalarUDF] given [BenchmarkArgs]. This
+    /// basic benchmark currently has a hard-coded data size of 16 batches by
+    /// 8192 rows (==131,072 rows), which was chosen to ensure that most benchmarks
+    /// run nicely with criterion defaults (target 5s, 100 samples).
+    pub fn scalar(
+        c: &mut Criterion,
+        functions: &FunctionSet,
+        lib: &str,
+        name: &str,
+        config: impl Into<BenchmarkArgs>,
+    ) {
+        let not_found_err = format!("{name} was not found in function set");
+        let udf: ScalarUDF = functions
+            .scalar_udf(name)
+            .expect(&not_found_err)
+            .clone()
+            .into();
+        let data = config.into().build_data(NUM_BATCHES_SMALL).unwrap();
+        c.bench_function(&data.make_label(lib, name), |b| {
+            b.iter(|| data.invoke_scalar(&udf).unwrap())
+        });
+    }
+
+    /// Benchmark a [AggregateUDF] using [Criterion]
+    ///
+    /// When built with the criterion feature, provides utilities for running a
+    /// basic benchmark on a [AggregateUDF] given [BenchmarkArgs]. This
+    /// shares a the default batch configuration with [scalar]. Because
+    /// aggregate functions can be invoked with varying combinations of
+    /// accumulation and merging of states, they should also be benchmarked
+    /// at a higher level. This benchmark primarily checks the accumulator.
+    pub fn aggregate(
+        c: &mut Criterion,
+        functions: &FunctionSet,
+        lib: &str,
+        name: &str,
+        config: impl Into<BenchmarkArgs>,
+    ) {
+        let not_found_err = format!("{name} was not found in function set");
+        let udf: AggregateUDF = functions
+            .aggregate_udf(name)
+            .expect(&not_found_err)
+            .clone()
+            .into();
+        let data = config.into().build_data(NUM_BATCHES_SMALL).unwrap();
+        c.bench_function(&data.make_label(lib, name), |b| {
+            b.iter(|| data.invoke_aggregate(&udf).unwrap())
+        });
+    }
+}
+
+/// Specification for benchmark arguments
+///
+/// This provides a concise definition of function input based on a
+/// combination of scalar/array arguments each specified by a [BenchmarkArgSpec].
+#[derive(Debug, Clone)]
+pub enum BenchmarkArgs {
+    /// Invoke a unary function with array input
+    Array(BenchmarkArgSpec),
+    /// Invoke a binary function with scalar and array input
+    ScalarArray(BenchmarkArgSpec, BenchmarkArgSpec),
+    /// Invoke a binary function with array and scalar input
+    ArrayScalar(BenchmarkArgSpec, BenchmarkArgSpec),
+    /// Invoke a binary function with two arrays
+    ArrayArray(BenchmarkArgSpec, BenchmarkArgSpec),
+}
+
+impl From<BenchmarkArgSpec> for BenchmarkArgs {
+    fn from(value: BenchmarkArgSpec) -> Self {
+        BenchmarkArgs::Array(value)
+    }
+}
+
+impl BenchmarkArgs {
+    /// Calculate the [SedonaType]s of the input arguments
+    fn sedona_types(&self) -> Vec<SedonaType> {
+        self.specs().iter().map(|col| col.sedona_type()).collect()
+    }
+
+    /// Build [BenchmarkData] with the specified number of batches
+    pub fn build_data(&self, num_batches: usize) -> Result<BenchmarkData> {
+        let array_configs = match self {
+            BenchmarkArgs::Array(_) | BenchmarkArgs::ArrayArray(_, _) => self.specs(),
+            BenchmarkArgs::ScalarArray(_, col) | BenchmarkArgs::ArrayScalar(col, _) => {
+                vec![col.clone()]
+            }
+        };
+        let scalar_configs = match self {
+            BenchmarkArgs::ScalarArray(col, _) | BenchmarkArgs::ArrayScalar(_, col) => {
+                vec![col.clone()]
+            }
+            _ => vec![],
+        };
+
+        let arrays = array_configs
+            .iter()
+            .enumerate()
+            .map(|(i, col)| col.build_arrays(i, num_batches))
+            .collect::<Result<Vec<_>>>()?;
+
+        let scalars = scalar_configs
+            .iter()
+            .enumerate()
+            .map(|(i, col)| col.build_scalar(i))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(BenchmarkData {
+            config: self.clone(),
+            num_batches,
+            arrays,
+            scalars,
+        })
+    }
+
+    fn specs(&self) -> Vec<BenchmarkArgSpec> {
+        match self {
+            BenchmarkArgs::Array(col) => vec![col.clone()],
+            BenchmarkArgs::ScalarArray(col0, col1)
+            | BenchmarkArgs::ArrayScalar(col0, col1)
+            | BenchmarkArgs::ArrayArray(col0, col1) => {
+                vec![col0.clone(), col1.clone()]
+            }
+        }
+    }
+}
+
+/// Specification of a single argument to a function
+///
+/// Geometries are generated using the [RandomPartitionedDataBuilder], which offers
+/// more specific options for generating random geometries.
+#[derive(Clone)]
+pub enum BenchmarkArgSpec {
+    /// Randomly generated point input
+    Point,
+    /// Randomly generated linestring input with a specified number of vertices
+    LineString(usize),
+    /// Randomly generated polygon input with a specified number of vertices
+    Polygon(usize),
+    /// Randomly generated floating point input with a given range of values
+    Float64(f64, f64),
+    /// A transformation of any of the above based on a [ScalarUDF] accepting
+    /// a single argument
+    Transformed(Box<BenchmarkArgSpec>, ScalarUDF),
+}
+
+// Custom implementation of Debug because otherwise the output of Transformed()
+// is excessively verbose
+impl Debug for BenchmarkArgSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Point => write!(f, "Point"),
+            Self::LineString(arg0) => f.debug_tuple("LineString").field(arg0).finish(),
+            Self::Polygon(arg0) => f.debug_tuple("Polygon").field(arg0).finish(),
+            Self::Float64(arg0, arg1) => f.debug_tuple("Float64").field(arg0).field(arg1).finish(),
+            Self::Transformed(inner, t) => write!(f, "{}({:?})", t.name(), inner),
+        }
+    }
+}
+
+impl BenchmarkArgSpec {
+    /// The [SedonaType] of this argument
+    pub fn sedona_type(&self) -> SedonaType {
+        match self {
+            BenchmarkArgSpec::Point
+            | BenchmarkArgSpec::Polygon(_)
+            | BenchmarkArgSpec::LineString(_) => WKB_GEOMETRY,
+            BenchmarkArgSpec::Float64(_, _) => SedonaType::Arrow(DataType::Float64),
+            BenchmarkArgSpec::Transformed(inner, t) => {
+                let tester = ScalarUdfTester::new(t.clone(), vec![inner.sedona_type()]);
+                tester.return_type().unwrap()
+            }
+        }
+    }
+
+    /// Build a [ScalarValue] for this argument
+    ///
+    /// This currently builds the same non-null scalar for each unique value
+    /// of i (the argument number).
+    pub fn build_scalar(&self, i: usize) -> Result<ScalarValue> {
+        let array = self.build_arrays(i, 1)?;
+        ScalarValue::try_from_array(&array[0], 0)
+    }
+
+    /// Build a column of num_batches arrays
+    ///
+    /// This currently builds the same column for each unique value of i (the argument
+    /// number). The batch size is currently fixed to 8192 (the DataFusion default).
+    pub fn build_arrays(&self, i: usize, num_batches: usize) -> Result<Vec<ArrayRef>> {
+        match self {
+            BenchmarkArgSpec::Point => {
+                self.build_geometry(i, GeometryTypeId::Point, num_batches, 1)
+            }
+            BenchmarkArgSpec::LineString(vertex_count) => {
+                self.build_geometry(i, GeometryTypeId::LineString, num_batches, *vertex_count)
+            }
+            BenchmarkArgSpec::Polygon(vertex_count) => {
+                self.build_geometry(i, GeometryTypeId::Polygon, num_batches, *vertex_count)
+            }
+            BenchmarkArgSpec::Float64(lo, hi) => {
+                let mut rng = self.rng(i);
+                let dist = Uniform::new(lo, hi);
+                (0..num_batches)
+                    .map(|_| -> Result<ArrayRef> {
+                        let float64_array: Float64Array =
+                            (0..ROWS_PER_BATCH).map(|_| rng.sample(dist)).collect();
+                        Ok(Arc::new(float64_array))
+                    })
+                    .collect()
+            }
+            BenchmarkArgSpec::Transformed(inner, t) => {
+                let inner_type = inner.sedona_type();
+                let inner_arrays = inner.build_arrays(i, num_batches)?;
+                let tester = ScalarUdfTester::new(t.clone(), vec![inner_type]);
+                inner_arrays
+                    .into_iter()
+                    .map(|array| tester.invoke_array(array))
+                    .collect::<Result<Vec<_>>>()
+            }
+        }
+    }
+
+    fn build_geometry(
+        &self,
+        i: usize,
+        geom_type: GeometryTypeId,
+        num_batches: usize,
+        vertex_count: usize,
+    ) -> Result<Vec<ArrayRef>> {
+        let builder = RandomPartitionedDataBuilder::new()
+            .num_partitions(1)
+            .rows_per_batch(ROWS_PER_BATCH)
+            .batches_per_partition(num_batches)
+            // Use a random geometry range that is also not unrealistic for geography
+            .bounds(Rect::new((-10.0, -10.0), (10.0, 10.0)))
+            .size_range((0.1, 2.0))
+            .vertices_per_linestring_range((vertex_count, vertex_count))
+            .geometry_type(geom_type)
+            // Currently just use WKB_GEOMETRY (we can generate a view type with
+            // Transformed)
+            .sedona_type(WKB_GEOMETRY);
+
+        builder
+            .partition_reader(self.rng(i), 0)
+            .map(|batch| -> Result<ArrayRef> { Ok(batch?.column(2).clone()) })
+            .collect()
+    }
+
+    fn rng(&self, i: usize) -> impl Rng {
+        StdRng::seed_from_u64(42 + i as u64)
+    }
+}
+
+/// Fully resolved data ready for running a benchmark
+///
+/// This struct contains the fully built data (such that benchmarks do not
+/// measure the time required to build the data) and has methods for invoking
+/// functions on it.
+pub struct BenchmarkData {
+    config: BenchmarkArgs,
+    num_batches: usize,
+    arrays: Vec<Vec<ArrayRef>>,
+    scalars: Vec<ScalarValue>,
+}
+
+impl BenchmarkData {
+    /// Create a label based on the library, function name, and configuration
+    pub fn make_label(&self, lib: &str, name: &str) -> String {
+        format!("{lib}-{name}-{:?}", self.config)
+    }
+
+    /// Invoke a scalar function on this data
+    pub fn invoke_scalar(&self, udf: &ScalarUDF) -> Result<()> {
+        let tester = ScalarUdfTester::new(udf.clone(), self.config.sedona_types().clone());
+
+        match self.config {
+            BenchmarkArgs::Array(_) => {
+                for i in 0..self.num_batches {
+                    tester.invoke_array(self.arrays[0][i].clone())?;
+                }
+            }
+            BenchmarkArgs::ScalarArray(_, _) => {
+                let scalar = &self.scalars[0];
+                for i in 0..self.num_batches {
+                    tester.invoke_scalar_array(scalar.clone(), self.arrays[0][i].clone())?;
+                }
+            }
+            BenchmarkArgs::ArrayScalar(_, _) => {
+                let scalar = &self.scalars[0];
+                for i in 0..self.num_batches {
+                    tester.invoke_array_scalar(self.arrays[0][i].clone(), scalar.clone())?;
+                }
+            }
+            BenchmarkArgs::ArrayArray(_, _) => {
+                for i in 0..self.num_batches {
+                    tester
+                        .invoke_array_array(self.arrays[0][i].clone(), self.arrays[1][i].clone())?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Invoke an aggregate function on this data
+    pub fn invoke_aggregate(&self, udf: &AggregateUDF) -> Result<ScalarValue> {
+        if !matches!(self.config, BenchmarkArgs::Array(_)) {
+            return internal_err!("invoke_aggregate() not implemented for {:?}", self.config);
+        }
+
+        let tester = AggregateUdfTester::new(udf.clone(), self.config.sedona_types().clone());
+        tester.aggregate(&self.arrays[0])
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use arrow_array::Array;
+    use datafusion_common::cast::as_binary_array;
+    use datafusion_expr::{ColumnarValue, SimpleScalarUDF};
+    use geo_traits::Dimensions;
+    use rstest::rstest;
+    use sedona_geometry::{analyze::analyze_geometry, types::GeometryTypeAndDimensions};
+
+    use super::*;
+
+    #[test]
+    fn arg_spec_scalar() {
+        let spec = BenchmarkArgSpec::Point;
+        assert_eq!(spec.sedona_type(), WKB_GEOMETRY);
+
+        let scalar = spec.build_scalar(0).unwrap();
+
+        // Make sure this is deterministic
+        assert_eq!(spec.build_scalar(0).unwrap(), scalar);
+
+        // Make sure we generate different scalars for different columns
+        assert_ne!(spec.build_scalar(1).unwrap(), scalar);
+
+        if let ScalarValue::Binary(Some(wkb_bytes)) = WKB_GEOMETRY.unwrap_scalar(&scalar).unwrap() {
+            let wkb = wkb::reader::read_wkb(&wkb_bytes).unwrap();
+            let analysis = analyze_geometry(&wkb).unwrap();
+            assert_eq!(analysis.point_count, 1);
+            assert_eq!(
+                analysis.geometry_type,
+                GeometryTypeAndDimensions::new(GeometryTypeId::Point, Dimensions::Xy)
+            )
+        } else {
+            unreachable!("Unexpected scalar output {scalar}")
+        }
+    }
+
+    #[rstest]
+    fn arg_spec_geometry(
+        #[values(
+            (BenchmarkArgSpec::Point, GeometryTypeId::Point, 1),
+            (BenchmarkArgSpec::LineString(10), GeometryTypeId::LineString, 10),
+            (BenchmarkArgSpec::Polygon(10), GeometryTypeId::Polygon, 11)
+        )]
+        config: (BenchmarkArgSpec, GeometryTypeId, i64),
+    ) {
+        let (spec, geometry_type, point_count) = config;
+        assert_eq!(spec.sedona_type(), WKB_GEOMETRY);
+
+        let arrays = spec.build_arrays(0, 2).unwrap();
+        assert_eq!(arrays.len(), 2);
+
+        // Make sure this is deterministic
+        assert_eq!(spec.build_arrays(0, 2).unwrap(), arrays);
+
+        // Make sure we generate different arrays for different argument numbers
+        assert_ne!(spec.build_arrays(1, 2).unwrap(), arrays);
+
+        for array in arrays {
+            assert_eq!(
+                SedonaType::from_data_type(array.data_type()).unwrap(),
+                WKB_GEOMETRY
+            );
+            assert_eq!(array.len(), ROWS_PER_BATCH);
+
+            let unwrapped = WKB_GEOMETRY.unwrap_array(&array).unwrap();
+            let binary_array = as_binary_array(&unwrapped).unwrap();
+            assert_eq!(binary_array.null_count(), 0);
+
+            for wkb_bytes in binary_array {
+                let wkb = wkb::reader::read_wkb(wkb_bytes.unwrap()).unwrap();
+                let analysis = analyze_geometry(&wkb).unwrap();
+                assert_eq!(analysis.point_count, point_count);
+                assert_eq!(
+                    analysis.geometry_type,
+                    GeometryTypeAndDimensions::new(geometry_type, Dimensions::Xy)
+                )
+            }
+        }
+    }
+
+    #[test]
+    fn arg_spec_float() {
+        let spec = BenchmarkArgSpec::Float64(1.0, 2.0);
+        assert_eq!(spec.sedona_type(), DataType::Float64.try_into().unwrap());
+
+        let arrays = spec.build_arrays(0, 2).unwrap();
+        assert_eq!(arrays.len(), 2);
+
+        // Make sure this is deterministic
+        assert_eq!(spec.build_arrays(0, 2).unwrap(), arrays);
+
+        // Make sure we generate different arrays for different argument numbers
+        assert_ne!(spec.build_arrays(1, 2).unwrap(), arrays);
+
+        for array in arrays {
+            assert_eq!(array.data_type(), &DataType::Float64);
+            assert_eq!(array.len(), ROWS_PER_BATCH);
+            assert_eq!(array.null_count(), 0);
+        }
+    }
+
+    #[test]
+    fn arg_spec_transformed() {
+        let udf = SimpleScalarUDF::new(
+            "float32",
+            vec![DataType::Float64],
+            DataType::Float32,
+            datafusion_expr::Volatility::Immutable,
+            Arc::new(|args| -> Result<ColumnarValue> { args[0].cast_to(&DataType::Float32, None) }),
+        );
+
+        let spec =
+            BenchmarkArgSpec::Transformed(BenchmarkArgSpec::Float64(1.0, 2.0).into(), udf.into());
+        assert_eq!(spec.sedona_type(), DataType::Float32.try_into().unwrap());
+
+        assert_eq!(format!("{spec:?}"), "float32(Float64(1.0, 2.0))");
+        let arrays = spec.build_arrays(0, 2).unwrap();
+        assert_eq!(arrays.len(), 2);
+
+        // Make sure this is deterministic
+        assert_eq!(spec.build_arrays(0, 2).unwrap(), arrays);
+
+        // Make sure we generate different arrays for different argument numbers
+        assert_ne!(spec.build_arrays(1, 2).unwrap(), arrays);
+
+        for array in arrays {
+            assert_eq!(array.data_type(), &DataType::Float32);
+            assert_eq!(array.len(), ROWS_PER_BATCH);
+            assert_eq!(array.null_count(), 0);
+        }
+    }
+
+    #[test]
+    fn args_array() {
+        let spec = BenchmarkArgs::Array(BenchmarkArgSpec::Point);
+        assert_eq!(spec.sedona_types(), [WKB_GEOMETRY]);
+
+        let data = spec.build_data(2).unwrap();
+        assert_eq!(data.num_batches, 2);
+        assert_eq!(data.arrays.len(), 1);
+        assert_eq!(data.scalars.len(), 0);
+
+        assert_eq!(data.arrays[0].len(), 2);
+        assert_eq!(
+            WKB_GEOMETRY,
+            data.arrays[0][0].data_type().try_into().unwrap()
+        );
+    }
+
+    #[test]
+    fn args_array_scalar() {
+        let spec = BenchmarkArgs::ArrayScalar(
+            BenchmarkArgSpec::Point,
+            BenchmarkArgSpec::Float64(1.0, 2.0),
+        );
+        assert_eq!(
+            spec.sedona_types(),
+            [WKB_GEOMETRY, DataType::Float64.try_into().unwrap()]
+        );
+
+        let data = spec.build_data(2).unwrap();
+        assert_eq!(data.num_batches, 2);
+
+        assert_eq!(data.arrays.len(), 1);
+        assert_eq!(data.arrays[0].len(), 2);
+        assert_eq!(
+            WKB_GEOMETRY,
+            data.arrays[0][0].data_type().try_into().unwrap()
+        );
+
+        assert_eq!(data.scalars.len(), 1);
+        assert_eq!(data.scalars[0].data_type(), DataType::Float64);
+    }
+
+    #[test]
+    fn args_scalar_array() {
+        let spec = BenchmarkArgs::ScalarArray(
+            BenchmarkArgSpec::Point,
+            BenchmarkArgSpec::Float64(1.0, 2.0),
+        );
+        assert_eq!(
+            spec.sedona_types(),
+            [WKB_GEOMETRY, DataType::Float64.try_into().unwrap()]
+        );
+
+        let data = spec.build_data(2).unwrap();
+        assert_eq!(data.num_batches, 2);
+
+        assert_eq!(data.scalars.len(), 1);
+        assert_eq!(
+            WKB_GEOMETRY,
+            data.scalars[0].data_type().try_into().unwrap()
+        );
+
+        assert_eq!(data.arrays.len(), 1);
+        assert_eq!(data.arrays[0].len(), 2);
+        assert_eq!(data.arrays[0][0].data_type(), &DataType::Float64);
+    }
+
+    #[test]
+    fn args_array_array() {
+        let spec =
+            BenchmarkArgs::ArrayArray(BenchmarkArgSpec::Point, BenchmarkArgSpec::Float64(1.0, 2.0));
+        assert_eq!(
+            spec.sedona_types(),
+            [WKB_GEOMETRY, DataType::Float64.try_into().unwrap()]
+        );
+
+        let data = spec.build_data(2).unwrap();
+        assert_eq!(data.num_batches, 2);
+        assert_eq!(data.arrays.len(), 2);
+        assert_eq!(data.scalars.len(), 0);
+
+        assert_eq!(data.arrays[0].len(), 2);
+        assert_eq!(
+            WKB_GEOMETRY,
+            data.arrays[0][0].data_type().try_into().unwrap()
+        );
+
+        assert_eq!(data.arrays[1].len(), 2);
+        assert_eq!(data.arrays[1][0].data_type(), &DataType::Float64);
+    }
+}
