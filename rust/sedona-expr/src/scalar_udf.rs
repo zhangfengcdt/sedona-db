@@ -2,10 +2,11 @@ use std::iter::zip;
 use std::sync::Arc;
 use std::{any::Any, fmt::Debug};
 
-use arrow_schema::{DataType, Field};
-use datafusion_common::{internal_err, not_impl_err, plan_err, Result};
+use arrow_schema::{DataType, Field, FieldRef};
+use datafusion_common::{internal_err, not_impl_err, plan_err, Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use sedona_schema::datatypes::{Edges, SedonaType};
 
@@ -43,6 +44,19 @@ pub trait SedonaScalarKernel: Debug {
     /// The [`ArgMatcher`] contains a set of helper functions to help implement this
     /// function.
     fn return_type(&self, args: &[SedonaType]) -> Result<Option<SedonaType>>;
+
+    /// Calculate a return type given input type and scalar arguments
+    ///
+    /// Most functions should implement [SedonaScalarKernel::return_type]; however, some functions
+    /// (e.g., ST_SetSRID) calculate a return type based on the value of the argument if it is
+    /// a constant. If this is implemented, [SedonaScalarKernel::return_type] will not be called.
+    fn return_type_from_args_and_scalars(
+        &self,
+        args: &[SedonaType],
+        _scalar_args: &[Option<&ScalarValue>],
+    ) -> Result<Option<SedonaType>> {
+        self.return_type(args)
+    }
 
     /// Compute a batch of results
     ///
@@ -458,10 +472,11 @@ impl SedonaScalarUDF {
     fn return_type_impl(
         &self,
         args: &[SedonaType],
+        scalars: &[Option<&ScalarValue>],
     ) -> Result<(&dyn SedonaScalarKernel, SedonaType)> {
         // Resolve kernels in reverse so that more recently added ones are resolved first
         for kernel in self.kernels.iter().rev() {
-            if let Some(return_type) = kernel.return_type(args)? {
+            if let Some(return_type) = kernel.return_type_from_args_and_scalars(args, scalars)? {
                 return Ok((kernel.as_ref(), return_type));
             }
         }
@@ -488,9 +503,21 @@ impl ScalarUDFImpl for SedonaScalarUDF {
     }
 
     fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-        let args = Self::physical_types(args)?;
-        let (_, out_type) = self.return_type_impl(&args)?;
+        let arg_types = Self::physical_types(args)?;
+        let scalars = vec![None; args.len()];
+        let (_, out_type) = self.return_type_impl(&arg_types, &scalars)?;
         Ok(out_type.data_type())
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_data_types: Vec<DataType> = args
+            .arg_fields
+            .iter()
+            .map(|arg| arg.data_type().clone())
+            .collect();
+        let arg_types = Self::physical_types(&arg_data_types)?;
+        let (_, out_type) = self.return_type_impl(&arg_types, args.scalar_arguments)?;
+        Ok(Field::new("", out_type.data_type(), true).into())
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -500,7 +527,18 @@ impl ScalarUDFImpl for SedonaScalarUDF {
     fn invoke_with_args(&self, args: datafusion_expr::ScalarFunctionArgs) -> Result<ColumnarValue> {
         let arg_types: Vec<DataType> = args.args.iter().map(|arg| arg.data_type()).collect();
         let arg_physical_types = Self::physical_types(&arg_types)?;
-        let (kernel, out_type) = self.return_type_impl(&arg_physical_types)?;
+        let arg_scalars = args
+            .args
+            .iter()
+            .map(|arg| {
+                if let ColumnarValue::Scalar(scalar) = arg {
+                    Some(scalar)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        let (kernel, out_type) = self.return_type_impl(&arg_physical_types, &arg_scalars)?;
         let args_unwrapped: Result<Vec<ColumnarValue>, _> = zip(&arg_physical_types, &args.args)
             .map(|(a, b)| a.unwrap_arg(b))
             .collect();
@@ -515,8 +553,9 @@ impl ScalarUDFImpl for SedonaScalarUDF {
 
 #[cfg(test)]
 mod tests {
-    use datafusion_common::scalar::ScalarValue;
+    use datafusion_common::{scalar::ScalarValue, DFSchema};
 
+    use datafusion_expr::{lit, ExprSchemable, ScalarUDF};
     use sedona_schema::{
         crs::lnglat,
         datatypes::{WKB_GEOGRAPHY, WKB_GEOMETRY},
@@ -773,5 +812,61 @@ mod tests {
                 .unwrap(),
             geom_lnglat.clone()
         );
+    }
+
+    #[test]
+    fn return_type_from_scalar_arg() {
+        let udf: ScalarUDF =
+            SedonaScalarUDF::from_kernel("simple_cast", Arc::new(SimpleCast {})).into();
+        let call = udf.call(vec![lit(10), lit("float32")]);
+        let schema = DFSchema::empty();
+        assert_eq!(
+            call.data_type_and_nullable(&schema).unwrap(),
+            (DataType::Float32, true)
+        );
+    }
+
+    #[derive(Debug)]
+    struct SimpleCast {}
+
+    impl SimpleCast {
+        fn parse_type(val: &ColumnarValue) -> Result<SedonaType> {
+            if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(scalar_arg1))) = val {
+                match scalar_arg1.as_str() {
+                    "float32" => return Ok(DataType::Float32.try_into().unwrap()),
+                    "float64" => return Ok(DataType::Float64.try_into().unwrap()),
+                    _ => {}
+                }
+            }
+
+            internal_err!("unrecognized target value")
+        }
+    }
+
+    impl SedonaScalarKernel for SimpleCast {
+        fn return_type(&self, _args: &[SedonaType]) -> Result<Option<SedonaType>> {
+            internal_err!("Should not be called")
+        }
+
+        fn return_type_from_args_and_scalars(
+            &self,
+            _args: &[SedonaType],
+            scalar_args: &[Option<&ScalarValue>],
+        ) -> Result<Option<SedonaType>> {
+            let out_type = Self::parse_type(&ColumnarValue::Scalar(
+                scalar_args[1].cloned().expect("arg1 as a scalar in test"),
+            ))?;
+
+            Ok(Some(out_type))
+        }
+
+        fn invoke_batch(
+            &self,
+            _arg_types: &[SedonaType],
+            args: &[ColumnarValue],
+        ) -> Result<ColumnarValue> {
+            let out_type = Self::parse_type(&args[1])?;
+            args[0].cast_to(&out_type.data_type(), None)
+        }
     }
 }
