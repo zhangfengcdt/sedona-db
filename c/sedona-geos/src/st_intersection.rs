@@ -43,7 +43,8 @@ impl SedonaScalarKernel for STIntersection {
         executor.execute_wkb_wkb_void(|lhs, rhs| {
             match (lhs, rhs) {
                 (Some(lhs), Some(rhs)) => {
-                    builder.append_value(invoke_scalar(lhs, rhs).unwrap());
+                    invoke_scalar(lhs, rhs, &mut builder)?;
+                    builder.append_value([]);
                 }
                 _ => builder.append_null(),
             };
@@ -54,7 +55,11 @@ impl SedonaScalarKernel for STIntersection {
     }
 }
 
-fn invoke_scalar(geos_geom: &geos::Geometry, other_geos_geom: &geos::Geometry) -> Result<Vec<u8>> {
+fn invoke_scalar(
+    geos_geom: &geos::Geometry,
+    other_geos_geom: &geos::Geometry,
+    writer: &mut impl std::io::Write,
+) -> Result<()> {
     let geometry = geos_geom.intersection(other_geos_geom).map_err(|e| {
         DataFusionError::Execution(format!("Failed to calculate intersection: {e}"))
     })?;
@@ -62,7 +67,9 @@ fn invoke_scalar(geos_geom: &geos::Geometry, other_geos_geom: &geos::Geometry) -
     let wkb = geometry
         .to_wkb()
         .map_err(|e| DataFusionError::Execution(format!("Failed to convert to WKB: {e}")))?;
-    Ok(wkb.into())
+
+    writer.write_all(wkb.as_ref())?;
+    Ok(())
 }
 
 #[cfg(test)]
