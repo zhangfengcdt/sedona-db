@@ -8,6 +8,7 @@ use datafusion_expr::{
     scalar_doc_sections::DOC_SECTION_OTHER, ColumnarValue, Documentation, Volatility,
 };
 use sedona_expr::scalar_udf::{ArgMatcher, SedonaScalarKernel, SedonaScalarUDF};
+use sedona_geometry::wkb_factory::WKB_MIN_PROBABLE_BYTES;
 use sedona_schema::datatypes::{SedonaType, WKB_GEOGRAPHY, WKB_GEOMETRY};
 use wkb::writer::write_geometry;
 use wkt::Wkt;
@@ -85,8 +86,10 @@ impl SedonaScalarKernel for STGeoFromWKT {
             .cast_to(&DataType::Utf8View, None)?
             .to_array(executor.num_iterations())?;
 
-        let mut builder =
-            BinaryBuilder::with_capacity(executor.num_iterations(), 21 * executor.num_iterations());
+        let mut builder = BinaryBuilder::with_capacity(
+            executor.num_iterations(),
+            WKB_MIN_PROBABLE_BYTES * executor.num_iterations(),
+        );
 
         for item in as_string_view_array(&arg_array)? {
             if let Some(wkt_bytes) = item {

@@ -4938,6 +4938,7 @@ dependencies = [
  "sedona",
  "sedona-expr",
  "sedona-functions",
+ "sedona-geometry",
  "sedona-schema",
  "sedona-testing",
  "wkb",

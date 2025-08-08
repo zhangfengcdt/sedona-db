@@ -24,6 +24,7 @@ datafusion-expr = { workspace = true }
 geos = { workspace = true }
 sedona-expr = { path = "../../rust/sedona-expr" }
 sedona-functions = { path = "../../rust/sedona-functions" }
+sedona-geometry = { path = "../../rust/sedona-geometry" }
 sedona-schema = { path = "../../rust/sedona-schema" }
 wkb = { workspace = true, features = ["geos"] }
 

@@ -2,6 +2,7 @@ use crate::error::SedonaGeometryError;
 use geo_traits::Dimensions;
 use std::io::Write;
 
+pub const WKB_MIN_PROBABLE_BYTES: usize = 21;
 pub const WKB_POINT_TYPE: u32 = 1;
 pub const WKB_LINESTRING_TYPE: u32 = 2;
 pub const WKB_POLYGON_TYPE: u32 = 3;
@@ -16,7 +17,7 @@ pub const WKB_GEOMETRYCOLLECTION_TYPE: u32 = 7;
 /// which is useful for creating DataFusion scalar values.
 /// This function always writes little endian coordinates.
 pub fn wkb_point(pt: (f64, f64)) -> Result<Vec<u8>, SedonaGeometryError> {
-    let mut out_wkb = Vec::with_capacity(21);
+    let mut out_wkb = Vec::with_capacity(WKB_MIN_PROBABLE_BYTES);
     write_wkb_point(&mut out_wkb, pt)?;
     Ok(out_wkb)
 }
