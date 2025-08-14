@@ -18,7 +18,7 @@ use crate::create::create_scalar;
 /// failure messages for geometry values where the default failure message would
 /// otherwise be uninformative.
 ///
-/// This is intended to be used with [`create_array_value()`] and [`create_array_value()`]
+/// This is intended to be used with `create_array_value()` functions
 /// for geometry types. It can be used with `create_array!()` and Arrow types as well;
 /// however, `assert_eq!()` is usually sufficient for those cases.
 pub fn assert_value_equal(actual: &ColumnarValue, expected: &ColumnarValue) {

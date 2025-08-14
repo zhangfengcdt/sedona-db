@@ -2,10 +2,7 @@ use std::{any::Any, sync::Arc};
 
 use abi_stable::StableAbi;
 use arrow_schema::{DataType, Field, FieldRef, Schema};
-use datafusion::{
-    physical_expr::LexOrdering,
-    physical_plan::{expressions::Column, PhysicalExpr},
-};
+use datafusion::physical_plan::{expressions::Column, PhysicalExpr};
 use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
@@ -385,7 +382,7 @@ impl SedonaAccumulator for ImportedSedonaAccumulator {
             return_field: return_field.into(),
             schema: &mock_schema,
             ignore_nulls: true,
-            ordering_req: LexOrdering::empty(),
+            order_bys: &[],
             is_reversed: false,
             name: "",
             is_distinct: false,

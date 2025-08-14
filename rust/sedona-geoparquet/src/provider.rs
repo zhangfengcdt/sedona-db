@@ -17,7 +17,7 @@ use crate::format::GeoParquetFormat;
 
 /// Create a [ListingTable] of GeoParquet (or normal Parquet) files
 ///
-/// Because [ListingTable] implements [TableProvider], this can be used to
+/// Because [ListingTable] implements `TableProvider`, this can be used to
 /// implement geo-aware Parquet reading with interfaces that are otherwise
 /// hard-coded to the built-in Parquet reader.
 pub async fn geoparquet_listing_table<P: DataFilePaths>(

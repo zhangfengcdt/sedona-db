@@ -5,8 +5,11 @@ use datafusion_common::{Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::{
-    execution_plan::CardinalityEffect, filter_pushdown::FilterDescription, metrics::MetricsSet,
-    projection::ProjectionExec, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    execution_plan::CardinalityEffect,
+    filter_pushdown::{FilterDescription, FilterPushdownPhase},
+    metrics::MetricsSet,
+    projection::ProjectionExec,
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
 
 /// Wrapper around a [ProjectionExec] that implements [ExecutionPlan::gather_filters_for_pushdown]
@@ -31,13 +34,12 @@ impl ExecutionPlan for WrapExec {
 
     fn gather_filters_for_pushdown(
         &self,
+        _phase: FilterPushdownPhase,
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        Ok(
-            FilterDescription::new_with_child_count(self.children().len())
-                .all_parent_filters_supported(parent_filters),
-        )
+        let children_refs: Vec<&Arc<dyn ExecutionPlan>> = self.children().to_vec();
+        FilterDescription::from_children(parent_filters, &children_refs)
     }
 
     fn name(&self) -> &'static str {

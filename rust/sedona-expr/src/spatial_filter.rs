@@ -22,9 +22,9 @@ use crate::statistics::GeoStatistics;
 /// implementation).
 #[derive(Debug)]
 pub enum SpatialFilter {
-    /// ST_Intersects(<column>, <literal>) or ST_Intersects(<literal>, <column>)
+    /// ST_Intersects(\<column\>, \<literal\>) or ST_Intersects(\<literal\>, \<column\>)
     Intersects(Column, BoundingBox),
-    /// ST_HasZ(<column>)
+    /// ST_HasZ(\<column\>)
     HasZ(Column),
     /// Logical AND
     And(Box<SpatialFilter>, Box<SpatialFilter>),

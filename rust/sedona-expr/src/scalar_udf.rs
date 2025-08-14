@@ -28,7 +28,7 @@ pub struct SedonaScalarUDF {
 
 /// User-defined function implementation
 ///
-/// A [`SedonaScalarUdf`] is comprised of one or more kernels, to which it dispatches
+/// A `SedonaScalarUdf` is comprised of one or more kernels, to which it dispatches
 /// the first whose return_type returns `Some()`. Whereas a SeondaScalarUdf represents
 /// a logical operation (e.g., ST_Intersects()), a kernel wraps the logic around a specific
 /// implementation.

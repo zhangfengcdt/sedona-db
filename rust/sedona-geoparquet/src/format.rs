@@ -102,7 +102,7 @@ impl GetExt for GeoParquetFormatFactory {
 ///
 /// This [FileFormat] wraps the [ParquetFormat]. The primary purpose of the
 /// FileFormat is to be able to be used in a ListingTable (i.e., multi file table).
-/// Here we also use it to implement a basic [TableProvider] that give us most if
+/// Here we also use it to implement a basic `TableProvider` that give us most if
 /// not all of the features of the underlying Parquet reader.
 #[derive(Debug)]
 pub struct GeoParquetFormat {
@@ -145,6 +145,10 @@ impl FileFormat for GeoParquetFormat {
         self.inner.get_ext_with_compression(file_compression_type)
     }
 
+    fn compression_type(&self) -> Option<FileCompressionType> {
+        self.inner.compression_type()
+    }
+
     async fn infer_schema(
         &self,
         state: &dyn Session,
@@ -162,7 +166,12 @@ impl FileFormat for GeoParquetFormat {
         // store level is the way to go here.
         let metadatas: Vec<_> = futures::stream::iter(objects)
             .map(|object| {
-                fetch_parquet_metadata(store.as_ref(), object, self.inner.metadata_size_hint())
+                fetch_parquet_metadata(
+                    store.as_ref(),
+                    object,
+                    self.inner.metadata_size_hint(),
+                    None,
+                )
             })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
             .buffered(state.config_options().execution.meta_fetch_concurrency)

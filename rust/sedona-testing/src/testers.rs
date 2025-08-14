@@ -7,7 +7,7 @@ use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     Accumulator, AggregateUDF, ColumnarValue, Expr, Literal, ScalarFunctionArgs, ScalarUDF,
 };
-use datafusion_physical_expr::{expressions::Column, LexOrdering, PhysicalExpr};
+use datafusion_physical_expr::{expressions::Column, PhysicalExpr};
 use sedona_schema::datatypes::SedonaType;
 
 use crate::{
@@ -95,7 +95,7 @@ impl AggregateUdfTester {
             return_field: self.udf.return_field(mock_schema.fields())?,
             schema: &mock_schema,
             ignore_nulls: true,
-            ordering_req: LexOrdering::empty(),
+            order_bys: &[],
             is_reversed: false,
             name: "",
             is_distinct: false,

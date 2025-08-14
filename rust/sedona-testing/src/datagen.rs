@@ -4,7 +4,7 @@
 //! benchmarking algorithmic complexity of a large number of scalar functions, many of which
 //! have various performance or correctness issues that arise from null features, empty features,
 //! polygons with holes, or collections with various numbers of sub-geometries.
-//! See https://github.com/apache/sedona/pull/1680 for the Sedona/Java implementation of spider,
+//! See <https://github.com/apache/sedona/pull/1680> for the Sedona/Java implementation of spider,
 //! which implements a number of other strategies for generating various geometry types.
 
 use arrow_array::{ArrayRef, RecordBatch, RecordBatchReader};

@@ -226,7 +226,7 @@ pub(crate) fn adjust_indices_by_join_type(
             // the left_indices will not be used later for the `right anti` join
             Ok((left_indices, right_indices))
         }
-        JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
+        JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark | JoinType::RightMark => {
             // matched or unmatched left row will be produced in the end of loop
             // When visit the right batch, we can output the matched left row and don't need to wait the end of loop
             Ok((
@@ -437,13 +437,15 @@ pub(crate) fn asymmetric_join_output_partitioning(
         JoinType::Inner | JoinType::Right => adjust_right_output_partitioning(
             right.output_partitioning(),
             left.schema().fields().len(),
-        ),
+        )
+        .unwrap_or_else(|_| Partitioning::UnknownPartitioning(1)),
         JoinType::RightSemi | JoinType::RightAnti => right.output_partitioning().clone(),
         JoinType::Left
         | JoinType::LeftSemi
         | JoinType::LeftAnti
         | JoinType::Full
-        | JoinType::LeftMark => {
+        | JoinType::LeftMark
+        | JoinType::RightMark => {
             Partitioning::UnknownPartitioning(right.output_partitioning().partition_count())
         }
     }

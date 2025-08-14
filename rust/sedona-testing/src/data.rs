@@ -4,7 +4,7 @@ use datafusion_common::{internal_err, Result};
 
 /// Find the most likely path to the test GeoParquet file
 ///
-/// See https://github.com/geoarrow/geooarrow-data for available files. Most files
+/// See <https://github.com/geoarrow/geooarrow-data> for available files. Most files
 /// are available from a naive submodule checkout; however, some must be downloaded
 /// (e.g., for benchmarks).
 pub fn test_geoparquet(group: &str, name: &str) -> Result<String> {

@@ -165,8 +165,9 @@ impl SpatialJoinExec {
             // construct a map from the input expressions to the output expression of the Projection
             let projection_mapping = ProjectionMapping::from_indices(projection, &schema)?;
             let out_schema = project_schema(&schema, Some(projection))?;
-            output_partitioning = output_partitioning.project(&projection_mapping, &eq_properties);
-            eq_properties = eq_properties.project(&projection_mapping, out_schema);
+            let eq_props = eq_properties?;
+            output_partitioning = output_partitioning.project(&projection_mapping, &eq_props);
+            eq_properties = Ok(eq_props.project(&projection_mapping, out_schema));
         }
 
         let emission_type = if left.boundedness().is_unbounded() {
@@ -182,16 +183,18 @@ impl SpatialJoinExec {
                 | JoinType::RightAnti => EmissionType::Incremental,
                 // If we need to generate unmatched rows from the *build side*,
                 // we need to emit them at the end.
-                JoinType::Left | JoinType::LeftAnti | JoinType::LeftMark | JoinType::Full => {
-                    EmissionType::Both
-                }
+                JoinType::Left
+                | JoinType::LeftAnti
+                | JoinType::LeftMark
+                | JoinType::RightMark
+                | JoinType::Full => EmissionType::Both,
             }
         } else {
             right.pipeline_behavior()
         };
 
         Ok(PlanProperties::new(
-            eq_properties,
+            eq_properties?,
             output_partitioning,
             emission_type,
             boundedness_from_children([left, right]),
@@ -727,6 +730,9 @@ mod tests {
             JoinType::RightAnti => "SELECT R.id r_id FROM R WHERE NOT EXISTS (SELECT 1 FROM L WHERE ST_Intersects(L.geometry, R.geometry)) ORDER BY r_id",
             JoinType::LeftMark => {
                 unreachable!("LeftMark is not directly supported in SQL, will be tested in other tests");
+            }
+            JoinType::RightMark => {
+                unreachable!("RightMark is not directly supported in SQL, will be tested in other tests");
             }
         };
 

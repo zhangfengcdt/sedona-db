@@ -76,7 +76,9 @@ jobs:
           # Update this key to force a new cache. When doing large dependency changes
           # (e.g., updating DataFusion), the old cache is not very useful and may result
           # in out-of-disk ("no space left on device")
-          prefix-key: "v3"
+          prefix-key: "v4-df49"
+          cache-on-failure: false
+          cache-all-crates: false
       - name: Install dependencies
         shell: bash
         run: sudo apt-get update && sudo apt-get install -y libgeos-dev
@@ -98,8 +100,15 @@ jobs:
           pushd rust
           cargo test --workspace --doc --all-features
           popd
+      - name: Clean target directory before docs
+        run: |
+          pushd rust
+          # Clean up build artifacts to free space before generating docs
+          cargo clean
+          popd
       - name: Check docs
         run: |
           pushd rust
-          cargo doc --workspace --all-features
+          # Generate docs with reduced parallelism to avoid memory issues
+          cargo doc --workspace --all-features -j 2
           popd

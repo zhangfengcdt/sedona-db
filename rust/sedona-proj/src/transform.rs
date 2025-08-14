@@ -51,7 +51,7 @@ impl CrsEngine for ProjCrsEngine {
     }
 }
 
-/// A [Transform] implemented using the [proj] crate
+/// A `Transform` implemented using the [proj] crate
 #[derive(Debug)]
 pub struct ProjTransform {
     proj: Proj,

@@ -43,6 +43,6 @@ impl From<PyErr> for PySedonaError {
 
 impl From<ArrowError> for PySedonaError {
     fn from(other: ArrowError) -> Self {
-        PySedonaError::DF(Box::new(DataFusionError::ArrowError(other, None)))
+        PySedonaError::DF(Box::new(DataFusionError::ArrowError(Box::new(other), None)))
     }
 }

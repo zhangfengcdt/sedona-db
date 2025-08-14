@@ -3,6 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use arrow_schema::SchemaRef;
 use datafusion::datasource::{
     file_format::parquet::fetch_parquet_metadata,
+    listing::PartitionedFile,
     physical_plan::{parquet::ParquetAccessPlan, FileMeta, FileOpenFuture, FileOpener},
 };
 use datafusion_common::Result;
@@ -53,7 +54,7 @@ impl GeoParquetFileOpener {
 }
 
 impl FileOpener for GeoParquetFileOpener {
-    fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
+    fn open(&self, file_meta: FileMeta, _file: PartitionedFile) -> Result<FileOpenFuture> {
         let self_clone = self.clone();
 
         Ok(Box::pin(async move {
@@ -61,6 +62,7 @@ impl FileOpener for GeoParquetFileOpener {
                 &self_clone.object_store,
                 &file_meta.object_meta,
                 self_clone.metadata_size_hint,
+                None,
             )
             .await?;
 
@@ -99,7 +101,7 @@ impl FileOpener for GeoParquetFileOpener {
                 metadata_size_hint: self_clone.metadata_size_hint,
             };
 
-            self_clone.inner.open(file_meta)?.await
+            self_clone.inner.open(file_meta, _file)?.await
         }))
     }
 }

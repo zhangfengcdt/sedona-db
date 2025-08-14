@@ -219,13 +219,13 @@ impl ConfigField for ExecutionMode {
 /// The spatial library to use for evaluating spatial predicates
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum SpatialLibrary {
-    /// Use georust/geo library (https://github.com/georust/geo)
+    /// Use georust/geo library (<https://github.com/georust/geo>)
     Geo,
 
-    /// Use GEOS library via georust/geos (https://github.com/georust/geos)
+    /// Use GEOS library via georust/geos (<https://github.com/georust/geos>)
     Geos,
 
-    /// Use tiny geometry library (https://github.com/tidwall/tg)
+    /// Use tiny geometry library (<https://github.com/tidwall/tg>)
     Tg,
 }
 
