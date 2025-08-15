@@ -117,6 +117,10 @@ impl SedonaContext {
         // Always register default function set
         out.register_function_set(sedona_functions::register::default_function_set());
 
+        // Register geos scalar kernels if built with geos support
+        #[cfg(feature = "geos")]
+        out.register_scalar_kernels(sedona_geos::register::scalar_kernels().into_iter())?;
+
         // Register geo kernels if built with geo support
         #[cfg(feature = "geo")]
         out.register_scalar_kernels(sedona_geo::register::scalar_kernels().into_iter())?;
@@ -128,10 +132,6 @@ impl SedonaContext {
         // Register s2geography scalar kernels if built with s2geography support
         #[cfg(feature = "s2geography")]
         out.register_scalar_kernels(sedona_s2geography::register::scalar_kernels().into_iter())?;
-
-        // Register geos scalar kernels if built with geos support
-        #[cfg(feature = "geos")]
-        out.register_scalar_kernels(sedona_geos::register::scalar_kernels().into_iter())?;
 
         Ok(out)
     }
