@@ -17,3 +17,6 @@ coverage/
 # IDE-specific settings
 .idea/
 .vscode/
+
+# documentation
+site/
