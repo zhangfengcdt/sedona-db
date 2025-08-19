@@ -9,6 +9,7 @@ mod error;
 mod import_from;
 mod reader;
 mod runtime;
+mod schema;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -50,6 +51,9 @@ fn _lib(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<context::InternalContext>()?;
     m.add_class::<dataframe::InternalDataFrame>()?;
     m.add("SedonaError", py.get_type::<error::SedonaError>())?;
+    m.add_class::<schema::PySedonaSchema>()?;
+    m.add_class::<schema::PySedonaField>()?;
+    m.add_class::<schema::PySedonaType>()?;
 
     Ok(())
 }

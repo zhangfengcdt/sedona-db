@@ -20,6 +20,25 @@ class DataFrame:
         self._ctx = ctx
         self._impl = impl
 
+    @property
+    def schema(self):
+        """Return the column names and data types
+
+        Examples:
+
+            >>> import sedonadb
+            >>> con = sedonadb.connect()
+            >>> df = con.sql("SELECT 1 as one")
+            >>> df.schema
+            SedonaSchema with 1 field:
+              one: non-nullable Int64
+            >>> df.schema.field(0)
+            SedonaField one: non-nullable Int64
+            >>> df.schema.field(0).name, df.schema.field(0).type
+            ('one', SedonaType Int64)
+        """
+        return self._impl.schema()
+
     def head(self, n: int = 5) -> "DataFrame":
         """Limit result to the first n rows
 
@@ -98,7 +117,7 @@ class DataFrame:
         [Arrow PyCapsule interface](https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html)
         for more details.
         """
-        return self._impl.__arrow_c_schema__()
+        return self._impl.schema().__arrow_c_schema__()
 
     def __arrow_c_stream__(self, requested_schema: Any = None):
         """ArrowArrayStream Stream PyCapsule interface

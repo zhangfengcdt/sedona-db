@@ -20,6 +20,7 @@ use crate::error::PySedonaError;
 use crate::import_from::check_pycapsule;
 use crate::reader::PySedonaStreamReader;
 use crate::runtime::wait_for_future;
+use crate::schema::PySedonaSchema;
 
 #[pyclass]
 pub struct InternalDataFrame {
@@ -34,6 +35,11 @@ impl InternalDataFrame {
 
 #[pymethods]
 impl InternalDataFrame {
+    fn schema(&self) -> PySedonaSchema {
+        let arrow_schema = unwrap_schema(self.inner.schema().as_arrow());
+        PySedonaSchema::new(arrow_schema)
+    }
+
     fn primary_geometry_column(&self) -> Result<Option<String>, PySedonaError> {
         Ok(self
             .inner
@@ -128,16 +134,6 @@ impl InternalDataFrame {
         let ffi_provider =
             FFI_TableProvider::new(provider, true, Some(self.runtime.handle().clone()));
         Ok(PyCapsule::new(py, ffi_provider, Some(name))?)
-    }
-
-    fn __arrow_c_schema__<'py>(
-        &self,
-        py: Python<'py>,
-    ) -> Result<Bound<'py, PyCapsule>, PySedonaError> {
-        let schema_capsule_name = CString::new("arrow_schema").unwrap();
-        let schema = unwrap_schema(self.inner.schema().as_arrow());
-        let ffi_schema = FFI_ArrowSchema::try_from(schema)?;
-        Ok(PyCapsule::new(py, ffi_schema, Some(schema_capsule_name))?)
     }
 
     #[pyo3(signature = (requested_schema=None))]

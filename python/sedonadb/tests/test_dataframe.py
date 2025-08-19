@@ -1,4 +1,5 @@
 import geoarrow.pyarrow as ga
+import geoarrow.types as gat
 import geopandas.testing
 import pandas as pd
 import pyarrow as pa
@@ -104,6 +105,46 @@ def test_dataframe_from_array_stream(con):
     ):
         # Ensure we can't collect again
         df.to_arrow_table()
+
+
+def test_schema(con):
+    df = con.sql("SELECT 1 as one, ST_GeomFromText('POINT (0 1)') as geom")
+
+    # Non-geometry field accessor
+    assert df.schema.field(0).name == "one"
+    assert df.schema.field("one").name == "one"
+    assert repr(df.schema.field(0).type) == "SedonaType Int64"
+    assert df.schema.field(0).type.edge_type is None
+    assert df.schema.field(0).type.crs is None
+
+    # Geometry field accessor
+    assert df.schema.field(1).name == "geom"
+    assert df.schema.field("geom").name == "geom"
+    assert repr(df.schema.field(1).type) == "SedonaType wkb"
+    assert df.schema.field(1).type.edge_type == gat.EdgeType.PLANAR
+    assert df.schema.field(1).type.crs is None
+
+    # Arrow export
+    assert pa.schema(df.schema) == pa.schema(
+        [pa.field("one", pa.int64(), False), pa.field("geom", ga.wkb())]
+    )
+    assert pa.field(df.schema.field(0)) == pa.field("one", pa.int64(), False)
+    assert pa.field(df.schema.field(0).type) == pa.field("", pa.int64(), True)
+
+    with pytest.raises(IndexError):
+        df.schema.field(100)
+
+    with pytest.raises(KeyError):
+        df.schema.field("foofy")
+
+    with pytest.raises(TypeError):
+        df.schema.field({})
+
+
+def test_schema_non_null_crs(con):
+    tab = pa.table({"geom": ga.with_crs(ga.as_wkb(["POINT (0 1)"]), gat.OGC_CRS84)})
+    df = con.create_data_frame(tab)
+    assert df.schema.field("geom").type.crs == gat.OGC_CRS84
 
 
 def test_collect(con):
