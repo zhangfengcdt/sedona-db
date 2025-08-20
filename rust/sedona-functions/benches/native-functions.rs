@@ -9,8 +9,11 @@ fn criterion_benchmark(c: &mut Criterion) {
     let st_astext: ScalarUDF = f.scalar_udf("st_astext").unwrap().clone().into();
 
     benchmark::scalar(c, &f, "native", "st_astext", Point);
-    benchmark::scalar(c, &f, "native", "st_x", Point);
     benchmark::scalar(c, &f, "native", "st_astext", LineString(10));
+
+    benchmark::scalar(c, &f, "native", "st_geometrytype", Point);
+    benchmark::scalar(c, &f, "native", "st_geometrytype", LineString(10));
+
     benchmark::scalar(
         c,
         &f,
@@ -40,6 +43,17 @@ fn criterion_benchmark(c: &mut Criterion) {
         "st_point",
         BenchmarkArgs::ArrayArray(Float64(0.0, 100.0), Float64(0.0, 100.0)),
     );
+
+    benchmark::scalar(c, &f, "native", "st_hasz", Point);
+    benchmark::scalar(c, &f, "native", "st_hasz", LineString(10));
+
+    benchmark::scalar(c, &f, "native", "st_hasm", Point);
+    benchmark::scalar(c, &f, "native", "st_hasm", LineString(10));
+
+    benchmark::scalar(c, &f, "native", "st_x", Point);
+    benchmark::scalar(c, &f, "native", "st_y", Point);
+    benchmark::scalar(c, &f, "native", "st_z", Point);
+    benchmark::scalar(c, &f, "native", "st_m", Point);
 
     benchmark::aggregate(c, &f, "native", "st_envelope_aggr", Point);
     benchmark::aggregate(c, &f, "native", "st_envelope_aggr", LineString(10));

@@ -48,15 +48,20 @@ pub fn default_function_set() -> FunctionSet {
         crate::st_asbinary::st_asbinary_udf,
         crate::st_astext::st_astext_udf,
         crate::st_geomfromwkb::st_geogfromwkb_udf,
+        crate::st_geometrytype::st_geometry_type_udf,
         crate::st_geomfromwkb::st_geomfromwkb_udf,
         crate::st_geomfromwkt::st_geogfromwkt_udf,
         crate::st_geomfromwkt::st_geomfromwkt_udf,
+        crate::st_haszm::st_hasz_udf,
+        crate::st_haszm::st_hasm_udf,
         crate::st_length::st_length_udf,
         crate::st_perimeter::st_perimeter_udf,
         crate::st_point::st_geogpoint_udf,
         crate::st_point::st_point_udf,
-        crate::st_xy::st_x_udf,
-        crate::st_xy::st_y_udf,
+        crate::st_xyzm::st_x_udf,
+        crate::st_xyzm::st_y_udf,
+        crate::st_xyzm::st_z_udf,
+        crate::st_xyzm::st_m_udf,
     );
 
     register_aggregate_udfs!(
