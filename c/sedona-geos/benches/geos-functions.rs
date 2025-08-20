@@ -79,6 +79,22 @@ fn criterion_benchmark(c: &mut Criterion) {
         c,
         &f,
         "geos",
+        "st_difference",
+        ArrayScalar(Polygon(10), Polygon(10)),
+    );
+
+    benchmark::scalar(
+        c,
+        &f,
+        "geos",
+        "st_difference",
+        ArrayScalar(Polygon(10), Polygon(500)),
+    );
+
+    benchmark::scalar(
+        c,
+        &f,
+        "geos",
         "st_disjoint",
         ArrayScalar(Polygon(10), Polygon(10)),
     );
@@ -145,6 +161,22 @@ fn criterion_benchmark(c: &mut Criterion) {
         c,
         &f,
         "geos",
+        "st_sym_difference",
+        ArrayScalar(Polygon(10), Polygon(10)),
+    );
+
+    benchmark::scalar(
+        c,
+        &f,
+        "geos",
+        "st_sym_difference",
+        ArrayScalar(Polygon(10), Polygon(500)),
+    );
+
+    benchmark::scalar(
+        c,
+        &f,
+        "geos",
         "st_touches",
         ArrayScalar(Polygon(10), Polygon(10)),
     );
@@ -153,6 +185,22 @@ fn criterion_benchmark(c: &mut Criterion) {
         &f,
         "geos",
         "st_touches",
+        ArrayScalar(Polygon(10), Polygon(500)),
+    );
+
+    benchmark::scalar(
+        c,
+        &f,
+        "geos",
+        "st_union",
+        ArrayScalar(Polygon(10), Polygon(10)),
+    );
+
+    benchmark::scalar(
+        c,
+        &f,
+        "geos",
+        "st_union",
         ArrayScalar(Polygon(10), Polygon(500)),
     );
 
