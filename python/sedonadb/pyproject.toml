@@ -13,7 +13,15 @@ classifiers = [
 dynamic = ["version"]
 
 [project.optional-dependencies]
-test = ["pytest", "adbc-driver-manager[dbapi]", "pandas", "geopandas", "geoarrow-pyarrow"]
+test = [
+    "adbc-driver-manager[dbapi]",
+    "adbc-driver-postgresql",
+    "duckdb",
+    "geoarrow-pyarrow",
+    "geopandas",
+    "pandas",
+    "pytest",
+]
 
 [tool.maturin]
 features = ["pyo3/extension-module"]

@@ -57,7 +57,14 @@ jobs:
         run: |
           pip install -e "python/sedonadb/[test]" -vv
 
+      - name: Start PostGIS
+        run: |
+          docker compose up --wait --detach postgis
+
       - name: Run tests
+        env:
+          # Ensure that there are no skips for PostGIS or duckdb not available
+          SEDONADB_PYTHON_ENSURE_ALL_ENGINES: "true"
         run: |
           cd python
           python -m pytest -vv
@@ -66,3 +73,8 @@ jobs:
         run: |
           cd python
           python -m pytest --doctest-modules
+
+      - name: Shutdown docker compose services
+        if: always()
+        run: |
+          docker compose down
