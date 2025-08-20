@@ -6,22 +6,21 @@ use datafusion_common::{error::Result, DataFusionError};
 use datafusion_expr::ColumnarValue;
 use geos::{
     GResult, Geom,
-    GeometryTypes::{GeometryCollection, LineString, MultiLineString},
+    GeometryTypes::{GeometryCollection, MultiPolygon, Polygon},
 };
 use sedona_expr::scalar_udf::{ArgMatcher, ScalarKernelRef, SedonaScalarKernel};
 use sedona_schema::datatypes::SedonaType;
 
 use crate::executor::GeosExecutor;
 
-/// ST_Length() implementation using the geos crate
-pub fn st_length_impl() -> ScalarKernelRef {
-    Arc::new(STLength {})
+pub fn st_perimeter_impl() -> ScalarKernelRef {
+    Arc::new(STPerimeter {})
 }
 
 #[derive(Debug)]
-struct STLength {}
+struct STPerimeter {}
 
-impl SedonaScalarKernel for STLength {
+impl SedonaScalarKernel for STPerimeter {
     fn return_type(&self, args: &[SedonaType]) -> Result<Option<SedonaType>> {
         let matcher = ArgMatcher::new(
             vec![ArgMatcher::is_geometry()],
@@ -42,7 +41,7 @@ impl SedonaScalarKernel for STLength {
             match maybe_wkb {
                 Some(wkb) => {
                     builder.append_value(invoke_scalar(&wkb).map_err(|e| {
-                        DataFusionError::Execution(format!("Failed to calculate length: {e}"))
+                        DataFusionError::Execution(format!("Failed to calculate perimeter: {e}"))
                     })?);
                 }
                 _ => builder.append_null(),
@@ -56,18 +55,18 @@ impl SedonaScalarKernel for STLength {
 }
 
 fn invoke_scalar(geos_geom: &geos::Geometry) -> GResult<f64> {
-    // The .length() property may return non-zero values for non line geometries,
-    // so we check for the geometry type here
+    // The .length() method returns the perimeter of the geometry for polygons
+    // and lengths for the line strings, so we need to explicitly check for the geometry type
     match geos_geom.geometry_type() {
-        LineString => Ok(geos_geom.length()?),
-        MultiLineString => Ok(geos_geom.length()?),
+        Polygon => geos_geom.length(),
+        MultiPolygon => geos_geom.length(),
         GeometryCollection => {
             let mut sum = 0.0;
             for i in 0..geos_geom.get_num_geometries()? {
                 let geom = geos_geom.get_geometry_n(i)?;
                 match geom.geometry_type() {
-                    LineString => sum += geom.length()?,
-                    MultiLineString => sum += geom.length()?,
+                    Polygon => sum += geom.length()?,
+                    MultiPolygon => sum += geom.length()?,
                     _ => {}
                 }
             }
@@ -91,12 +90,14 @@ mod tests {
     fn udf(#[values(WKB_GEOMETRY, WKB_VIEW_GEOMETRY)] sedona_type: SedonaType) {
         use datafusion_common::ScalarValue;
 
-        let udf = SedonaScalarUDF::from_kernel("st_length", st_length_impl());
+        let udf = SedonaScalarUDF::from_kernel("st_perimeter", st_perimeter_impl());
         let tester = ScalarUdfTester::new(udf.into(), vec![sedona_type]);
         tester.assert_return_type(DataType::Float64);
 
-        let result = tester.invoke_scalar("LINESTRING (0 0, 1 0, 0 1)").unwrap();
-        tester.assert_scalar_result_equals(result, 2.414213562373095);
+        let result = tester
+            .invoke_scalar("POLYGON ((0 0, 1 0, 0 1, 0 0))")
+            .unwrap();
+        tester.assert_scalar_result_equals(result, 3.414213562373095);
 
         let result = tester.invoke_scalar(ScalarValue::Null).unwrap();
         assert!(result.is_null());
@@ -106,16 +107,16 @@ mod tests {
             None,
             Some("POLYGON ((0 0, 1 0, 0 1, 0 0))"),
             Some("LINESTRING (0 0, 1 0, 0 1)"),
-            Some("GEOMETRYCOLLECTION (POINT (0 0), LINESTRING (0 0, 1 0, 0 1), LINESTRING (0 0, 1 0, 0 1), POLYGON ((0 0, 1 0, 0 1, 0 0)))"),
+            Some("GEOMETRYCOLLECTION (POINT (0 0), POLYGON ((0 0, 1 0, 0 1, 0 0)), LINESTRING (0 0, 1 0, 0 1), POLYGON ((0 0, 1 0, 0 1, 0 0)))"),
         ];
         let expected: ArrayRef = create_array!(
             Float64,
             [
                 Some(0.0),
                 None,
+                Some(3.414213562373095),
                 Some(0.0),
-                Some(2.414213562373095),
-                Some(4.82842712474619)
+                Some(6.82842712474619)
             ]
         );
         assert_eq!(&tester.invoke_wkb_array(input_wkt).unwrap(), &expected);
