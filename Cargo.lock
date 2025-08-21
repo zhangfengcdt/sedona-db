@@ -2625,14 +2625,17 @@ dependencies = [
 [[package]]
 name = "geo-index"
 version = "0.3.1"
-source = "git+https://github.com/wherobots/geo-index.git?branch=main#cd34bb4765eb7988accc60e29d75cc4d067cc366"
+source = "git+https://github.com/wherobots/geo-index.git?branch=main#f7d5bef2044831e78b2deb095f1af932128d74e4"
 dependencies = [
  "bytemuck",
  "float_next_after",
+ "geo",
  "geo-traits 0.3.0",
+ "geo-types",
  "num-traits",
  "thiserror 1.0.69",
  "tinyvec",
+ "wkt 0.14.0",
 ]
 
 [[package]]
@@ -6338,6 +6341,19 @@ version = "0.13.0"
 source = "git+https://github.com/wherobots/wkt.git?branch=generic-alg#ec44269a416b88821a5bf43d17b53def24c68f65"
 dependencies = [
  "geo-traits 0.2.0",
+ "geo-types",
+ "log",
+ "num-traits",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "wkt"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "efb2b923ccc882312e559ffaa832a055ba9d1ac0cc8e86b3e25453247e4b81d7"
+dependencies = [
+ "geo-traits 0.3.0",
  "geo-types",
  "log",
  "num-traits",

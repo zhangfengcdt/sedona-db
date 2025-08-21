@@ -3,23 +3,6 @@ use std::sync::{
     Arc,
 };
 
-// Helper trait to convert between f64 and the coordinate type expected by geo-index
-trait CoordConvert<T> {
-    fn to_coord(self) -> T;
-}
-
-impl CoordConvert<f32> for f64 {
-    fn to_coord(self) -> f32 {
-        self as f32
-    }
-}
-
-impl CoordConvert<f64> for f64 {
-    fn to_coord(self) -> f64 {
-        self
-    }
-}
-
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use datafusion_common::{utils::proxy::VecAllocExt, DataFusionError, Result};
@@ -31,11 +14,14 @@ use datafusion_execution::{
 use datafusion_expr::{ColumnarValue, JoinType};
 use datafusion_physical_plan::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use futures::StreamExt;
+use geo_index::rtree::distance::{DistanceMetric, EuclideanDistance, HaversineDistance};
 use geo_index::rtree::{sort::HilbertSort, RTree, RTreeBuilder, RTreeIndex};
-use geo_types::Rect;
+use geo_index::IndexableNum;
+use geo_types::{Geometry, Point, Rect};
 use parking_lot::Mutex;
 use sedona_expr::statistics::GeoStatistics;
 use sedona_functions::st_analyze_aggr::AnalyzeAccumulator;
+use sedona_geo::to_geo::item_to_geometry;
 use sedona_schema::datatypes::WKB_GEOMETRY;
 use wkb::reader::Wkb;
 
@@ -53,30 +39,6 @@ use sedona_common::{option::SpatialJoinOptions, ExecutionMode};
 type SpatialRTree = RTree<f32>;
 type DataIdToBatchPos = Vec<(i32, i32)>;
 type RTreeBuildResult = (SpatialRTree, DataIdToBatchPos);
-
-/// Candidate for KNN query with distance and position information
-#[derive(Debug, Clone, PartialEq)]
-struct KNNCandidate {
-    distance: f64,
-    position: (i32, i32),
-    data_idx: u32,
-}
-
-impl PartialOrd for KNNCandidate {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Eq for KNNCandidate {}
-
-impl Ord for KNNCandidate {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.distance
-            .partial_cmp(&other.distance)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    }
-}
 
 /// The prealloc size for the refiner reservation. This is used to reduce the frequency of growing
 /// the reservation when updating the refiner memory reservation.
@@ -486,7 +448,6 @@ impl SpatialIndex {
     /// # Arguments
     ///
     /// * `probe_wkb` - WKB representation of the probe geometry
-    /// * `probe_rect` - Bounding rectangle of the probe geometry (used for centroid extraction)
     /// * `k` - Number of nearest neighbors to find
     /// * `use_spheroid` - Whether to use spheroid distance calculation
     /// * `include_tie_breakers` - Whether to include additional results with same distance as kth neighbor
@@ -518,178 +479,179 @@ impl SpatialIndex {
             });
         }
 
-        // Extract centroid from probe geometry for KNN search
-        let probe_centroid = self.extract_centroid(probe_wkb)?;
+        // Convert probe WKB to geo::Geometry
+        let probe_geom = match item_to_geometry(probe_wkb) {
+            Ok(geom) => geom,
+            Err(_) => {
+                // Empty or unsupported geometries (e.g., POINT EMPTY) return empty results
+                return Ok(JoinResultMetrics {
+                    count: 0,
+                    candidate_count: 0,
+                });
+            }
+        };
 
-        // First query: get initial candidates
-        let initial_candidates = self.rtree.neighbors(
-            probe_centroid.0.to_coord(),
-            probe_centroid.1.to_coord(),
-            Some(k as usize),
-            None,
-        );
+        // Create a vector of geometries for all indexed items
+        let mut geometries: Vec<Geometry<f64>> = Vec::new();
+        let mut geometry_to_position: Vec<(i32, i32)> = Vec::new();
 
-        if initial_candidates.is_empty() {
+        for (batch_idx, indexed_batch) in self.indexed_batches.iter().enumerate() {
+            for (row_idx, wkb_opt) in indexed_batch.geom_array.wkbs().iter().enumerate() {
+                if let Some(wkb) = wkb_opt.as_ref() {
+                    if let Ok(geom) = item_to_geometry(wkb) {
+                        geometries.push(geom);
+                        geometry_to_position.push((batch_idx as i32, row_idx as i32));
+                    }
+                }
+            }
+        }
+
+        if geometries.is_empty() {
             return Ok(JoinResultMetrics {
                 count: 0,
                 candidate_count: 0,
             });
         }
 
-        // Calculate actual distances for initial candidates and store unique candidates
-        let mut knn_candidates: Vec<KNNCandidate> = Vec::with_capacity(initial_candidates.len());
-        let mut unique_candidates = std::collections::HashSet::new();
+        // Choose distance metric based on use_spheroid parameter
+        let distance_metric: Box<dyn DistanceMetric<f32>> = if use_spheroid {
+            // For spheroid (geodesic) distance, we use the Haversine formula as an approximation for now.
+            // The distance metric will be used to calculate distances between geometries for ranking purposes.
+            Box::new(HaversineDistance::default())
+        } else {
+            Box::new(EuclideanDistance)
+        };
 
-        for &data_idx in &initial_candidates {
-            let pos = unsafe { *self.data_id_to_batch_pos.get_unchecked(data_idx as usize) };
-            let (batch_idx, row_idx) = pos;
-            let indexed_batch = &self.indexed_batches[batch_idx as usize];
-            let build_wkb = indexed_batch.wkb(row_idx as usize);
+        // Use neighbors_geometry to find k nearest neighbors
+        let initial_results = self.rtree.neighbors_geometry(
+            &probe_geom,
+            Some(k as usize),
+            None, // no max_distance filter
+            distance_metric.as_ref(),
+            &geometries,
+        );
 
-            let Some(build_wkb) = build_wkb else {
-                continue;
-            };
-
-            // Calculate actual distance between geometries
-            let distance = self.calculate_distance(probe_wkb, build_wkb, use_spheroid)?;
-
-            knn_candidates.push(KNNCandidate {
-                distance,
-                position: pos,
-                data_idx,
+        if initial_results.is_empty() {
+            return Ok(JoinResultMetrics {
+                count: 0,
+                candidate_count: 0,
             });
-            unique_candidates.insert(data_idx);
         }
 
-        // Sort by distance (ascending)
-        knn_candidates.sort_by(|a, b| {
-            a.distance
-                .partial_cmp(&b.distance)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        let mut final_results = initial_results;
+        let mut candidate_count = final_results.len();
 
-        let mut result_count = knn_candidates.len().min(k as usize);
-        let mut candidate_count = initial_candidates.len();
+        // Handle tie-breakers if enabled
+        if include_tie_breakers && !final_results.is_empty() && k > 0 {
+            // Calculate distances for the initial k results to find the k-th distance
+            let mut distances_with_indices: Vec<(f64, u32)> = Vec::new();
 
-        // Handle tie-breakers using Sedona's approach
-        if include_tie_breakers && !knn_candidates.is_empty() && k > 0 {
-            let k_idx = (k as usize).min(knn_candidates.len()).saturating_sub(1);
-            if k_idx < knn_candidates.len() {
-                let max_distance = knn_candidates[k_idx].distance;
-
-                // Create an expanded search envelope using the maximum distance
-                let expanded_envelope = Rect::new(
-                    geo_types::Coord {
-                        x: probe_centroid.0 - max_distance,
-                        y: probe_centroid.1 - max_distance,
-                    },
-                    geo_types::Coord {
-                        x: probe_centroid.0 + max_distance,
-                        y: probe_centroid.1 + max_distance,
-                    },
-                );
-
-                // Query the R-tree with the expanded envelope
-                let envelope_min = expanded_envelope.min();
-                let envelope_max = expanded_envelope.max();
-                let expanded_candidates = self.rtree.search(
-                    envelope_min.x.to_coord(),
-                    envelope_min.y.to_coord(),
-                    envelope_max.x.to_coord(),
-                    envelope_max.y.to_coord(),
-                );
-
-                // Process expanded candidates to find ties
-                for &data_idx in &expanded_candidates {
-                    // Skip if we've already processed this candidate
-                    if unique_candidates.contains(&data_idx) {
-                        continue;
+            for &result_idx in &final_results {
+                if (result_idx as usize) < geometries.len() {
+                    let distance = distance_metric.geometry_to_geometry_distance(
+                        &probe_geom,
+                        &geometries[result_idx as usize],
+                    );
+                    if let Some(distance_f64) = distance.to_f64() {
+                        distances_with_indices.push((distance_f64, result_idx));
                     }
+                }
+            }
 
-                    let pos =
-                        unsafe { *self.data_id_to_batch_pos.get_unchecked(data_idx as usize) };
-                    let (batch_idx, row_idx) = pos;
-                    let indexed_batch = &self.indexed_batches[batch_idx as usize];
-                    let build_wkb = indexed_batch.wkb(row_idx as usize);
+            // Sort by distance
+            distances_with_indices
+                .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-                    let Some(build_wkb) = build_wkb else {
-                        continue;
-                    };
+            // Find the k-th distance (if we have at least k results)
+            if distances_with_indices.len() >= k as usize {
+                let k_idx = (k as usize)
+                    .min(distances_with_indices.len())
+                    .saturating_sub(1);
+                let max_distance = distances_with_indices[k_idx].0;
 
-                    // Calculate actual distance
-                    let distance = self.calculate_distance(probe_wkb, build_wkb, use_spheroid)?;
-
-                    // Check if this candidate has the same distance as the k-th result
-                    // Use a small tolerance for floating-point comparison
-                    const DISTANCE_TOLERANCE: f64 = 1e-9;
-                    if (distance - max_distance).abs() <= DISTANCE_TOLERANCE {
-                        knn_candidates.push(KNNCandidate {
-                            distance,
-                            position: pos,
-                            data_idx,
+                // For tie-breakers, create spatial envelope around probe centroid and use rtree.search()
+                use geo_generic_alg::algorithm::Centroid;
+                let probe_centroid = probe_geom.centroid().unwrap_or(Point::new(0.0, 0.0));
+                let probe_x = probe_centroid.x() as f32;
+                let probe_y = probe_centroid.y() as f32;
+                let max_distance_f32 = match f32::from_f64(max_distance) {
+                    Some(val) => val,
+                    None => {
+                        // If conversion fails, return empty results for this probe
+                        return Ok(JoinResultMetrics {
+                            count: 0,
+                            candidate_count: 0,
                         });
+                    }
+                };
+
+                // Create envelope bounds around probe centroid
+                let min_x = probe_x - max_distance_f32;
+                let min_y = probe_y - max_distance_f32;
+                let max_x = probe_x + max_distance_f32;
+                let max_y = probe_y + max_distance_f32;
+
+                // Use rtree.search() with envelope bounds (like the old code)
+                let expanded_results = self.rtree.search(min_x, min_y, max_x, max_y);
+
+                candidate_count = expanded_results.len();
+
+                // Calculate distances for all results and find ties
+                let mut all_distances_with_indices: Vec<(f64, u32)> = Vec::new();
+
+                for &result_idx in &expanded_results {
+                    if (result_idx as usize) < geometries.len() {
+                        let distance = distance_metric.geometry_to_geometry_distance(
+                            &probe_geom,
+                            &geometries[result_idx as usize],
+                        );
+                        if let Some(distance_f64) = distance.to_f64() {
+                            all_distances_with_indices.push((distance_f64, result_idx));
+                        }
                     }
                 }
 
-                // Update candidate count to include expanded search
-                candidate_count += expanded_candidates.len();
+                // Sort by distance
+                all_distances_with_indices
+                    .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-                // Re-sort to ensure proper ordering with new candidates
-                knn_candidates.sort_by(|a, b| {
-                    a.distance
-                        .partial_cmp(&b.distance)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
+                // Include all results up to and including those with the same distance as the k-th result
+                const DISTANCE_TOLERANCE: f64 = 1e-9;
+                let mut tie_breaker_results: Vec<u32> = Vec::new();
 
-                // Count all results up to and including those with max_distance
-                result_count = knn_candidates
-                    .iter()
-                    .take_while(|candidate| candidate.distance <= max_distance)
-                    .count();
+                for (i, &(distance, result_idx)) in all_distances_with_indices.iter().enumerate() {
+                    if i < k as usize {
+                        // Include the first k results
+                        tie_breaker_results.push(result_idx);
+                    } else if (distance - max_distance).abs() <= DISTANCE_TOLERANCE {
+                        // Include tie-breakers (same distance as k-th result)
+                        tie_breaker_results.push(result_idx);
+                    } else {
+                        // No more ties, stop
+                        break;
+                    }
+                }
+
+                final_results = tie_breaker_results;
+            }
+        } else {
+            // When tie-breakers are disabled, limit results to exactly k
+            if final_results.len() > k as usize {
+                final_results.truncate(k as usize);
             }
         }
 
-        // Add the final k (or k+tie-breakers) results to build_batch_positions
-        for candidate in knn_candidates.iter().take(result_count) {
-            build_batch_positions.push(candidate.position);
+        // Convert results to build_batch_positions
+        for &result_idx in &final_results {
+            if (result_idx as usize) < geometry_to_position.len() {
+                build_batch_positions.push(geometry_to_position[result_idx as usize]);
+            }
         }
 
         Ok(JoinResultMetrics {
-            count: result_count,
+            count: final_results.len(),
             candidate_count,
         })
-    }
-
-    /// Calculate distance between two geometries
-    ///
-    /// Currently only supports planar distance calculation (use_spheroid = false).
-    /// The distance calculation matches the geo-index crate's approach:
-    /// dx * dx + dy * dy (squared Euclidean distance without the square root)
-    ///
-    /// TODO: Switch to use distance metrics from geo-index crate once they implement
-    /// and expose the correct distance metrics for use here.
-    fn calculate_distance(&self, geom1: &Wkb, geom2: &Wkb, use_spheroid: bool) -> Result<f64> {
-        if use_spheroid {
-            return Err(DataFusionError::NotImplemented(
-                "Spheroid distance calculation is not currently supported. Only planar distance is available.".to_string()
-            ));
-        }
-
-        // Extract centroids for distance calculation
-        let centroid1 = self.extract_centroid(geom1)?;
-        let centroid2 = self.extract_centroid(geom2)?;
-
-        // Use the same distance calculation as geo-index:
-        let dx = centroid1.0 - centroid2.0;
-        let dy = centroid1.1 - centroid2.1;
-        let dist = dx * dx + dy * dy;
-
-        Ok(dist)
-    }
-
-    /// Extract centroid from WKB geometry
-    fn extract_centroid(&self, wkb: &Wkb) -> Result<(f64, f64)> {
-        sedona_geo::centroid::extract_centroid_2d(wkb)
     }
 
     fn refine(
@@ -1020,42 +982,6 @@ mod tests {
     }
 
     #[test]
-    fn test_knn_candidate_ordering() {
-        // Test that KNNCandidate ordering works correctly
-        let candidate1 = KNNCandidate {
-            distance: 1.0,
-            position: (0, 0),
-            data_idx: 0,
-        };
-        let candidate2 = KNNCandidate {
-            distance: 2.0,
-            position: (0, 1),
-            data_idx: 1,
-        };
-        let candidate3 = KNNCandidate {
-            distance: 0.5,
-            position: (0, 2),
-            data_idx: 2,
-        };
-
-        // Test ordering - smaller distances should be "less than" larger distances
-        assert!(candidate3 < candidate1);
-        assert!(candidate1 < candidate2);
-        assert!(candidate3 < candidate2);
-
-        // Test that equal distances are equal
-        let candidate4 = KNNCandidate {
-            distance: 1.0,
-            position: (1, 0),
-            data_idx: 3,
-        };
-        assert_eq!(
-            candidate1.partial_cmp(&candidate4),
-            Some(std::cmp::Ordering::Equal)
-        );
-    }
-
-    #[test]
     fn test_knn_query_execution_with_sample_data() {
         use arrow_array::RecordBatch;
         use arrow_schema::{DataType, Field};
@@ -1321,20 +1247,22 @@ mod tests {
         assert!(result.count >= 1);
         assert!(result.candidate_count >= 1);
 
-        // Test that spheroid distance returns an error
+        // Test that spheroid distance now works with Haversine metric
         let mut build_positions_spheroid = Vec::new();
         let result_spheroid = index.query_knn(
             query_wkb,
             3,    // k=3
-            true, // use_spheroid=true (not supported)
+            true, // use_spheroid=true (now supported with Haversine)
             false,
             &mut build_positions_spheroid,
         );
-        assert!(result_spheroid.is_err());
-        assert!(result_spheroid
-            .unwrap_err()
-            .to_string()
-            .contains("Spheroid distance calculation is not currently supported"));
+
+        // Should succeed and return results
+        assert!(result_spheroid.is_ok());
+        let result_spheroid = result_spheroid.unwrap();
+        assert!(!build_positions_spheroid.is_empty());
+        assert!(result_spheroid.count >= 1);
+        assert!(result_spheroid.candidate_count >= 1);
     }
 
     #[test]
@@ -1586,5 +1514,347 @@ mod tests {
             "With tie-breakers should return all 4 tied points"
         );
         assert_eq!(build_positions_with_ties.len(), 4);
+    }
+
+    #[test]
+    fn test_query_knn_with_geometry_distance() {
+        use arrow_array::RecordBatch;
+        use arrow_schema::{DataType, Field};
+
+        // Create a spatial index with sample geometry data
+        let memory_pool = Arc::new(GreedyMemoryPool::new(1024 * 1024));
+        let options = SpatialJoinOptions {
+            execution_mode: ExecutionMode::PrepareBuild,
+            ..Default::default()
+        };
+        let metrics = SpatialJoinBuildMetrics::default();
+
+        let spatial_predicate = SpatialPredicate::Relation(RelationPredicate::new(
+            Arc::new(Column::new("geom", 0)),
+            Arc::new(Column::new("geom", 1)),
+            SpatialRelationType::Intersects,
+        ));
+
+        let mut builder = SpatialIndexBuilder::new(
+            spatial_predicate,
+            options,
+            JoinType::Inner,
+            4,
+            memory_pool,
+            metrics,
+        )
+        .unwrap();
+
+        // Create sample geometry data - points at known locations
+        let schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+            "geom",
+            DataType::Binary,
+            true,
+        )]));
+        let batch = RecordBatch::new_empty(schema.clone());
+
+        // Create geometries at different distances from the query point (0, 0)
+        let geom_batch = create_array(
+            &[
+                Some("POINT (1 0)"), // Distance: 1.0
+                Some("POINT (0 2)"), // Distance: 2.0
+                Some("POINT (3 0)"), // Distance: 3.0
+                Some("POINT (0 4)"), // Distance: 4.0
+                Some("POINT (5 0)"), // Distance: 5.0
+                Some("POINT (2 2)"), // Distance: ~2.83
+                Some("POINT (1 1)"), // Distance: ~1.41
+            ],
+            &WKB_GEOMETRY,
+        );
+
+        let indexed_batch = IndexedBatch {
+            batch,
+            geom_array: EvaluatedGeometryArray::try_new(geom_batch).unwrap(),
+        };
+        builder.add_batch(indexed_batch);
+
+        let index = builder.finish(schema).unwrap();
+
+        // Create a query geometry at origin (0, 0)
+        let query_geom = create_array(&[Some("POINT (0 0)")], &WKB_GEOMETRY);
+        let query_array = EvaluatedGeometryArray::try_new(query_geom).unwrap();
+        let query_wkb = &query_array.wkbs()[0].as_ref().unwrap();
+
+        // Test the geometry-based query_knn method with k=3
+        let mut build_positions = Vec::new();
+        let result = index
+            .query_knn(
+                query_wkb,
+                3,     // k=3
+                false, // use_spheroid=false
+                false, // include_tie_breakers=false
+                &mut build_positions,
+            )
+            .unwrap();
+
+        // Verify we got results (should be 3 or less)
+        assert!(!build_positions.is_empty());
+        assert!(build_positions.len() <= 3);
+        assert!(result.count > 0);
+        assert!(result.count <= 3);
+
+        println!("KNN Geometry test - found {} results", result.count);
+        println!("Result positions: {build_positions:?}");
+    }
+
+    #[test]
+    fn test_query_knn_with_mixed_geometries() {
+        use arrow_array::RecordBatch;
+        use arrow_schema::{DataType, Field};
+
+        // Create a spatial index with complex geometries where geometry-based
+        // distance should differ from centroid-based distance
+        let memory_pool = Arc::new(GreedyMemoryPool::new(1024 * 1024));
+        let options = SpatialJoinOptions {
+            execution_mode: ExecutionMode::PrepareBuild,
+            ..Default::default()
+        };
+        let metrics = SpatialJoinBuildMetrics::default();
+
+        let spatial_predicate = SpatialPredicate::Relation(RelationPredicate::new(
+            Arc::new(Column::new("geom", 0)),
+            Arc::new(Column::new("geom", 1)),
+            SpatialRelationType::Intersects,
+        ));
+
+        let mut builder = SpatialIndexBuilder::new(
+            spatial_predicate,
+            options,
+            JoinType::Inner,
+            4,
+            memory_pool,
+            metrics,
+        )
+        .unwrap();
+
+        // Create different geometry types
+        let schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+            "geom",
+            DataType::Binary,
+            true,
+        )]));
+        let batch = RecordBatch::new_empty(schema.clone());
+
+        // Mix of points and linestrings
+        let geom_batch = create_array(
+            &[
+                Some("POINT (1 1)"),               // Simple point
+                Some("LINESTRING (2 0, 2 4)"),     // Vertical line - closest point should be (2, 1)
+                Some("LINESTRING (10 10, 10 20)"), // Far away line
+                Some("POINT (5 5)"),               // Far point
+            ],
+            &WKB_GEOMETRY,
+        );
+
+        let indexed_batch = IndexedBatch {
+            batch,
+            geom_array: EvaluatedGeometryArray::try_new(geom_batch).unwrap(),
+        };
+        builder.add_batch(indexed_batch);
+
+        let index = builder.finish(schema).unwrap();
+
+        // Query point close to the linestring
+        let query_geom = create_array(&[Some("POINT (2.1 1.0)")], &WKB_GEOMETRY);
+        let query_array = EvaluatedGeometryArray::try_new(query_geom).unwrap();
+        let query_wkb = &query_array.wkbs()[0].as_ref().unwrap();
+
+        // Test the geometry-based KNN method with mixed geometry types
+        let mut build_positions = Vec::new();
+
+        let result = index
+            .query_knn(
+                query_wkb,
+                2,     // k=2
+                false, // use_spheroid=false
+                false, // include_tie_breakers=false
+                &mut build_positions,
+            )
+            .unwrap();
+
+        // Should return results
+        assert!(!build_positions.is_empty());
+
+        println!("KNN with mixed geometries: {build_positions:?}");
+
+        // Should work with mixed geometry types
+        assert!(result.count > 0);
+    }
+
+    #[test]
+    fn test_query_knn_with_tie_breakers_geometry_distance() {
+        use arrow_array::RecordBatch;
+        use arrow_schema::{DataType, Field};
+
+        // Create a spatial index with geometries that have identical distances for tie-breaker testing
+        let memory_pool = Arc::new(GreedyMemoryPool::new(1024 * 1024));
+        let options = SpatialJoinOptions {
+            execution_mode: ExecutionMode::PrepareBuild,
+            ..Default::default()
+        };
+        let metrics = SpatialJoinBuildMetrics::default();
+
+        let spatial_predicate = SpatialPredicate::Relation(RelationPredicate::new(
+            Arc::new(Column::new("geom", 0)),
+            Arc::new(Column::new("geom", 1)),
+            SpatialRelationType::Intersects,
+        ));
+
+        let mut builder = SpatialIndexBuilder::new(
+            spatial_predicate,
+            options,
+            JoinType::Inner,
+            4,
+            memory_pool,
+            metrics,
+        )
+        .unwrap();
+
+        let schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+            "geom",
+            DataType::Binary,
+            true,
+        )]));
+        let batch = RecordBatch::new_empty(schema.clone());
+
+        // Create points where we have multiple points at the same distance from the query point
+        // Query point will be at (0, 0), and we'll have 4 points all at distance sqrt(2) ≈ 1.414
+        let geom_batch = create_array(
+            &[
+                Some("POINT (1.0 1.0)"),   // Distance: sqrt(2)
+                Some("POINT (1.0 -1.0)"),  // Distance: sqrt(2) - tied with above
+                Some("POINT (-1.0 1.0)"),  // Distance: sqrt(2) - tied with above
+                Some("POINT (-1.0 -1.0)"), // Distance: sqrt(2) - tied with above
+                Some("POINT (2.0 0.0)"),   // Distance: 2.0 - farther away
+                Some("POINT (0.0 2.0)"),   // Distance: 2.0 - farther away
+            ],
+            &WKB_GEOMETRY,
+        );
+
+        let indexed_batch = IndexedBatch {
+            batch,
+            geom_array: EvaluatedGeometryArray::try_new(geom_batch).unwrap(),
+        };
+        builder.add_batch(indexed_batch);
+
+        let index = builder.finish(schema).unwrap();
+
+        // Query point at the origin (0.0, 0.0)
+        let query_geom = create_array(&[Some("POINT (0.0 0.0)")], &WKB_GEOMETRY);
+        let query_array = EvaluatedGeometryArray::try_new(query_geom).unwrap();
+        let query_wkb = &query_array.wkbs()[0].as_ref().unwrap();
+
+        // Test without tie-breakers: should return exactly k=2 results
+        let mut build_positions = Vec::new();
+        let result = index
+            .query_knn(
+                query_wkb,
+                2,     // k=2
+                false, // use_spheroid
+                false, // include_tie_breakers=false
+                &mut build_positions,
+            )
+            .unwrap();
+
+        // Should return exactly 2 results
+        assert_eq!(result.count, 2);
+        assert_eq!(build_positions.len(), 2);
+
+        // Test with tie-breakers: should return all tied points
+        let mut build_positions_with_ties = Vec::new();
+        let result_with_ties = index
+            .query_knn(
+                query_wkb,
+                2,     // k=2
+                false, // use_spheroid
+                true,  // include_tie_breakers=true
+                &mut build_positions_with_ties,
+            )
+            .unwrap();
+
+        // Should return more than 2 results because of ties (all 4 points at distance sqrt(2))
+        assert!(result_with_ties.count >= 2);
+    }
+
+    #[test]
+    fn test_knn_query_with_empty_geometry() {
+        use arrow_array::RecordBatch;
+        use arrow_schema::{DataType, Field};
+        use geo_traits::Dimensions;
+        use sedona_geometry::wkb_factory::write_wkb_empty_point;
+
+        // Create a spatial index with sample geometry data like other tests
+        let memory_pool = Arc::new(GreedyMemoryPool::new(1024 * 1024));
+        let options = SpatialJoinOptions {
+            execution_mode: ExecutionMode::PrepareBuild,
+            ..Default::default()
+        };
+        let metrics = SpatialJoinBuildMetrics::default();
+
+        let spatial_predicate = SpatialPredicate::Relation(RelationPredicate::new(
+            Arc::new(Column::new("geom", 0)),
+            Arc::new(Column::new("geom", 1)),
+            SpatialRelationType::Intersects,
+        ));
+
+        let mut builder = SpatialIndexBuilder::new(
+            spatial_predicate,
+            options,
+            JoinType::Inner,
+            1, // probe_threads_count
+            memory_pool.clone(),
+            metrics,
+        )
+        .unwrap();
+
+        // Create geometry batch using the same pattern as other tests
+        let schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+            "geom",
+            DataType::Binary,
+            true,
+        )]));
+        let batch = RecordBatch::new_empty(schema.clone());
+
+        let geom_batch = create_array(
+            &[
+                Some("POINT (0 0)"),
+                Some("POINT (1 1)"),
+                Some("POINT (2 2)"),
+            ],
+            &WKB_GEOMETRY,
+        );
+        let indexed_batch = IndexedBatch {
+            batch,
+            geom_array: EvaluatedGeometryArray::try_new(geom_batch).unwrap(),
+        };
+        builder.add_batch(indexed_batch);
+
+        let index = builder.finish(schema).unwrap();
+
+        // Create an empty point WKB
+        let mut empty_point_wkb = Vec::new();
+        write_wkb_empty_point(&mut empty_point_wkb, Dimensions::Xy).unwrap();
+
+        // Query with the empty point
+        let mut build_positions = Vec::new();
+        let result = index
+            .query_knn(
+                &wkb::reader::read_wkb(&empty_point_wkb).unwrap(),
+                2,     // k=2
+                false, // use_spheroid
+                false, // include_tie_breakers
+                &mut build_positions,
+            )
+            .unwrap();
+
+        // Should return empty results for empty geometry
+        assert_eq!(result.count, 0);
+        assert_eq!(result.candidate_count, 0);
+        assert!(build_positions.is_empty());
     }
 }

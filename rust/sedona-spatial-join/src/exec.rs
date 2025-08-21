@@ -1,10 +1,11 @@
 use std::{fmt::Formatter, sync::Arc};
 
 use arrow_schema::SchemaRef;
-use datafusion_common::{project_schema, Result};
+use datafusion_common::{project_schema, DataFusionError, JoinSide, Result};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::equivalence::{join_equivalence_properties, ProjectionMapping};
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::{
     execution_plan::EmissionType,
     joins::utils::{build_join_schema, check_join_is_valid, ColumnIndex, JoinFilter},
@@ -16,12 +17,68 @@ use parking_lot::Mutex;
 use crate::{
     index::{build_index, SpatialIndex, SpatialJoinBuildMetrics},
     once_fut::OnceAsync,
-    spatial_predicate::SpatialPredicate,
+    spatial_predicate::{KNNPredicate, SpatialPredicate},
     stream::{SpatialJoinProbeMetrics, SpatialJoinStream},
     utils::{asymmetric_join_output_partitioning, boundedness_from_children},
     // Re-export from sedona-common
     SedonaOptions,
 };
+
+/// Type alias for build and probe execution plans
+type BuildProbePlans<'a> = (&'a Arc<dyn ExecutionPlan>, &'a Arc<dyn ExecutionPlan>);
+
+/// Extract equality join conditions from a JoinFilter
+/// Returns column pairs that represent equality conditions as PhysicalExprs
+fn extract_equality_conditions(
+    filter: &JoinFilter,
+) -> Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> {
+    use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::{BinaryExpr, Column};
+
+    let mut equalities = Vec::new();
+
+    if let Some(binary_expr) = filter.expression().as_any().downcast_ref::<BinaryExpr>() {
+        if binary_expr.op() == &Operator::Eq {
+            // Check if both sides are column references
+            if let (Some(_left_col), Some(_right_col)) = (
+                binary_expr.left().as_any().downcast_ref::<Column>(),
+                binary_expr.right().as_any().downcast_ref::<Column>(),
+            ) {
+                equalities.push((binary_expr.left().clone(), binary_expr.right().clone()));
+            }
+        }
+    }
+
+    equalities
+}
+
+/// Determine the correct build/probe execution plan assignment for KNN joins.
+///
+/// For KNN joins, we need to determine which execution plan should be used as the build side
+/// (indexed candidates) and which should be the probe side (queries that search the index).
+///
+/// The key insight is that the KNNPredicate expressions have already been correctly reprojected
+/// by the optimizer, so we can use the join schema structure to determine the mapping:
+/// - KNNPredicate.left should always be the probe side (queries)
+/// - KNNPredicate.right should always be the build side (candidates)
+///
+/// We determine which execution plan corresponds to probe/build by analyzing the column indices
+/// in the context of the overall join schema structure.
+fn determine_knn_build_probe_plans<'a>(
+    knn_pred: &KNNPredicate,
+    left_plan: &'a Arc<dyn ExecutionPlan>,
+    right_plan: &'a Arc<dyn ExecutionPlan>,
+    _join_schema: &SchemaRef,
+) -> Result<BuildProbePlans<'a>> {
+    // Use the probe_side information from the optimizer to determine build/probe assignment
+    match knn_pred.probe_side {
+        JoinSide::Left => Ok((right_plan, left_plan)),
+        JoinSide::Right => Ok((left_plan, right_plan)),
+        JoinSide::None => Err(DataFusionError::Internal(
+            "KNN join requires explicit probe_side designation".to_string(),
+        )),
+    }
+}
 
 /// Physical execution plan for performing spatial joins between two tables. It uses a spatial
 /// index to speed up the join operation.
@@ -61,6 +118,9 @@ pub struct SpatialJoinExec {
     /// by the last finished stream so that the spatial index does not have to live as long as
     /// `SpatialJoinExec`.
     once_async_spatial_index: Arc<Mutex<Option<OnceAsync<SpatialIndex>>>>,
+    /// Indicates if this SpatialJoin was converted from a HashJoin
+    /// When true, we preserve HashJoin's equivalence properties and partitioning
+    converted_from_hash_join: bool,
 }
 
 impl SpatialJoinExec {
@@ -72,6 +132,19 @@ impl SpatialJoinExec {
         filter: Option<JoinFilter>,
         join_type: &JoinType,
         projection: Option<Vec<usize>>,
+    ) -> Result<Self> {
+        Self::try_new_with_options(left, right, on, filter, join_type, projection, false)
+    }
+
+    /// Create a new SpatialJoinExec with additional options
+    pub fn try_new_with_options(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        on: SpatialPredicate,
+        filter: Option<JoinFilter>,
+        join_type: &JoinType,
+        projection: Option<Vec<usize>>,
+        converted_from_hash_join: bool,
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
@@ -85,6 +158,8 @@ impl SpatialJoinExec {
             Arc::clone(&join_schema),
             *join_type,
             projection.as_ref(),
+            filter.as_ref(),
+            converted_from_hash_join,
         )?;
 
         Ok(SpatialJoinExec {
@@ -99,6 +174,7 @@ impl SpatialJoinExec {
             metrics: Default::default(),
             cache,
             once_async_spatial_index: Arc::new(Mutex::new(None)),
+            converted_from_hash_join,
         })
     }
 
@@ -141,13 +217,25 @@ impl SpatialJoinExec {
     /// [`datafusion_physical_plan::physical_plan::join::NestedLoopJoinExec::compute_properties`].
     /// This is because SpatialJoinExec is transformed from NestedLoopJoinExec in physical plan
     /// optimization phase. If the properties are not the same, the plan will be incorrect.
+    ///
+    /// When converted from HashJoin, we preserve HashJoin's equivalence properties by extracting
+    /// equality conditions from the filter.
     fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
         right: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
         join_type: JoinType,
         projection: Option<&Vec<usize>>,
+        filter: Option<&JoinFilter>,
+        converted_from_hash_join: bool,
     ) -> Result<PlanProperties> {
+        // Extract equality conditions from filter if this was converted from HashJoin
+        let on_columns = if converted_from_hash_join {
+            filter.map_or(vec![], extract_equality_conditions)
+        } else {
+            vec![]
+        };
+
         let mut eq_properties = join_equivalence_properties(
             left.equivalence_properties().clone(),
             right.equivalence_properties().clone(),
@@ -155,11 +243,33 @@ impl SpatialJoinExec {
             Arc::clone(&schema),
             &[false, false],
             None,
-            // No on columns (equi-join condition) in spatial join
-            &[],
+            // Pass extracted equality conditions to preserve equivalences
+            &on_columns,
         );
 
-        let mut output_partitioning = asymmetric_join_output_partitioning(left, right, &join_type);
+        // Use symmetric partitioning (like HashJoin) when converted from HashJoin
+        // Otherwise use asymmetric partitioning (like NestedLoopJoin)
+        let mut output_partitioning = if converted_from_hash_join {
+            // Replicate HashJoin's symmetric partitioning logic
+            // HashJoin preserves partitioning from both sides for inner joins
+            // and from one side for outer joins
+            use datafusion_physical_plan::Partitioning;
+            match join_type {
+                JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
+                    left.output_partitioning().clone()
+                }
+                JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
+                    right.output_partitioning().clone()
+                }
+                JoinType::Full => {
+                    // For full outer join, we can't preserve partitioning
+                    Partitioning::UnknownPartitioning(left.output_partitioning().partition_count())
+                }
+                _ => asymmetric_join_output_partitioning(left, right, &join_type),
+            }
+        } else {
+            asymmetric_join_output_partitioning(left, right, &join_type)
+        };
 
         if let Some(projection) = projection {
             // construct a map from the input expressions to the output expression of the Projection
@@ -283,6 +393,7 @@ impl ExecutionPlan for SpatialJoinExec {
             metrics: Default::default(),
             cache: self.cache.clone(),
             once_async_spatial_index: Arc::new(Mutex::new(None)),
+            converted_from_hash_join: self.converted_from_hash_join,
         }))
     }
 
@@ -291,6 +402,97 @@ impl ExecutionPlan for SpatialJoinExec {
     }
 
     fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        match &self.on {
+            SpatialPredicate::KNearestNeighbors(_) => self.execute_knn(partition, context),
+            _ => {
+                // Regular spatial join logic - standard left=build, right=probe semantics
+                let session_config = context.session_config();
+                let target_output_batch_size = session_config.options().execution.batch_size;
+                let sedona_options = session_config
+                    .options()
+                    .extensions
+                    .get::<SedonaOptions>()
+                    .cloned()
+                    .unwrap_or_default();
+
+                // Regular join semantics: left is build, right is probe
+                let (build_plan, probe_plan) = (&self.left, &self.right);
+
+                // Build the spatial index
+                let once_fut_spatial_index = {
+                    let mut once_async = self.once_async_spatial_index.lock();
+                    once_async
+                        .get_or_insert(OnceAsync::default())
+                        .try_once(|| {
+                            let build_side = build_plan;
+
+                            let num_partitions = build_side.output_partitioning().partition_count();
+                            let mut build_streams = Vec::with_capacity(num_partitions);
+                            let mut build_metrics = Vec::with_capacity(num_partitions);
+                            for k in 0..num_partitions {
+                                let stream = build_side.execute(k, Arc::clone(&context))?;
+                                build_streams.push(stream);
+                                build_metrics.push(SpatialJoinBuildMetrics::new(k, &self.metrics));
+                            }
+
+                            let probe_thread_count =
+                                self.right.output_partitioning().partition_count();
+
+                            Ok(build_index(
+                                build_side.schema(),
+                                build_streams,
+                                self.on.clone(),
+                                sedona_options.spatial_join.clone(),
+                                build_metrics,
+                                Arc::clone(context.memory_pool()),
+                                self.join_type,
+                                probe_thread_count,
+                            ))
+                        })?
+                };
+
+                // Column indices for regular joins - no swapping needed
+                let column_indices_after_projection = match &self.projection {
+                    Some(projection) => projection
+                        .iter()
+                        .map(|i| self.column_indices[*i].clone())
+                        .collect(),
+                    None => self.column_indices.clone(),
+                };
+
+                let join_metrics = SpatialJoinProbeMetrics::new(partition, &self.metrics);
+                let probe_stream = probe_plan.execute(partition, Arc::clone(&context))?;
+
+                // For regular joins: probe is right side (index 1)
+                let probe_side_ordered =
+                    self.maintains_input_order()[1] && self.right.output_ordering().is_some();
+
+                Ok(Box::pin(SpatialJoinStream::new(
+                    self.schema(),
+                    &self.on,
+                    self.filter.clone(),
+                    self.join_type,
+                    probe_stream,
+                    column_indices_after_projection,
+                    probe_side_ordered,
+                    join_metrics,
+                    sedona_options.spatial_join,
+                    target_output_batch_size,
+                    once_fut_spatial_index,
+                    Arc::clone(&self.once_async_spatial_index),
+                )))
+            }
+        }
+    }
+}
+
+impl SpatialJoinExec {
+    /// Execute KNN (K-Nearest Neighbors) spatial join with specialized logic for asymmetric KNN semantics
+    fn execute_knn(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
@@ -304,12 +506,26 @@ impl ExecutionPlan for SpatialJoinExec {
             .cloned()
             .unwrap_or_default();
 
+        // Extract KNN predicate for type safety
+        let knn_pred = match &self.on {
+            SpatialPredicate::KNearestNeighbors(knn_pred) => knn_pred,
+            _ => unreachable!("execute_knn called with non-KNN predicate"),
+        };
+
+        // Determine which execution plan should be build vs probe using join schema analysis
+        let (build_plan, probe_plan) =
+            determine_knn_build_probe_plans(knn_pred, &self.left, &self.right, &self.join_schema)?;
+
+        // Determine if probe plan is the left execution plan (for column index swapping logic)
+        let actual_probe_plan_is_left = std::ptr::eq(probe_plan.as_ref(), self.left.as_ref());
+
+        // Build the spatial index
         let once_fut_spatial_index = {
             let mut once_async = self.once_async_spatial_index.lock();
             once_async
                 .get_or_insert(OnceAsync::default())
                 .try_once(|| {
-                    let build_side = &self.left;
+                    let build_side = build_plan;
 
                     let num_partitions = build_side.output_partitioning().partition_count();
                     let mut build_streams = Vec::with_capacity(num_partitions);
@@ -335,8 +551,8 @@ impl ExecutionPlan for SpatialJoinExec {
                 })?
         };
 
-        // update column indices to reflect the projection
-        let column_indices_after_projection = match &self.projection {
+        // Handle column indices for KNN - need to swap if we swapped execution plans
+        let mut column_indices_after_projection = match &self.projection {
             Some(projection) => projection
                 .iter()
                 .map(|i| self.column_indices[*i].clone())
@@ -344,12 +560,32 @@ impl ExecutionPlan for SpatialJoinExec {
             None => self.column_indices.clone(),
         };
 
-        let join_metrics = SpatialJoinProbeMetrics::new(partition, &self.metrics);
-        let probe_stream = self.right.execute(partition, Arc::clone(&context))?;
+        // If we swapped execution plans for KNN, we need to swap the column indices too
+        if !actual_probe_plan_is_left {
+            for col_idx in &mut column_indices_after_projection {
+                match col_idx.side {
+                    datafusion_common::JoinSide::Left => {
+                        col_idx.side = datafusion_common::JoinSide::Right
+                    }
+                    datafusion_common::JoinSide::Right => {
+                        col_idx.side = datafusion_common::JoinSide::Left
+                    }
+                    datafusion_common::JoinSide::None => {} // No change needed
+                }
+            }
+        }
 
-        // Right side has an order and it is maintained during operation.
-        let probe_side_ordered =
-            self.maintains_input_order()[1] && self.right.output_ordering().is_some();
+        let join_metrics = SpatialJoinProbeMetrics::new(partition, &self.metrics);
+        let probe_stream = probe_plan.execute(partition, Arc::clone(&context))?;
+
+        // Determine if probe side ordering is maintained for KNN
+        let probe_side_ordered = if actual_probe_plan_is_left {
+            // Actual probe is left plan
+            self.maintains_input_order()[0] && self.left.output_ordering().is_some()
+        } else {
+            // Actual probe is right plan
+            self.maintains_input_order()[1] && self.right.output_ordering().is_some()
+        };
 
         Ok(Box::pin(SpatialJoinStream::new(
             self.schema(),

@@ -4,6 +4,7 @@ use crate::exec::SpatialJoinExec;
 use crate::spatial_predicate::{
     DistancePredicate, KNNPredicate, RelationPredicate, SpatialPredicate, SpatialRelationType,
 };
+use arrow_schema::SchemaRef;
 use datafusion::physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion::{
     config::ConfigOptions, execution::session_state::SessionStateBuilder,
@@ -11,6 +12,7 @@ use datafusion::{
 };
 use datafusion_common::ScalarValue;
 use datafusion_common::{
+    internal_err,
     tree_node::{Transformed, TreeNode},
     JoinSide,
 };
@@ -20,7 +22,7 @@ use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 use datafusion_physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
-use datafusion_physical_plan::joins::NestedLoopJoinExec;
+use datafusion_physical_plan::joins::{HashJoinExec, NestedLoopJoinExec};
 use datafusion_physical_plan::{joins::utils::JoinFilter, ExecutionPlan};
 use sedona_common::option::SedonaOptions;
 
@@ -70,7 +72,7 @@ impl PhysicalOptimizerRule for SpatialJoinOptimizer {
 }
 
 impl SpatialJoinOptimizer {
-    /// Rewrite `plan` containing NestedLoopJoinExec with spatial predicates to SpatialJoinExec.
+    /// Rewrite `plan` containing NestedLoopJoinExec or HashJoinExec with spatial predicates to SpatialJoinExec.
     fn try_optimize_join(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -79,6 +81,13 @@ impl SpatialJoinOptimizer {
         // Check if this is a NestedLoopJoinExec that we can convert to spatial join
         if let Some(nested_loop_join) = plan.as_any().downcast_ref::<NestedLoopJoinExec>() {
             if let Some(spatial_join) = self.try_convert_to_spatial_join(nested_loop_join)? {
+                return Ok(Transformed::yes(spatial_join));
+            }
+        }
+
+        // Check if this is a HashJoinExec with spatial filter that we can convert to spatial join
+        if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
+            if let Some(spatial_join) = self.try_convert_hash_join_to_spatial(hash_join)? {
                 return Ok(Transformed::yes(spatial_join));
             }
         }
@@ -131,6 +140,242 @@ impl SpatialJoinOptimizer {
 
         Ok(None)
     }
+
+    /// Try to convert a HashJoinExec with spatial predicates in the filter to a SpatialJoinExec.
+    /// This handles cases where there's an equi-join condition (like c.id = r.id) along with
+    /// the ST_KNN predicate. We flip them so the spatial predicate drives the join
+    /// and the equi-conditions become filters.
+    fn try_convert_hash_join_to_spatial(
+        &self,
+        hash_join: &HashJoinExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // Check if the filter contains spatial predicates
+        if let Some(join_filter) = hash_join.filter() {
+            if let Some((spatial_predicate, mut remainder)) = transform_join_filter(join_filter) {
+                // The transform_join_filter now prioritizes ST_KNN predicates
+                // Only proceed if we found an ST_KNN (other spatial predicates are left in hash join)
+                if !matches!(spatial_predicate, SpatialPredicate::KNearestNeighbors(_)) {
+                    return Ok(None);
+                }
+
+                // Extract the equi-join conditions and convert them to a filter
+                let equi_filter = self.create_equi_filter_from_hash_join(hash_join)?;
+
+                // Combine the equi-filter with any existing remainder
+                remainder = self.combine_filters(remainder, equi_filter)?;
+
+                // Create spatial join where:
+                // - Spatial predicate (ST_KNN) drives the join
+                // - Equi-conditions (c.id = r.id) become filters
+
+                // Create SpatialJoinExec without projection first
+                // Use try_new_with_options to mark this as converted from HashJoin
+                let spatial_join = Arc::new(SpatialJoinExec::try_new_with_options(
+                    hash_join.left().clone(),
+                    hash_join.right().clone(),
+                    spatial_predicate,
+                    remainder,
+                    hash_join.join_type(),
+                    None, // No projection in SpatialJoinExec
+                    true, // converted_from_hash_join = true
+                )?);
+
+                // Now wrap it with ProjectionExec to match HashJoinExec's output schema exactly
+                let expected_schema = hash_join.schema();
+                let spatial_schema = spatial_join.schema();
+
+                // Create a projection that selects the exact columns HashJoinExec would output
+                let projection_exec = self.create_schema_matching_projection(
+                    spatial_join,
+                    &expected_schema,
+                    &spatial_schema,
+                )?;
+
+                return Ok(Some(projection_exec));
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Create a filter expression from the hash join's equi-join conditions
+    fn create_equi_filter_from_hash_join(
+        &self,
+        hash_join: &HashJoinExec,
+    ) -> Result<Option<JoinFilter>> {
+        let join_keys = hash_join.on();
+
+        if join_keys.is_empty() {
+            return Ok(None);
+        }
+
+        // Build filter expressions from the equi-join conditions
+        let mut expressions = vec![];
+
+        // Get the left schema size to calculate right column offsets
+        let left_schema_size = hash_join.left().schema().fields().len();
+
+        for (left_key, right_key) in join_keys.iter() {
+            // Create equality expression: left_key = right_key
+            // But we need to adjust the column indices for SpatialJoinExec schema
+            if let (Some(left_col), Some(right_col)) = (
+                left_key.as_any().downcast_ref::<Column>(),
+                right_key.as_any().downcast_ref::<Column>(),
+            ) {
+                // In SpatialJoinExec schema: [left_fields..., right_fields...]
+                // Left columns keep their indices, right columns get offset by left_schema_size
+                let left_idx = left_col.index();
+                let right_idx = left_schema_size + right_col.index();
+
+                let left_expr =
+                    Arc::new(Column::new(left_col.name(), left_idx)) as Arc<dyn PhysicalExpr>;
+                let right_expr =
+                    Arc::new(Column::new(right_col.name(), right_idx)) as Arc<dyn PhysicalExpr>;
+
+                let eq_expr = Arc::new(BinaryExpr::new(left_expr, Operator::Eq, right_expr))
+                    as Arc<dyn PhysicalExpr>;
+
+                expressions.push(eq_expr);
+            }
+        }
+
+        // IMPORTANT: Create column indices for ALL columns in the spatial join schema
+        // not just the filter columns. This is required by build_batch_from_indices.
+        let left_schema = hash_join.left().schema();
+        let right_schema = hash_join.right().schema();
+        let mut column_indices = vec![];
+
+        // Add all left side columns
+        for (i, _field) in left_schema.fields().iter().enumerate() {
+            column_indices.push(ColumnIndex {
+                index: i,
+                side: JoinSide::Left,
+            });
+        }
+
+        // Add all right side columns
+        for (i, _field) in right_schema.fields().iter().enumerate() {
+            column_indices.push(ColumnIndex {
+                index: i,
+                side: JoinSide::Right,
+            });
+        }
+
+        // Combine all conditions with AND
+        let filter_expr = if expressions.len() == 1 {
+            expressions.into_iter().next().unwrap()
+        } else {
+            expressions
+                .into_iter()
+                .reduce(|acc, expr| {
+                    Arc::new(BinaryExpr::new(acc, Operator::And, expr)) as Arc<dyn PhysicalExpr>
+                })
+                .unwrap()
+        };
+
+        // Create JoinFilter
+        // IMPORTANT: The filter expression uses spatial join indices (id@0 = id@3)
+        // So we need to create the filter schema that matches the spatial join schema,
+        // not the hash join schema
+        let left_schema = hash_join.left().schema();
+        let right_schema = hash_join.right().schema();
+        let mut spatial_filter_fields = left_schema.fields().to_vec();
+        spatial_filter_fields.extend_from_slice(right_schema.fields());
+        let spatial_filter_schema = Arc::new(arrow_schema::Schema::new(spatial_filter_fields));
+
+        // Filter expression uses spatial join indices (e.g. id@0 = id@3)
+        // Schema should match the spatial join schema (left + right)
+
+        Ok(Some(JoinFilter::new(
+            filter_expr,
+            column_indices,
+            spatial_filter_schema,
+        )))
+    }
+
+    /// Combine two optional filters with AND
+    fn combine_filters(
+        &self,
+        filter1: Option<JoinFilter>,
+        filter2: Option<JoinFilter>,
+    ) -> Result<Option<JoinFilter>> {
+        match (filter1, filter2) {
+            (None, None) => Ok(None),
+            (Some(f), None) | (None, Some(f)) => Ok(Some(f)),
+            (Some(f1), Some(f2)) => {
+                // Combine f1 AND f2
+                let combined_expr = Arc::new(BinaryExpr::new(
+                    f1.expression().clone(),
+                    Operator::And,
+                    f2.expression().clone(),
+                )) as Arc<dyn PhysicalExpr>;
+
+                // Combine column indices
+                let mut combined_indices = f1.column_indices().to_vec();
+                combined_indices.extend_from_slice(f2.column_indices());
+
+                Ok(Some(JoinFilter::new(
+                    combined_expr,
+                    combined_indices,
+                    f1.schema().clone(),
+                )))
+            }
+        }
+    }
+
+    /// Create a ProjectionExec that makes SpatialJoinExec output match HashJoinExec's schema
+    fn create_schema_matching_projection(
+        &self,
+        spatial_join: Arc<SpatialJoinExec>,
+        expected_schema: &SchemaRef,
+        spatial_schema: &SchemaRef,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_physical_expr::expressions::Column;
+        use datafusion_physical_plan::projection::ProjectionExec;
+
+        // The challenge is to map from the expected HashJoinExec schema to SpatialJoinExec schema
+        //
+        // Expected schema has fields like: [id, name, name] (with duplicates)
+        // Spatial schema has fields like: [id, location, name, id, location, name] (left + right)
+
+        // Map the expected schema to spatial schema by matching field names and types
+        // For fields with duplicate names (like "name"), we need to be careful about ordering
+        let mut projection_exprs = Vec::new();
+        let mut used_spatial_indices = std::collections::HashSet::new();
+
+        for (expected_idx, expected_field) in expected_schema.fields().iter().enumerate() {
+            let mut found = false;
+
+            // Try to find the corresponding field in spatial schema
+            for (spatial_idx, spatial_field) in spatial_schema.fields().iter().enumerate() {
+                if spatial_field.name() == expected_field.name()
+                    && spatial_field.data_type() == expected_field.data_type()
+                    && !used_spatial_indices.contains(&spatial_idx)
+                {
+                    let col_expr = Arc::new(Column::new(spatial_field.name(), spatial_idx))
+                        as Arc<dyn PhysicalExpr>;
+                    projection_exprs.push((col_expr, expected_field.name().clone()));
+                    used_spatial_indices.insert(spatial_idx);
+                    found = true;
+                    break;
+                }
+            }
+
+            if !found {
+                return internal_err!(
+                    "Cannot find matching field for '{}' ({:?}) at position {} in spatial join output. \
+                     Please check column name mappings and schema compatibility between HashJoinExec and SpatialJoinExec.",
+                    expected_field.name(),
+                    expected_field.data_type(),
+                    expected_idx
+                );
+            }
+        }
+
+        let projection = ProjectionExec::try_new(projection_exprs, spatial_join)?;
+
+        Ok(Arc::new(projection))
+    }
 }
 
 /// Helper function to register the spatial join optimizer with a session state
@@ -163,18 +408,26 @@ fn transform_join_filter(
 }
 
 /// Extract the spatial predicate from the join filter. The extracted spatial predicate and the remaining filter
-/// are returned.
+/// are returned. ST_KNN predicates are prioritized since they cannot be used as filters.
 fn extract_spatial_predicate(
     expr: &Arc<dyn PhysicalExpr>,
     column_indices: &[ColumnIndex],
 ) -> Option<(SpatialPredicate, Option<Arc<dyn PhysicalExpr>>)> {
+    // First, scan the entire expression tree for ST_KNN predicates
+    // ST_KNN must be the join condition since it cannot be a filter
+    if let Some((knn_predicate, remainder)) =
+        extract_knn_predicate_prioritized(expr, column_indices)
+    {
+        return Some((
+            SpatialPredicate::KNearestNeighbors(knn_predicate),
+            remainder,
+        ));
+    }
+
+    // No ST_KNN found, proceed with normal extraction
     if let Some(scalar_fn) = expr.as_any().downcast_ref::<ScalarFunctionExpr>() {
         if let Some(relation_predicate) = match_relation_predicate(scalar_fn, column_indices) {
             return Some((SpatialPredicate::Relation(relation_predicate), None));
-        }
-
-        if let Some(knn_predicate) = match_knn_predicate(scalar_fn, column_indices) {
-            return Some((SpatialPredicate::KNearestNeighbors(knn_predicate), None));
         }
     }
 
@@ -214,6 +467,61 @@ fn extract_spatial_predicate(
                 None => left.clone(),
             };
             return Some((spatial_predicate, Some(combined_remainder)));
+        }
+    }
+
+    None
+}
+
+/// Extract ST_KNN predicate from anywhere in the expression tree, collecting all other predicates as remainder
+fn extract_knn_predicate_prioritized(
+    expr: &Arc<dyn PhysicalExpr>,
+    column_indices: &[ColumnIndex],
+) -> Option<(KNNPredicate, Option<Arc<dyn PhysicalExpr>>)> {
+    // Check if this expression itself is ST_KNN
+    if let Some(scalar_fn) = expr.as_any().downcast_ref::<ScalarFunctionExpr>() {
+        if let Some(knn_predicate) = match_knn_predicate(scalar_fn, column_indices) {
+            return Some((knn_predicate, None));
+        }
+    }
+
+    // If this is an AND expression, check both sides for ST_KNN
+    if let Some(binary_expr) = expr.as_any().downcast_ref::<BinaryExpr>() {
+        if matches!(binary_expr.op(), Operator::And) {
+            let left = binary_expr.left();
+            let right = binary_expr.right();
+
+            // Check if left side contains ST_KNN
+            if let Some((knn_predicate, left_remainder)) =
+                extract_knn_predicate_prioritized(left, column_indices)
+            {
+                // ST_KNN found in left side, combine any left remainder with right side
+                let combined_remainder = match left_remainder {
+                    Some(remainder) => Some(Arc::new(BinaryExpr::new(
+                        remainder,
+                        Operator::And,
+                        right.clone(),
+                    )) as Arc<dyn PhysicalExpr>),
+                    None => Some(right.clone()),
+                };
+                return Some((knn_predicate, combined_remainder));
+            }
+
+            // Check if right side contains ST_KNN
+            if let Some((knn_predicate, right_remainder)) =
+                extract_knn_predicate_prioritized(right, column_indices)
+            {
+                // ST_KNN found in right side, combine left side with any right remainder
+                let combined_remainder = match right_remainder {
+                    Some(remainder) => Some(Arc::new(BinaryExpr::new(
+                        left.clone(),
+                        Operator::And,
+                        remainder,
+                    )) as Arc<dyn PhysicalExpr>),
+                    None => Some(left.clone()),
+                };
+                return Some((knn_predicate, combined_remainder));
+            }
         }
     }
 
@@ -369,11 +677,6 @@ fn match_knn_predicate(
     let k = extract_literal_u32(k_expr)?;
     let use_spheroid = extract_literal_bool(use_spheroid_expr)?;
 
-    // Reject if use_spheroid is true since spheroid distance calculation is not supported
-    if use_spheroid {
-        return None;
-    }
-
     // Collect column references for geometry arguments
     let queries_refs = collect_column_references(queries_geom, column_indices);
     let objects_refs = collect_column_references(objects_geom, column_indices);
@@ -388,18 +691,25 @@ fn match_knn_predicate(
         reproject_column_references_for_side(objects_geom, column_indices, objects_side);
 
     match (queries_side, objects_side) {
-        (JoinSide::Left, JoinSide::Right) => Some(KNNPredicate::new(
-            queries_reprojected,
-            objects_reprojected,
-            k,
-            use_spheroid,
-        )),
-        (JoinSide::Right, JoinSide::Left) => Some(KNNPredicate::new(
-            objects_reprojected,
-            queries_reprojected,
-            k,
-            use_spheroid,
-        )),
+        (JoinSide::Left, JoinSide::Right) => {
+            Some(KNNPredicate::new(
+                queries_reprojected,
+                objects_reprojected,
+                k,
+                use_spheroid,
+                JoinSide::Left, // Probe side is left plan
+            ))
+        }
+        (JoinSide::Right, JoinSide::Left) => {
+            // Preserve the original query semantics: first argument is always probe, second is always build
+            Some(KNNPredicate::new(
+                queries_reprojected, // First argument (probe side)
+                objects_reprojected, // Second argument (build side)
+                k,
+                use_spheroid,
+                JoinSide::Right, // Probe side is right plan (since queries_side=Right)
+            ))
+        }
         _ => None,
     }
 }
@@ -1620,13 +1930,13 @@ mod tests {
         let pred = predicate.unwrap();
         // After inversion, left_arg should be the original left_geom
         let left_arg_col = pred.left.as_any().downcast_ref::<Column>().unwrap();
-        assert_eq!(left_arg_col.index(), 1);
-        assert_eq!(left_arg_col.name(), "left_geom");
+        assert_eq!(left_arg_col.index(), 0);
+        assert_eq!(left_arg_col.name(), "right_geom");
 
         // After inversion, right_arg should be the original right_geom
         let right_arg_col = pred.right.as_any().downcast_ref::<Column>().unwrap();
-        assert_eq!(right_arg_col.index(), 0);
-        assert_eq!(right_arg_col.name(), "right_geom");
+        assert_eq!(right_arg_col.index(), 1);
+        assert_eq!(right_arg_col.name(), "left_geom");
     }
 
     #[test]
@@ -1650,10 +1960,10 @@ mod tests {
     }
 
     #[test]
-    fn test_match_knn_predicate_spheroid_true_rejected() {
+    fn test_match_knn_predicate_spheroid_true_accepted() {
         let column_indices = create_test_column_indices();
 
-        // Create ST_KNN(left_geom, right_geom, 5, true) - should be rejected due to use_spheroid=true
+        // Create ST_KNN(left_geom, right_geom, 5, true) - should be accepted with use_spheroid=true
         let left_geom = Arc::new(Column::new("left_geom", 1)) as Arc<dyn PhysicalExpr>;
         let right_geom = Arc::new(Column::new("right_geom", 2)) as Arc<dyn PhysicalExpr>;
         let k_literal =
@@ -1666,7 +1976,11 @@ mod tests {
         let st_knn = create_spatial_function_expr(st_knn_udf, args);
 
         let predicate = match_knn_predicate(&st_knn, &column_indices);
-        assert!(predicate.is_none()); // Should fail - use_spheroid=true is not supported
+        assert!(predicate.is_some()); // Should succeed - use_spheroid=true is now supported
+
+        let knn_pred = predicate.unwrap();
+        assert_eq!(knn_pred.k, 5);
+        assert!(knn_pred.use_spheroid); // Verify spheroid flag is set
     }
 
     #[test]

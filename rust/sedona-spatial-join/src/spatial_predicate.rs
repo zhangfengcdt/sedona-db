@@ -269,6 +269,9 @@ pub struct KNNPredicate {
     /// Whether to use spheroid distance calculation or planar distance (literal value).
     /// Currently must be false as spheroid distance is not yet implemented.
     pub use_spheroid: bool,
+    /// Which execution plan side (Left or Right) the probe expression belongs to.
+    /// This is used to correctly assign build/probe plans in execution.
+    pub probe_side: JoinSide,
 }
 
 impl KNNPredicate {
@@ -279,17 +282,20 @@ impl KNNPredicate {
     /// * `right` - Expression for the right side (object) geometry
     /// * `k` - Number of nearest neighbors to find (literal value)
     /// * `use_spheroid` - Whether to use spheroid distance (literal value, currently must be false)
+    /// * `probe_side` - Which execution plan side the probe expression belongs to
     pub fn new(
         left: Arc<dyn PhysicalExpr>,
         right: Arc<dyn PhysicalExpr>,
         k: u32,
         use_spheroid: bool,
+        probe_side: JoinSide,
     ) -> Self {
         Self {
             left,
             right,
             k,
             use_spheroid,
+            probe_side,
         }
     }
 }

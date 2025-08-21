@@ -2,9 +2,9 @@ use std::sync::{Arc, OnceLock};
 
 use datafusion_common::{internal_err, Result};
 use geo_generic_alg::{Contains, Distance, Euclidean, Intersects, Relate, Within};
-use geo_traits::to_geo::ToGeoGeometry;
 use sedona_common::{ExecutionMode, SpatialJoinOptions};
 use sedona_expr::statistics::GeoStatistics;
+use sedona_geo::to_geo::item_to_geometry;
 use wkb::reader::Wkb;
 
 use crate::{
@@ -114,8 +114,9 @@ impl GeoRefiner {
         index_query_results: &[IndexQueryResult],
     ) -> Result<Vec<(i32, i32)>> {
         let mut build_batch_positions = Vec::with_capacity(index_query_results.len());
-        let Some(probe_geom) = probe.try_to_geometry() else {
-            return Ok(Vec::new());
+        let probe_geom = match item_to_geometry(probe) {
+            Ok(geom) => geom,
+            Err(_) => return Ok(Vec::new()),
         };
         let probe_geom = geo_generic_alg::PreparedGeometry::from(probe_geom);
 
@@ -221,8 +222,9 @@ impl GeoPredicateEvaluator for GeoIntersects {
         probe: &geo_generic_alg::PreparedGeometry<'static, geo_types::Geometry>,
         _distance: Option<f64>,
     ) -> Result<bool> {
-        let Some(build_geom) = build.try_to_geometry() else {
-            return Ok(false);
+        let build_geom = match item_to_geometry(build) {
+            Ok(geom) => geom,
+            Err(_) => return Ok(false),
         };
         Ok(probe.relate(&build_geom).is_intersects())
     }
@@ -232,11 +234,13 @@ struct GeoContains;
 
 impl GeoPredicateEvaluator for GeoContains {
     fn evaluate(&self, build: &Wkb, probe: &Wkb, _distance: Option<f64>) -> Result<bool> {
-        let Some(build_geom) = build.try_to_geometry() else {
-            return Ok(false);
+        let build_geom = match item_to_geometry(build) {
+            Ok(geom) => geom,
+            Err(_) => return Ok(false),
         };
-        let Some(probe_geom) = probe.try_to_geometry() else {
-            return Ok(false);
+        let probe_geom = match item_to_geometry(probe) {
+            Ok(geom) => geom,
+            Err(_) => return Ok(false),
         };
         Ok(build_geom.contains(&probe_geom))
     }
@@ -247,8 +251,9 @@ impl GeoPredicateEvaluator for GeoContains {
         probe: &geo_generic_alg::PreparedGeometry<'static, geo_types::Geometry>,
         _distance: Option<f64>,
     ) -> Result<bool> {
-        let Some(build_geom) = build.try_to_geometry() else {
-            return Ok(false);
+        let build_geom = match item_to_geometry(build) {
+            Ok(geom) => geom,
+            Err(_) => return Ok(false),
         };
         Ok(probe.relate(&build_geom).is_within())
     }
@@ -258,11 +263,13 @@ struct GeoWithin;
 
 impl GeoPredicateEvaluator for GeoWithin {
     fn evaluate(&self, build: &Wkb, probe: &Wkb, _distance: Option<f64>) -> Result<bool> {
-        let Some(build_geom) = build.try_to_geometry() else {
-            return Ok(false);
+        let build_geom = match item_to_geometry(build) {
+            Ok(geom) => geom,
+            Err(_) => return Ok(false),
         };
-        let Some(probe_geom) = probe.try_to_geometry() else {
-            return Ok(false);
+        let probe_geom = match item_to_geometry(probe) {
+            Ok(geom) => geom,
+            Err(_) => return Ok(false),
         };
         Ok(build_geom.is_within(&probe_geom))
     }
@@ -273,8 +280,9 @@ impl GeoPredicateEvaluator for GeoWithin {
         probe: &geo_generic_alg::PreparedGeometry<'static, geo_types::Geometry>,
         _distance: Option<f64>,
     ) -> Result<bool> {
-        let Some(build_geom) = build.try_to_geometry() else {
-            return Ok(false);
+        let build_geom = match item_to_geometry(build) {
+            Ok(geom) => geom,
+            Err(_) => return Ok(false),
         };
         Ok(probe.relate(&build_geom).is_contains())
     }
@@ -287,11 +295,13 @@ impl GeoPredicateEvaluator for GeoDistance {
         let Some(distance) = distance else {
             return Ok(false);
         };
-        let Some(build_geom) = build.try_to_geometry() else {
-            return Ok(false);
+        let build_geom = match item_to_geometry(build) {
+            Ok(geom) => geom,
+            Err(_) => return Ok(false),
         };
-        let Some(probe_geom) = probe.try_to_geometry() else {
-            return Ok(false);
+        let probe_geom = match item_to_geometry(probe) {
+            Ok(geom) => geom,
+            Err(_) => return Ok(false),
         };
         let euc = Euclidean;
         let dist = euc.distance(&build_geom, &probe_geom);
@@ -307,8 +317,9 @@ impl GeoPredicateEvaluator for GeoDistance {
         let Some(distance) = distance else {
             return Ok(false);
         };
-        let Some(build_geom) = build.try_to_geometry() else {
-            return Ok(false);
+        let build_geom = match item_to_geometry(build) {
+            Ok(geom) => geom,
+            Err(_) => return Ok(false),
         };
         let euc = Euclidean;
         let dist = euc.distance(&build_geom, probe.geometry());
@@ -324,11 +335,13 @@ macro_rules! impl_relate_evaluator {
 
         impl GeoPredicateEvaluator for $struct_name {
             fn evaluate(&self, build: &Wkb, probe: &Wkb, _distance: Option<f64>) -> Result<bool> {
-                let Some(build_geom) = build.try_to_geometry() else {
-                    return Ok(false);
+                let build_geom = match item_to_geometry(build) {
+                    Ok(geom) => geom,
+                    Err(_) => return Ok(false),
                 };
-                let Some(probe_geom) = probe.try_to_geometry() else {
-                    return Ok(false);
+                let probe_geom = match item_to_geometry(probe) {
+                    Ok(geom) => geom,
+                    Err(_) => return Ok(false),
                 };
                 Ok(build_geom.relate(&probe_geom).$geo_method())
             }
@@ -339,8 +352,9 @@ macro_rules! impl_relate_evaluator {
                 probe: &geo_generic_alg::PreparedGeometry<'static, geo_types::Geometry>,
                 _distance: Option<f64>,
             ) -> Result<bool> {
-                let Some(build_geom) = build.try_to_geometry() else {
-                    return Ok(false);
+                let build_geom = match item_to_geometry(build) {
+                    Ok(geom) => geom,
+                    Err(_) => return Ok(false),
                 };
                 Ok(probe.relate(&build_geom).$geo_method())
             }

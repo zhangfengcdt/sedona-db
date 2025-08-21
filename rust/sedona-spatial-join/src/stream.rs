@@ -228,12 +228,19 @@ impl SpatialJoinStream {
         // Extract the necessary data first to avoid borrowing conflicts
         let (batch_opt, is_complete) = match &mut self.state {
             SpatialJoinStreamState::ProcessProbeBatch(iterator) => {
+                // For KNN joins, we swapped build/probe sides, so build_side should be Right
+                // For regular joins, build_side is Left
+                let build_side = match &self.spatial_predicate {
+                    SpatialPredicate::KNearestNeighbors(_) => JoinSide::Right,
+                    _ => JoinSide::Left,
+                };
+
                 let batch_opt = match iterator.next_batch(
                     &self.schema,
                     self.filter.as_ref(),
                     self.join_type,
                     &self.column_indices,
-                    JoinSide::Left,
+                    build_side,
                 ) {
                     Ok(opt) => opt,
                     Err(e) => {
@@ -517,50 +524,69 @@ impl SpatialJoinBatchIterator {
                 continue;
             };
 
-            // Process all rects for this probe index
-            while self.current_rect_idx < rects.len()
-                && rects[self.current_rect_idx].0 == self.current_probe_idx
-            {
-                let rect = &rects[self.current_rect_idx].1;
-                self.current_rect_idx += 1;
+            // Handle KNN queries differently from regular spatial joins
+            match &self.spatial_predicate {
+                SpatialPredicate::KNearestNeighbors(knn_predicate) => {
+                    // For KNN, call query_knn only once per probe geometry (not per rect)
+                    let k = knn_predicate.k;
+                    let use_spheroid = knn_predicate.use_spheroid;
+                    let include_tie_breakers = self.options.knn_include_tie_breakers;
 
-                let join_result_metrics = match &self.spatial_predicate {
-                    SpatialPredicate::KNearestNeighbors(knn_predicate) => {
-                        // Extract k and use_spheroid from the knn_predicate
-                        let k = knn_predicate.k;
-                        let use_spheroid = knn_predicate.use_spheroid;
-                        let include_tie_breakers = self.options.knn_include_tie_breakers;
+                    let join_result_metrics = self.spatial_index.query_knn(
+                        wkb,
+                        k,
+                        use_spheroid,
+                        include_tie_breakers,
+                        &mut self.build_batch_positions,
+                    )?;
 
-                        self.spatial_index.query_knn(
-                            wkb,
-                            k,
-                            use_spheroid,
-                            include_tie_breakers,
-                            &mut self.build_batch_positions,
-                        )?
+                    self.probe_indices.extend(std::iter::repeat_n(
+                        self.current_probe_idx as u32,
+                        join_result_metrics.count,
+                    ));
+
+                    self.join_metrics
+                        .join_result_candidates
+                        .add(join_result_metrics.candidate_count);
+                    self.join_metrics
+                        .join_result_count
+                        .add(join_result_metrics.count);
+
+                    // Skip all rects for this probe index since KNN doesn't use them
+                    while self.current_rect_idx < rects.len()
+                        && rects[self.current_rect_idx].0 == self.current_probe_idx
+                    {
+                        self.current_rect_idx += 1;
                     }
-                    _ => {
-                        // Regular spatial join query
-                        self.spatial_index.query(
+                }
+                _ => {
+                    // Regular spatial join: process all rects for this probe index
+                    while self.current_rect_idx < rects.len()
+                        && rects[self.current_rect_idx].0 == self.current_probe_idx
+                    {
+                        let rect = &rects[self.current_rect_idx].1;
+                        self.current_rect_idx += 1;
+
+                        let join_result_metrics = self.spatial_index.query(
                             wkb,
                             rect,
                             distance,
                             &mut self.build_batch_positions,
-                        )?
+                        )?;
+
+                        self.probe_indices.extend(std::iter::repeat_n(
+                            self.current_probe_idx as u32,
+                            join_result_metrics.count,
+                        ));
+
+                        self.join_metrics
+                            .join_result_candidates
+                            .add(join_result_metrics.candidate_count);
+                        self.join_metrics
+                            .join_result_count
+                            .add(join_result_metrics.count);
                     }
-                };
-
-                self.probe_indices.extend(std::iter::repeat_n(
-                    self.current_probe_idx as u32,
-                    join_result_metrics.count,
-                ));
-
-                self.join_metrics
-                    .join_result_candidates
-                    .add(join_result_metrics.candidate_count);
-                self.join_metrics
-                    .join_result_count
-                    .add(join_result_metrics.count);
+                }
             }
 
             self.current_probe_idx += 1;

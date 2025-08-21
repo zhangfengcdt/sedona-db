@@ -356,13 +356,13 @@ impl KNNOperandEvaluator {
 
 impl OperandEvaluator for KNNOperandEvaluator {
     fn build_side_expr(&self) -> Result<Arc<dyn PhysicalExpr>> {
-        // For KNN, the left side (queries) is the build side
-        Ok(Arc::clone(&self.inner.left))
+        // For KNN, the right side (objects/candidates) is the build side
+        Ok(Arc::clone(&self.inner.right))
     }
 
     fn probe_side_expr(&self) -> Result<Arc<dyn PhysicalExpr>> {
-        // For KNN, the right side (objects) is the probe side
-        Ok(Arc::clone(&self.inner.right))
+        // For KNN, the left side (queries) is the probe side
+        Ok(Arc::clone(&self.inner.left))
     }
 
     /// Resolve the k value for KNN operation
