@@ -14,6 +14,9 @@ fn criterion_benchmark(c: &mut Criterion) {
     benchmark::scalar(c, &f, "native", "st_dimension", Point);
     benchmark::scalar(c, &f, "native", "st_dimension", LineString(10));
 
+    benchmark::scalar(c, &f, "native", "st_envelope", Point);
+    benchmark::scalar(c, &f, "native", "st_envelope", LineString(10));
+
     benchmark::scalar(c, &f, "native", "st_geometrytype", Point);
     benchmark::scalar(c, &f, "native", "st_geometrytype", LineString(10));
 
@@ -52,6 +55,9 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     benchmark::scalar(c, &f, "native", "st_hasm", Point);
     benchmark::scalar(c, &f, "native", "st_hasm", LineString(10));
+
+    benchmark::scalar(c, &f, "native", "st_isempty", Point);
+    benchmark::scalar(c, &f, "native", "st_isempty", LineString(10));
 
     benchmark::scalar(c, &f, "native", "st_x", Point);
     benchmark::scalar(c, &f, "native", "st_y", Point);

@@ -19,7 +19,11 @@ pub fn wkb_bounds_xy(wkb_value: &[u8]) -> Result<BoundingBox, SedonaGeometryErro
     geo_traits_bounds_xy(wkb)
 }
 
-fn geo_traits_bounds_xy(
+/// Calculate the Cartesian XY bounds of a geometry
+///
+/// Note that this bounder ignores Z or M coordinates that may or may not be present
+/// for applications where only the XY bounding box is needed.
+pub fn geo_traits_bounds_xy(
     geom: impl GeometryTrait<T = f64>,
 ) -> Result<BoundingBox, SedonaGeometryError> {
     let mut x = Interval::empty();

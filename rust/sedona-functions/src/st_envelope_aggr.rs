@@ -1,6 +1,7 @@
 use std::{sync::Arc, vec};
 
 use crate::executor::WkbExecutor;
+use crate::st_envelope::write_envelope;
 use arrow_array::ArrayRef;
 use arrow_schema::FieldRef;
 use datafusion_common::{
@@ -17,7 +18,6 @@ use sedona_expr::{
 use sedona_geometry::{
     bounds::geo_traits_update_xy_bounds,
     interval::{Interval, IntervalTrait},
-    wkb_factory::{wkb_linestring, wkb_point, wkb_polygon},
 };
 use sedona_schema::datatypes::{SedonaType, WKB_GEOMETRY};
 
@@ -91,38 +91,13 @@ impl BoundsAccumulator2D {
 
     // Create a WKB result based on the current state of the accumulator.
     fn make_wkb_result(&self) -> Result<Option<Vec<u8>>> {
-        if self.x.is_empty() || self.y.is_empty() {
-            return Ok(None);
+        let mut wkb = Vec::new();
+        let written = write_envelope(&self.x.into(), &self.y, &mut wkb)?;
+        if written {
+            Ok(Some(wkb))
+        } else {
+            Ok(None)
         }
-
-        let wkb = match (self.x.width() > 0.0, self.y.width() > 0.0) {
-            (true, true) => {
-                // Extent has height and width: return a POLYGON
-                wkb_polygon(
-                    [
-                        (self.x.lo(), self.y.lo()),
-                        (self.x.hi(), self.y.lo()),
-                        (self.x.hi(), self.y.hi()),
-                        (self.x.lo(), self.y.hi()),
-                        (self.x.lo(), self.y.lo()),
-                    ]
-                    .into_iter(),
-                )
-                .map_err(|e| DataFusionError::External(Box::new(e)))?
-            }
-            (false, true) | (true, false) => {
-                // Extent has only height or width: return a vertical or horizontal line
-                wkb_linestring([(self.x.lo(), self.y.lo()), (self.x.hi(), self.y.hi())].into_iter())
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?
-            }
-            (false, false) => {
-                // Extent has no height or width: return a point
-                wkb_point((self.x.lo(), self.y.lo()))
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?
-            }
-        };
-
-        Ok(Some(wkb))
     }
 
     // Check the input length for update methods.
@@ -223,7 +198,7 @@ mod test {
         ];
         assert_scalar_equal_wkb_geometry(
             &tester.aggregate_wkt(batches).unwrap(),
-            Some("POLYGON((0 1,6 1,6 7,0 7,0 1))"),
+            Some("POLYGON((0 1, 0 7, 6 7, 6 1, 0 1))"),
         );
 
         // Empty input
