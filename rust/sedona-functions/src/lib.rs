@@ -9,6 +9,7 @@ pub mod st_analyze_aggr;
 mod st_area;
 mod st_asbinary;
 mod st_astext;
+mod st_dimension;
 pub mod st_envelope_aggr;
 mod st_geometrytype;
 mod st_geomfromwkb;

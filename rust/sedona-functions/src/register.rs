@@ -47,6 +47,7 @@ pub fn default_function_set() -> FunctionSet {
         crate::st_area::st_area_udf,
         crate::st_asbinary::st_asbinary_udf,
         crate::st_astext::st_astext_udf,
+        crate::st_dimension::st_dimension_udf,
         crate::st_geomfromwkb::st_geogfromwkb_udf,
         crate::st_geometrytype::st_geometry_type_udf,
         crate::st_geomfromwkb::st_geomfromwkb_udf,
