@@ -19,6 +19,10 @@ pub fn deserialize_crs(crs: &Value) -> Result<Crs> {
         return Ok(lnglat());
     }
 
+    if AuthorityCode::is_authority_code(crs) {
+        return Ok(AuthorityCode::crs(crs.as_str().unwrap().to_string()));
+    }
+
     let projjson = if let Some(string) = crs.as_str() {
         // Handle the geopandas bug where it exported stringified projjson.
         // This could in the future handle other stringified versions with some
@@ -103,6 +107,80 @@ impl CoordinateReferenceSystem for LngLat {
             auth_code == "OGC:CRS84" || auth_code == "EPSG:4326"
         } else {
             false
+        }
+    }
+}
+
+/// Implementation of an authority:code CoordinateReferenceSystem
+#[derive(Debug)]
+struct AuthorityCode {
+    authority: String,
+    code: String,
+}
+
+/// Implementation of an authority:code
+impl AuthorityCode {
+    /// Create a Crs from an authority:code string
+    /// Example: "EPSG:4269"
+    pub fn crs(auth_code: String) -> Crs {
+        let (authority, code) = Self::split_auth_code(&auth_code).unwrap();
+        Crs::Some(Arc::new(AuthorityCode { authority, code }))
+    }
+
+    /// Check if a Value is an authority:code string
+    /// Note: this can be expanded to more types in the future
+    pub fn is_authority_code(value: &Value) -> bool {
+        if let Some(string_value) = value.as_str() {
+            match Self::split_auth_code(string_value) {
+                Some((authority, code)) => {
+                    return Self::validate_authority(&authority) && Self::validate_code(&code)
+                }
+                None => return false,
+            }
+        }
+
+        false
+    }
+
+    /// Split an authority:code string into its components
+    fn split_auth_code(auth_code: &str) -> Option<(String, String)> {
+        let parts: Vec<&str> = auth_code.split(':').collect();
+        if parts.len() == 2 {
+            Some((parts[0].to_string(), parts[1].to_string()))
+        } else {
+            None
+        }
+    }
+
+    /// Validate the authority part of an authority:code string
+    /// Note: this can be expanded in the future to support more authorities
+    fn validate_authority(authority: &str) -> bool {
+        matches!(authority, "EPSG" | "OGC")
+    }
+
+    /// Validate that a code is numeric
+    fn validate_code(code: &str) -> bool {
+        code.chars().all(|c| c.is_numeric())
+    }
+}
+
+/// Implementation of an authority:code CoordinateReferenceSystem
+impl CoordinateReferenceSystem for AuthorityCode {
+    /// Convert to a JSON string
+    fn to_json(&self) -> String {
+        format!("\"{}:{}\"", self.authority, self.code)
+    }
+
+    /// Convert to an authority code string
+    fn to_authority_code(&self) -> Result<Option<String>> {
+        Ok(Some(format!("{}:{}", self.authority, self.code)))
+    }
+
+    /// Check equality with another CoordinateReferenceSystem
+    fn crs_equals(&self, other: &dyn CoordinateReferenceSystem) -> bool {
+        match (other.to_authority_code(), self.to_authority_code()) {
+            (Ok(Some(other_ac)), Ok(Some(this_ac))) => other_ac == this_ac,
+            (_, _) => false,
         }
     }
 }
@@ -233,5 +311,37 @@ mod test {
             .unwrap()
             .is_none());
         assert!(!projjson.crs_equals(&projjson_without_identifier))
+    }
+
+    #[test]
+    fn crs_authority_code() {
+        let auth_code = AuthorityCode {
+            authority: "EPSG".to_string(),
+            code: "4269".to_string(),
+        };
+        assert!(auth_code.crs_equals(&auth_code));
+        assert!(!auth_code.crs_equals(&LngLat {}));
+
+        assert_eq!(
+            auth_code.to_authority_code().unwrap(),
+            Some("EPSG:4269".to_string())
+        );
+
+        let json_value = auth_code.to_json();
+        assert_eq!(json_value, "\"EPSG:4269\"");
+
+        let auth_code_crs = AuthorityCode::crs("EPSG:4269".to_string());
+        assert_eq!(auth_code_crs, auth_code_crs);
+        assert_ne!(auth_code_crs, Crs::None);
+
+        let auth_code_parsed: Result<Value, _> = serde_json::from_str(&json_value);
+        assert!(AuthorityCode::is_authority_code(&auth_code_parsed.unwrap()));
+
+        let value: Value = serde_json::from_str("\"EPSG:4269\"").unwrap();
+        let new_crs = deserialize_crs(&value).unwrap();
+        assert_eq!(
+            new_crs.unwrap().to_authority_code().unwrap(),
+            Some("EPSG:4269".to_string())
+        );
     }
 }
