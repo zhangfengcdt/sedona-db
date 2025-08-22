@@ -10,5 +10,6 @@ wkb = { workspace = true }
 
 [dependencies]
 proj = { workspace = true }
+proj-sys = { workspace = true }
 geo-traits = { workspace = true }
 sedona-geometry = { path = "../sedona-geometry" }

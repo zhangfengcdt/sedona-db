@@ -1,8 +1,12 @@
-use proj::{Area, Proj, ProjCreateError};
+use proj::{Area, ProjCreateError};
 use sedona_geometry::bounding_box::BoundingBox;
 use sedona_geometry::error::SedonaGeometryError;
 use sedona_geometry::interval::IntervalTrait;
 use sedona_geometry::transform::{CrsEngine, CrsTransform};
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use crate::proj::Proj;
 
 /// A [CrsEngine] implemented using the [proj] crate
 pub struct ProjCrsEngine;
@@ -14,12 +18,13 @@ impl CrsEngine for ProjCrsEngine {
         to: &str,
         area_of_interest: Option<BoundingBox>,
         options: &str,
-    ) -> Result<Box<dyn CrsTransform>, SedonaGeometryError> {
+    ) -> Result<Rc<dyn CrsTransform>, SedonaGeometryError> {
         if !options.is_empty() {
             return Err(SedonaGeometryError::Invalid(
                 "Options for area of use not supported yet".to_string(),
             ));
         }
+
         let area = area_of_interest.map(|bbox| {
             Area::new(
                 bbox.x().lo(), // west
@@ -28,44 +33,50 @@ impl CrsEngine for ProjCrsEngine {
                 bbox.y().hi(), // north
             )
         });
+
         let transform = ProjCrsToCrsTransform::new(from, to, area).map_err(|e| {
             SedonaGeometryError::Invalid(format!(
                 "PROJ creation for CRS Transform failed with error: {e}"
             ))
         })?;
-        Ok(Box::new(transform))
+
+        Ok(Rc::new(transform))
     }
     fn get_transform_pipeline(
         &self,
         pipeline: &str,
         options: &str,
-    ) -> Result<Box<dyn CrsTransform>, SedonaGeometryError> {
+    ) -> Result<Rc<dyn CrsTransform>, SedonaGeometryError> {
         if !options.is_empty() {
             return Err(SedonaGeometryError::Invalid(
                 "Options for transform not supported yet".to_string(),
             ));
         }
+
         let transform = ProjPipelineTransform::new(pipeline)
             .map_err(|e| SedonaGeometryError::Invalid(format!("PROJ creation error: {e}")))?;
-        Ok(Box::new(transform))
+
+        Ok(Rc::new(transform))
     }
 }
 
 /// A `Transform` implemented using the [proj] crate
 #[derive(Debug)]
 pub struct ProjTransform {
-    proj: Proj,
+    proj: RefCell<Proj>,
 }
 
 impl ProjTransform {
-    pub fn new(proj: Proj) -> Self {
-        Self { proj }
+    fn new(proj: Proj) -> Self {
+        Self {
+            proj: RefCell::new(proj),
+        }
     }
 }
 
 impl CrsTransform for ProjTransform {
-    fn transform_coord(&mut self, coord: &mut (f64, f64)) -> Result<(), SedonaGeometryError> {
-        let res = self.proj.convert(*coord).map_err(|e| {
+    fn transform_coord(&self, coord: &mut (f64, f64)) -> Result<(), SedonaGeometryError> {
+        let res = self.proj.borrow_mut().convert(*coord).map_err(|e| {
             SedonaGeometryError::Invalid(format!(
                 "PROJ coordinate transformation failed with error: {e}"
             ))
@@ -84,7 +95,9 @@ pub struct ProjCrsToCrsTransform {
 
 impl ProjCrsToCrsTransform {
     pub fn new(from: &str, to: &str, area: Option<Area>) -> Result<Self, ProjCreateError> {
-        let proj = Proj::new_known_crs(from, to, area)?;
+        let source_crs = Proj::try_new(from)?;
+        let target_crs = Proj::try_new(to)?;
+        let proj = Proj::crs_to_crs(&source_crs, &target_crs, area)?;
         Ok(Self {
             transform: ProjTransform::new(proj),
         })
@@ -92,7 +105,7 @@ impl ProjCrsToCrsTransform {
 }
 
 impl CrsTransform for ProjCrsToCrsTransform {
-    fn transform_coord(&mut self, coord: &mut (f64, f64)) -> Result<(), SedonaGeometryError> {
+    fn transform_coord(&self, coord: &mut (f64, f64)) -> Result<(), SedonaGeometryError> {
         self.transform.transform_coord(coord)
     }
 }
@@ -105,7 +118,7 @@ pub struct ProjPipelineTransform {
 
 impl ProjPipelineTransform {
     pub fn new(pipeline: &str) -> Result<Self, ProjCreateError> {
-        let proj = Proj::new(pipeline)?;
+        let proj = Proj::try_new(pipeline)?;
         Ok(Self {
             transform: ProjTransform::new(proj),
         })
@@ -113,7 +126,7 @@ impl ProjPipelineTransform {
 }
 
 impl CrsTransform for ProjPipelineTransform {
-    fn transform_coord(&mut self, coord: &mut (f64, f64)) -> Result<(), SedonaGeometryError> {
+    fn transform_coord(&self, coord: &mut (f64, f64)) -> Result<(), SedonaGeometryError> {
         self.transform.transform_coord(coord)
     }
 }
@@ -129,17 +142,17 @@ mod test {
     #[test]
     fn proj_crs_to_crs() {
         let engine = ProjCrsEngine;
-        let mut trans = engine
+        let trans = engine
             .get_transform_crs_to_crs("EPSG:2230", "EPSG:26946", None, "")
             .unwrap();
-        test_2230_to_26946(&mut trans);
+        test_2230_to_26946(trans.as_ref());
 
         // use a different transformation where the AOI is valid
         let aoi = BoundingBox::xy((37, 38), (-122, -120));
-        let mut trans_with_aoi = engine
+        let trans_with_aoi = engine
             .get_transform_crs_to_crs("EPSG:2230", "EPSG:4326", Some(aoi), "")
             .unwrap();
-        test_4269_to_4326(&mut trans_with_aoi);
+        test_4269_to_4326(trans_with_aoi.as_ref());
 
         let trans_error = engine
             .get_transform_crs_to_crs("foo", "bar", None, "")
@@ -150,7 +163,7 @@ mod test {
     #[test]
     fn proj_pipeline() {
         let engine = ProjCrsEngine;
-        let mut trans = engine
+        let trans = engine
             .get_transform_pipeline(
                 "+proj=pipeline +step +inv +proj=lcc +lat_1=33.88333333333333 +lat_2=32.78333333333333 \
                  +lat_0=32.16666666666666 +lon_0=-116.25 +x_0=2000000.0001016 +y_0=500000.0001016001 \
@@ -161,7 +174,7 @@ mod test {
                 "",
             )
             .unwrap();
-        test_2230_to_26946(&mut trans);
+        test_2230_to_26946(trans.as_ref());
 
         let trans_error = engine.get_transform_pipeline("foo", "");
         assert!(
@@ -173,24 +186,24 @@ mod test {
     #[test]
     fn transform_coord() {
         let engine = ProjCrsEngine;
-        let mut trans = engine
+        let trans = engine
             .get_transform_crs_to_crs("EPSG:2230", "EPSG:26946", None, "")
             .unwrap();
 
         let mut coord = (4_760_096.4, 3_744_293.5);
-        trans.transform_coord(&mut coord).unwrap();
+        trans.as_ref().transform_coord(&mut coord).unwrap();
         assert_relative_eq!(coord.x(), 1_450_880.284_378, epsilon = 1e-6);
         assert_relative_eq!(coord.y(), 1_141_262.941_224, epsilon = 1e-6);
 
         coord = (f64::NAN, f64::NAN);
-        trans.transform_coord(&mut coord).unwrap();
+        trans.as_ref().transform_coord(&mut coord).unwrap();
         assert!(
             coord.x().is_nan() && coord.y().is_nan(),
             "Expected NaN coordinates"
         );
     }
 
-    fn test_2230_to_26946(trans: &mut dyn CrsTransform) {
+    fn test_2230_to_26946(trans: &dyn CrsTransform) {
         let point = Point::new(4_760_096.421_921, 3_744_293.729_449);
         let mut wkb_bytes = Vec::new();
         transform(point, trans, &mut wkb_bytes).unwrap();
@@ -208,7 +221,7 @@ mod test {
             assert_relative_eq!(y, 1_141_263.011_160_45, epsilon = 1e-6);
         }
     }
-    fn test_4269_to_4326(trans: &mut dyn CrsTransform) {
+    fn test_4269_to_4326(trans: &dyn CrsTransform) {
         let point = Point::new(4760096.0, 5044293.0);
         let mut wkb_bytes = Vec::new();
         transform(point, trans, &mut wkb_bytes).unwrap();

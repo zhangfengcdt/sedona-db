@@ -1,7 +1,16 @@
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::hash::{Hash, Hasher};
 use std::io::Write;
+use std::mem::transmute;
+use std::num::NonZeroUsize;
+use std::rc::Rc;
+
+use lru::LruCache;
 
 use crate::bounding_box::BoundingBox;
 use crate::error::SedonaGeometryError;
+use crate::interval::IntervalTrait;
 use crate::wkb_factory::{
     write_wkb_coord, write_wkb_empty_point, write_wkb_geometrycollection_header,
     write_wkb_linestring_header, write_wkb_multilinestring_header, write_wkb_multipoint_header,
@@ -14,37 +23,224 @@ use geo_traits::{
 };
 
 /// Represents a coordinate reference system (CRS) transformation engine.
-pub trait CrsEngine: Send + Sync {
+pub trait CrsEngine {
     fn get_transform_crs_to_crs(
         &self,
         from: &str,
         to: &str,
         area_of_interest: Option<BoundingBox>,
         options: &str,
-    ) -> Result<Box<dyn CrsTransform>, SedonaGeometryError>;
+    ) -> Result<Rc<dyn CrsTransform>, SedonaGeometryError>;
     fn get_transform_pipeline(
         &self,
         pipeline: &str,
         options: &str,
-    ) -> Result<Box<dyn CrsTransform>, SedonaGeometryError>;
+    ) -> Result<Rc<dyn CrsTransform>, SedonaGeometryError>;
 }
 
 /// Trait for transforming coordinates in a geometry from one CRS to another.
 pub trait CrsTransform: std::fmt::Debug {
-    fn transform_coord(&mut self, coord: &mut (f64, f64)) -> Result<(), SedonaGeometryError>;
+    fn transform_coord(&self, coord: &mut (f64, f64)) -> Result<(), SedonaGeometryError>;
 }
 
 /// A boxed trait object for dynamic dispatch of CRS transformations.
 impl CrsTransform for Box<dyn CrsTransform> {
-    fn transform_coord(&mut self, coord: &mut (f64, f64)) -> Result<(), SedonaGeometryError> {
-        self.as_mut().transform_coord(coord)
+    fn transform_coord(&self, coord: &mut (f64, f64)) -> Result<(), SedonaGeometryError> {
+        self.as_ref().transform_coord(coord)
+    }
+}
+
+/// A caching wrapper around any CRS transformation engine.
+///
+/// This provides automatic caching of coordinate transformation objects to improve performance
+/// when the same transformations are used repeatedly. Uses LRU (Least Recently Used) eviction
+/// policy when the cache reaches its capacity.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use sedona_geometry::transform::{CachingCrsEngine, CrsEngine};
+///
+/// let engine = SomeCrsEngine::new();
+/// let cached_engine = CachingCrsEngine::new(engine);
+///
+/// // Subsequent calls with the same parameters will use cached transforms
+/// let transform1 = cached_engine.get_transform_crs_to_crs("EPSG:4326", "EPSG:3857", None, "")?;
+/// let transform2 = cached_engine.get_transform_crs_to_crs("EPSG:4326", "EPSG:3857", None, "")?;
+/// // transform2 is retrieved from cache
+/// ```
+pub struct CachingCrsEngine<T: CrsEngine> {
+    engine: T,
+    crs_to_crs_cache: RefCell<LruCache<CrsToCrsCacheKey<'static>, Rc<dyn CrsTransform>>>,
+    pipeline_cache: RefCell<LruCache<PipelineCacheKey<'static>, Rc<dyn CrsTransform>>>,
+}
+
+/// Cache key for CRS to CRS transforms
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct CrsToCrsCacheKey<'a> {
+    from: Cow<'a, str>,
+    to: Cow<'a, str>,
+    area_of_interest: Option<SerializableBoundingBox>,
+    options: Cow<'a, str>,
+}
+
+/// Cache key for pipeline transforms
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct PipelineCacheKey<'a> {
+    pipeline: Cow<'a, str>,
+    options: Cow<'a, str>,
+}
+
+/// A serializable version of BoundingBox that implements Hash
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SerializableBoundingBox {
+    x_lo: u64,
+    x_hi: u64,
+    y_lo: u64,
+    y_hi: u64,
+}
+
+impl Hash for SerializableBoundingBox {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.x_lo.hash(state);
+        self.x_hi.hash(state);
+        self.y_lo.hash(state);
+        self.y_hi.hash(state);
+    }
+}
+
+impl From<BoundingBox> for SerializableBoundingBox {
+    fn from(bbox: BoundingBox) -> Self {
+        Self {
+            x_lo: bbox.x().lo().to_bits(),
+            x_hi: bbox.x().hi().to_bits(),
+            y_lo: bbox.y().lo().to_bits(),
+            y_hi: bbox.y().hi().to_bits(),
+        }
+    }
+}
+
+/// Default cache size for transform objects
+const DEFAULT_TRANSFORM_CACHE_SIZE: usize = 100;
+
+impl<T: CrsEngine> CachingCrsEngine<T> {
+    /// Creates a new caching engine wrapper with the default cache size.
+    pub fn new(engine: T) -> Self {
+        Self::with_cache_size(engine, DEFAULT_TRANSFORM_CACHE_SIZE)
+    }
+
+    /// Creates a new caching engine wrapper with a specified cache size.
+    ///
+    /// # Arguments
+    ///
+    /// * `engine` - The underlying CRS engine to wrap
+    /// * `cache_size` - Maximum number of transforms to cache (must be > 0)
+    ///
+    /// # Panics
+    ///
+    /// Panics if `cache_size` is 0.
+    pub fn with_cache_size(engine: T, cache_size: usize) -> Self {
+        let cache_size = NonZeroUsize::new(cache_size).unwrap();
+        Self {
+            engine,
+            crs_to_crs_cache: RefCell::new(LruCache::new(cache_size)),
+            pipeline_cache: RefCell::new(LruCache::new(cache_size)),
+        }
+    }
+}
+
+impl<T: CrsEngine> CrsEngine for CachingCrsEngine<T> {
+    fn get_transform_crs_to_crs(
+        &self,
+        from: &str,
+        to: &str,
+        area_of_interest: Option<BoundingBox>,
+        options: &str,
+    ) -> Result<Rc<dyn CrsTransform>, SedonaGeometryError> {
+        let serializable_aoi = area_of_interest.as_ref().map(|bbox| bbox.clone().into());
+        unsafe {
+            // Safety: we know that the string references in cache key will only be ephemeral and won't be
+            // stored inside `crs_to_crs_cache` or referenced by the CrsTransform object retrieved from the
+            // cache.
+            // We prefer transmute over messing around with the type system to stick to safe code. Here is
+            // a more complicated but safe version:
+            // https://idubrov.name/rust/2018/06/01/tricking-the-hashmap.html
+            let from_static: &'static str = transmute(from);
+            let to_static: &'static str = transmute(to);
+            let options_static: &'static str = transmute(options);
+            let cache_key = CrsToCrsCacheKey {
+                from: Cow::Borrowed(from_static),
+                to: Cow::Borrowed(to_static),
+                area_of_interest: serializable_aoi.clone(),
+                options: Cow::Borrowed(options_static),
+            };
+            // Check cache first
+            if let Some(cached) = self.crs_to_crs_cache.borrow_mut().get(&cache_key) {
+                return Ok(cached.clone());
+            }
+        }
+
+        // Not in cache, create via underlying engine
+        let transform =
+            self.engine
+                .get_transform_crs_to_crs(from, to, area_of_interest, options)?;
+
+        // Cache and return
+        let static_cache_key = CrsToCrsCacheKey {
+            from: from.to_string().into(),
+            to: to.to_string().into(),
+            area_of_interest: serializable_aoi,
+            options: options.to_string().into(),
+        };
+        self.crs_to_crs_cache
+            .borrow_mut()
+            .put(static_cache_key, transform.clone());
+        Ok(transform)
+    }
+
+    fn get_transform_pipeline(
+        &self,
+        pipeline: &str,
+        options: &str,
+    ) -> Result<Rc<dyn CrsTransform>, SedonaGeometryError> {
+        unsafe {
+            // Safety: we know that the string references in cache key will only be ephemeral and won't be
+            // stored inside `pipeline_cache` or referenced by the CrsTransform object retrieved from the
+            // cache.
+            // We prefer transmute over messing around with the type system to stick to safe code. Here is
+            // a more complicated but safe version:
+            // https://idubrov.name/rust/2018/06/01/tricking-the-hashmap.html
+            let pipeline_static: &'static str = transmute(pipeline);
+            let options_static: &'static str = transmute(options);
+            let cache_key = PipelineCacheKey {
+                pipeline: Cow::Borrowed(pipeline_static),
+                options: Cow::Borrowed(options_static),
+            };
+            // Check cache first
+            if let Some(cached) = self.pipeline_cache.borrow_mut().get(&cache_key) {
+                return Ok(cached.clone());
+            }
+        }
+
+        // Not in cache, create via underlying engine
+        let transform = self.engine.get_transform_pipeline(pipeline, options)?;
+
+        // Cache and return
+        let static_cache_key = PipelineCacheKey {
+            pipeline: pipeline.to_string().into(),
+            options: options.to_string().into(),
+        };
+        self.pipeline_cache
+            .borrow_mut()
+            .put(static_cache_key, transform.clone());
+        Ok(transform)
     }
 }
 
 /// Transforms a geometry from one CRS to another using the provided transformation.
 pub fn transform(
     geom: impl GeometryTrait<T = f64>,
-    trans: &mut dyn CrsTransform,
+    trans: &dyn CrsTransform,
     out: &mut impl Write,
 ) -> Result<(), SedonaGeometryError> {
     let dims = geom.dim();
@@ -109,7 +305,7 @@ pub fn transform(
 
 fn transform_and_write_ring<'a, L>(
     buf: &mut impl Write,
-    trans: &mut dyn CrsTransform,
+    trans: &dyn CrsTransform,
     ring: L,
 ) -> Result<(), SedonaGeometryError>
 where
@@ -123,7 +319,7 @@ where
 
 fn transform_and_write_coords<'a, C, I>(
     buf: &mut impl Write,
-    trans: &mut dyn CrsTransform,
+    trans: &dyn CrsTransform,
     coords: I,
 ) -> Result<(), SedonaGeometryError>
 where
@@ -170,7 +366,7 @@ mod test {
     #[derive(Debug)]
     struct MockTransform {}
     impl CrsTransform for MockTransform {
-        fn transform_coord(&mut self, coord: &mut (f64, f64)) -> Result<(), SedonaGeometryError> {
+        fn transform_coord(&self, coord: &mut (f64, f64)) -> Result<(), SedonaGeometryError> {
             coord.0 += 10.0;
             coord.1 += 20.0;
             Ok(())
@@ -312,13 +508,187 @@ mod test {
     }
 
     fn test_transform(geom: impl GeometryTrait<T = f64>, expected: &str) {
-        let mut mock_transform = MockTransform {};
+        let mock_transform = MockTransform {};
         let mut wkb_bytes = Vec::new();
 
-        transform(geom, &mut mock_transform, &mut wkb_bytes).unwrap();
+        transform(geom, &mock_transform, &mut wkb_bytes).unwrap();
         let wkb_reader = read_wkb(&wkb_bytes).unwrap();
         let mut wkt = String::new();
         wkt::to_wkt::write_geometry(&mut wkt, &wkb_reader).unwrap();
         assert_eq!(wkt, expected);
+    }
+
+    /// Mock CRS engine for testing caching behavior
+    #[derive(Debug)]
+    struct MockCrsEngine {
+        crs_to_crs_call_count: RefCell<usize>,
+        pipeline_call_count: RefCell<usize>,
+    }
+
+    impl MockCrsEngine {
+        fn new() -> Self {
+            Self {
+                crs_to_crs_call_count: RefCell::new(0),
+                pipeline_call_count: RefCell::new(0),
+            }
+        }
+
+        fn crs_to_crs_calls(&self) -> usize {
+            *self.crs_to_crs_call_count.borrow()
+        }
+
+        fn pipeline_calls(&self) -> usize {
+            *self.pipeline_call_count.borrow()
+        }
+    }
+
+    impl CrsEngine for MockCrsEngine {
+        fn get_transform_crs_to_crs(
+            &self,
+            _from: &str,
+            _to: &str,
+            _area_of_interest: Option<BoundingBox>,
+            _options: &str,
+        ) -> Result<Rc<dyn CrsTransform>, SedonaGeometryError> {
+            *self.crs_to_crs_call_count.borrow_mut() += 1;
+            Ok(Rc::new(MockTransform {}))
+        }
+
+        fn get_transform_pipeline(
+            &self,
+            _pipeline: &str,
+            _options: &str,
+        ) -> Result<Rc<dyn CrsTransform>, SedonaGeometryError> {
+            *self.pipeline_call_count.borrow_mut() += 1;
+            Ok(Rc::new(MockTransform {}))
+        }
+    }
+
+    #[test]
+    fn test_caching_crs_engine_crs_to_crs_basic_caching() {
+        let mock_engine = MockCrsEngine::new();
+        let caching_engine = CachingCrsEngine::new(mock_engine);
+
+        // First call should create a new transform
+        let transform1 = caching_engine
+            .get_transform_crs_to_crs("EPSG:4326", "EPSG:3857", None, "")
+            .unwrap();
+        assert_eq!(caching_engine.engine.crs_to_crs_calls(), 1);
+
+        // Second call with same parameters should use cache
+        let transform2 = caching_engine
+            .get_transform_crs_to_crs("EPSG:4326", "EPSG:3857", None, "")
+            .unwrap();
+        assert_eq!(caching_engine.engine.crs_to_crs_calls(), 1); // Still 1
+
+        // Should be the same object
+        assert!(Rc::ptr_eq(&transform1, &transform2));
+    }
+
+    #[test]
+    fn test_caching_crs_engine_crs_to_crs_with_aoi() {
+        let mock_engine = MockCrsEngine::new();
+        let caching_engine = CachingCrsEngine::new(mock_engine);
+
+        // First call should create a new transform
+        let aoi = BoundingBox::xy((1.0, 2.0), (3.0, 4.0));
+        let transform1 = caching_engine
+            .get_transform_crs_to_crs("EPSG:4326", "EPSG:3857", Some(aoi.clone()), "")
+            .unwrap();
+
+        // Second call with same parameters should use cache
+        let transform2 = caching_engine
+            .get_transform_crs_to_crs("EPSG:4326", "EPSG:3857", Some(aoi), "")
+            .unwrap();
+        assert_eq!(caching_engine.engine.crs_to_crs_calls(), 1); // Still 1
+
+        // Should be the same object
+        assert!(Rc::ptr_eq(&transform1, &transform2));
+
+        // Third call with a different aoi should not use cache
+        let aoi2 = BoundingBox::xy((1.0, 2.0), (3.0, 40.0));
+        let transform3 = caching_engine
+            .get_transform_crs_to_crs("EPSG:4326", "EPSG:3857", Some(aoi2), "")
+            .unwrap();
+        assert_eq!(caching_engine.engine.crs_to_crs_calls(), 2); // Now 2
+
+        // Should be a different object
+        assert!(!Rc::ptr_eq(&transform1, &transform3));
+    }
+
+    #[test]
+    fn test_caching_crs_engine_crs_to_crs_different_params() {
+        let mock_engine = MockCrsEngine::new();
+        let caching_engine = CachingCrsEngine::new(mock_engine);
+
+        // Different from CRS
+        let _transform1 = caching_engine
+            .get_transform_crs_to_crs("EPSG:4326", "EPSG:3857", None, "")
+            .unwrap();
+        let _transform2 = caching_engine
+            .get_transform_crs_to_crs("EPSG:2154", "EPSG:3857", None, "")
+            .unwrap();
+        assert_eq!(caching_engine.engine.crs_to_crs_calls(), 2);
+
+        // Different to CRS
+        let _transform3 = caching_engine
+            .get_transform_crs_to_crs("EPSG:4326", "EPSG:2154", None, "")
+            .unwrap();
+        assert_eq!(caching_engine.engine.crs_to_crs_calls(), 3);
+
+        // Different options
+        let _transform4 = caching_engine
+            .get_transform_crs_to_crs("EPSG:4326", "EPSG:3857", None, "+proj=utm")
+            .unwrap();
+        assert_eq!(caching_engine.engine.crs_to_crs_calls(), 4);
+
+        // With area of interest
+        let aoi = BoundingBox::xy((1.0, 2.0), (3.0, 4.0));
+        let _transform5 = caching_engine
+            .get_transform_crs_to_crs("EPSG:4326", "EPSG:3857", Some(aoi), "")
+            .unwrap();
+        assert_eq!(caching_engine.engine.crs_to_crs_calls(), 5);
+    }
+
+    #[test]
+    fn test_caching_crs_engine_pipeline_basic_caching() {
+        let mock_engine = MockCrsEngine::new();
+        let caching_engine = CachingCrsEngine::new(mock_engine);
+
+        // First call should create a new transform
+        let transform1 = caching_engine
+            .get_transform_pipeline("+proj=utm +zone=33 +datum=WGS84", "")
+            .unwrap();
+        assert_eq!(caching_engine.engine.pipeline_calls(), 1);
+
+        // Second call with same parameters should use cache
+        let transform2 = caching_engine
+            .get_transform_pipeline("+proj=utm +zone=33 +datum=WGS84", "")
+            .unwrap();
+        assert_eq!(caching_engine.engine.pipeline_calls(), 1); // Still 1
+
+        // Should be the same object
+        assert!(Rc::ptr_eq(&transform1, &transform2));
+    }
+
+    #[test]
+    fn test_caching_crs_engine_pipeline_different_params() {
+        let mock_engine = MockCrsEngine::new();
+        let caching_engine = CachingCrsEngine::new(mock_engine);
+
+        // Different pipeline
+        let _transform1 = caching_engine
+            .get_transform_pipeline("+proj=utm +zone=33 +datum=WGS84", "")
+            .unwrap();
+        let _transform2 = caching_engine
+            .get_transform_pipeline("+proj=utm +zone=34 +datum=WGS84", "")
+            .unwrap();
+        assert_eq!(caching_engine.engine.pipeline_calls(), 2);
+
+        // Different options
+        let _transform3 = caching_engine
+            .get_transform_pipeline("+proj=utm +zone=33 +datum=WGS84", "+over")
+            .unwrap();
+        assert_eq!(caching_engine.engine.pipeline_calls(), 3);
     }
 }
