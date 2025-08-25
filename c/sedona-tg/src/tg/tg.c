@@ -4,6 +4,9 @@
 // Use of this source code is governed by an MIT-style
 // license that can be found in the LICENSE file.
 
+// See https://github.com/tidwall/tg/issues/15 for upstream resolution
+#define _USE_MATH_DEFINES
+
 #include <math.h>
 #include <float.h>
 #include <stdarg.h>
@@ -561,6 +564,8 @@ static bool rc_release(rc_t *rc) {
 /*
 The relaxed/release/acquire pattern is based on:
 http://boost.org/doc/libs/1_87_0/libs/atomic/doc/html/atomic/usage_examples.html
+See https://github.com/tidwall/tg/issues/15 for upstream resolution of
+atomics on Windows/MSVC.
 */
 
 typedef atomic_int rc_t;
@@ -568,13 +573,24 @@ static void rc_init(rc_t *rc) {
     atomic_init(rc, 0);
 }
 static void rc_retain(rc_t *rc) {
-    atomic_fetch_add_explicit(rc, 1, __ATOMIC_RELAXED);
+    #if defined(_MSC_VER)
+        (void)atomic_fetch_add(rc, 1);
+    #else
+        atomic_fetch_add_explicit(rc, 1, __ATOMIC_RELAXED);
+    #endif
 }
 static bool rc_release(rc_t *rc) {
-    if (atomic_fetch_sub_explicit(rc, 1, __ATOMIC_RELEASE) == 1) {
-        atomic_thread_fence(__ATOMIC_ACQUIRE);
-        return true;
-    }
+    #if defined(_MSC_VER)
+        if (atomic_fetch_sub(rc, 1) == 1) {
+            atomic_thread_fence(memory_order_acquire);
+            return true;
+        }
+    #else
+        if (atomic_fetch_sub_explicit(rc, 1, __ATOMIC_RELEASE) == 1) {
+            atomic_thread_fence(__ATOMIC_ACQUIRE);
+            return true;
+        }
+    #endif
     return false;
 }
 
@@ -13280,17 +13296,39 @@ static const char *wkb_invalid_child_type(void) {
     return "invalid child type";
 }
 
+// See https://github.com/tidwall/tg/issues/15 for upstream resolution
+#if defined(_MSC_VER)
+static inline uint32_t bswap_32(uint32_t x) {
+  return (((x & 0xFF) << 24) | ((x & 0xFF00) << 8) | ((x & 0xFF0000) >> 8) |
+          ((x & 0xFF000000) >> 24));
+}
+static inline uint64_t bswap_64(uint64_t x) {
+  return (((x & 0xFFULL) << 56) | ((x & 0xFF00ULL) << 40) | ((x & 0xFF0000ULL) << 24) |
+          ((x & 0xFF000000ULL) << 8) | ((x & 0xFF00000000ULL) >> 8) |
+          ((x & 0xFF0000000000ULL) >> 24) | ((x & 0xFF000000000000ULL) >> 40) |
+          ((x & 0xFF00000000000000ULL) >> 56));
+}
+#define bswap32 bswap_32
+#define bswap64 bswap_64
+#else
+#define bswap32 __builtin_bswap32
+#define bswap64 __builtin_bswap64
+#endif
+
 static uint32_t read_uint32(const uint8_t *data, bool swap) {
     uint32_t x;
     memcpy(&x, data, sizeof(uint32_t));
-    return swap ? __builtin_bswap32(x) : x;
+    return swap ? bswap32(x) : x;
 }
 
 static uint64_t read_uint64(const uint8_t *data, bool swap) {
     uint64_t x;
     memcpy(&x, data, sizeof(uint64_t));
-    return swap ? __builtin_bswap64(x) : x;
+    return swap ? bswap64(x) : x;
 }
+
+#undef bswap32
+#undef bswap64
 
 static double read_double(const uint8_t *data, bool le) {
     return ((union raw_double){.u=read_uint64(data, le)}).d;
@@ -14507,7 +14545,7 @@ static size_t parse_geobin(const uint8_t *geobin, size_t len, size_t i,
 
 static struct tg_geom *parse_hex(const char *hex, size_t len, enum tg_index ix)
 {
-    const uint8_t _ = 0;
+#define _ 0
     static const uint8_t hextoks[256] = {
         _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,
         _,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,01,2,3,4,5,6,7,8,9,10,_,_,_,_,_,
@@ -14547,6 +14585,7 @@ static struct tg_geom *parse_hex(const char *hex, size_t len, enum tg_index ix)
 invalid:
     if (must_free) tg_free(dst);
     return make_parse_error(wkb_invalid_err());
+#undef _
 }
 
 /// Parse hex encoded Well-known binary (WKB) or GeoBIN using provided indexing

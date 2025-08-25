@@ -26,7 +26,7 @@ impl Default for IndexType {
 }
 
 impl IndexType {
-    fn to_tg(self) -> u32 {
+    fn to_tg(self) -> tg_index {
         match self {
             IndexType::Unindexed => tg_index_TG_NONE,
             IndexType::Default => tg_index_TG_DEFAULT,

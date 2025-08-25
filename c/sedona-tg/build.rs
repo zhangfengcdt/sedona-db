@@ -3,7 +3,12 @@ use std::{env, path::PathBuf};
 fn main() {
     println!("cargo:rerun-if-changed=src/tg/tg.c");
 
-    cc::Build::new().file("src/tg/tg.c").compile("tg");
+    cc::Build::new()
+        .file("src/tg/tg.c")
+        // MSVC needs some extra flags to support tg's use of atomics
+        .flag_if_supported("/std:c11")
+        .flag_if_supported("/experimental:c11atomics")
+        .compile("tg");
 
     let bindings = bindgen::Builder::default()
         .header("src/tg/tg.h")

@@ -1,0 +1,14 @@
+[workspace]
+
+[package]
+name = "ci-scripts-windows"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "geos-config"
+path = "geos-config.rs"
+
+[[bin]]
+name = "pkg-config"
+path = "pkg-config.rs"
