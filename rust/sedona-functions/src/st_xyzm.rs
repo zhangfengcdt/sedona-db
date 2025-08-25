@@ -184,7 +184,12 @@ fn invoke_scalar(item: &Wkb, dim_index: usize) -> Result<Option<f64>> {
     Err(DataFusionError::Execution("Expected POINT".to_string()))
 }
 
-fn get_coord<C>(coord_dim: Dimensions, coord: Option<C>, dim_index: usize) -> Result<Option<f64>>
+// Extracts the coordinate value from a coord object
+pub fn get_coord<C>(
+    coord_dim: Dimensions,
+    coord: Option<C>,
+    dim_index: usize,
+) -> Result<Option<f64>>
 where
     C: CoordTrait<T = f64>,
 {

@@ -64,6 +64,11 @@ fn criterion_benchmark(c: &mut Criterion) {
     benchmark::scalar(c, &f, "native", "st_z", Point);
     benchmark::scalar(c, &f, "native", "st_m", Point);
 
+    benchmark::scalar(c, &f, "native", "st_xmin", LineString(10));
+    benchmark::scalar(c, &f, "native", "st_xmax", LineString(10));
+    benchmark::scalar(c, &f, "native", "st_ymin", LineString(10));
+    benchmark::scalar(c, &f, "native", "st_ymax", LineString(10));
+
     benchmark::aggregate(c, &f, "native", "st_envelope_aggr", Point);
     benchmark::aggregate(c, &f, "native", "st_envelope_aggr", LineString(10));
 

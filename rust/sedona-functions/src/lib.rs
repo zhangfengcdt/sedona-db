@@ -25,3 +25,4 @@ mod st_point;
 mod st_setsrid;
 pub mod st_union_aggr;
 mod st_xyzm;
+mod st_xyzm_minmax;
