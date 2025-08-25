@@ -62,7 +62,7 @@ impl Geom {
     /// Create a [Geom] from well-known text
     pub fn parse_wkt(wkt: &str, index: IndexType) -> Result<Self, TgError> {
         unsafe {
-            let inner = tg_parse_wktn_ix(wkt.as_ptr() as *const i8, wkt.len(), index.to_tg());
+            let inner = tg_parse_wktn_ix(wkt.as_ptr() as _, wkt.len(), index.to_tg());
             Self::try_new(inner)
         }
     }
@@ -103,7 +103,7 @@ impl Geom {
     /// Callers must check the return size to ensure that all bytes were written.
     /// Use [Self::to_wkt] for a slower but more convenient way to obtain the result.
     pub fn write_wkt(&self, out: &mut [u8]) -> usize {
-        unsafe { tg_geom_wkt(self.inner, out.as_mut_ptr() as *mut i8, out.len()) }
+        unsafe { tg_geom_wkt(self.inner, out.as_mut_ptr() as _, out.len()) }
     }
 
     /// Write this [Geom] to well-known binary as a [Vec]
