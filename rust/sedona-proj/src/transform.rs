@@ -9,6 +9,7 @@ use std::rc::Rc;
 use crate::proj::Proj;
 
 /// A [CrsEngine] implemented using the [proj] crate
+#[derive(Debug)]
 pub struct ProjCrsEngine;
 
 impl CrsEngine for ProjCrsEngine {

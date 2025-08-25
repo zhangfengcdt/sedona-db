@@ -15,7 +15,7 @@ pub fn deserialize_crs(crs: &Value) -> Result<Crs> {
     }
 
     // Handle JSON strings "OGC:CRS84" and "EPSG:4326"
-    if LngLat::is_lnglat(crs) {
+    if LngLat::is_value_lnglat(crs) {
         return Ok(lnglat());
     }
 
@@ -56,7 +56,11 @@ impl PartialEq<dyn CoordinateReferenceSystem + Send + Sync>
     for dyn CoordinateReferenceSystem + Send + Sync
 {
     fn eq(&self, other: &Self) -> bool {
-        self.crs_equals(other)
+        if LngLat::is_lnglat(self) && LngLat::is_lnglat(other) {
+            true
+        } else {
+            self.crs_equals(other)
+        }
     }
 }
 
@@ -76,38 +80,30 @@ struct LngLat {}
 
 impl LngLat {
     pub fn crs() -> Crs {
-        Crs::Some(Arc::new(LngLat {}))
+        Crs::Some(Arc::new(AuthorityCode {
+            authority: "OGC".to_string(),
+            code: "CRS84".to_string(),
+        }))
     }
 
-    pub fn is_lnglat(value: &Value) -> bool {
-        if let Some(string_value) = value.as_str() {
-            if string_value == "OGC:CRS84" || string_value == "EPSG:4326" {
-                return true;
-            }
-        }
-
-        // TODO: check id.authority + id.code
-        false
-    }
-}
-
-impl CoordinateReferenceSystem for LngLat {
-    fn to_json(&self) -> String {
-        // We could return a full-on PROJJSON string here but this string gets copied
-        // a fair amount
-        "\"OGC:CRS84\"".to_string()
-    }
-
-    fn to_authority_code(&self) -> Result<Option<String>> {
-        Ok(Some("OGC:CRS84".to_string()))
-    }
-
-    fn crs_equals(&self, other: &dyn CoordinateReferenceSystem) -> bool {
-        if let Ok(Some(auth_code)) = other.to_authority_code() {
-            auth_code == "OGC:CRS84" || auth_code == "EPSG:4326"
+    pub fn is_lnglat(crs: &dyn CoordinateReferenceSystem) -> bool {
+        if let Ok(Some(auth_code)) = crs.to_authority_code() {
+            Self::is_authority_code_lnglat(&auth_code)
         } else {
             false
         }
+    }
+
+    pub fn is_value_lnglat(value: &Value) -> bool {
+        if let Some(string_value) = value.as_str() {
+            Self::is_authority_code_lnglat(string_value)
+        } else {
+            false
+        }
+    }
+
+    pub fn is_authority_code_lnglat(string_value: &str) -> bool {
+        string_value == "OGC:CRS84" || string_value == "EPSG:4326"
     }
 }
 
@@ -147,6 +143,8 @@ impl AuthorityCode {
         let parts: Vec<&str> = auth_code.split(':').collect();
         if parts.len() == 2 {
             Some((parts[0].to_string(), parts[1].to_string()))
+        } else if parts.len() == 1 && Self::validate_epsg_code(auth_code) {
+            Some(("EPSG".to_string(), auth_code.to_string()))
         } else {
             None
         }
@@ -158,9 +156,19 @@ impl AuthorityCode {
         matches!(authority, "EPSG" | "OGC")
     }
 
-    /// Validate that a code is numeric
+    /// Validate that a code is alphanumeric for general authority codes.
+    /// Note: EPSG codes specifically require numeric validation, which is handled by `validate_epsg_code`.
     fn validate_code(code: &str) -> bool {
-        code.chars().all(|c| c.is_numeric())
+        code.chars().all(|c| c.is_alphanumeric())
+    }
+
+    /// Validate that a code is likely to be an EPSG code (all numbers and not too long)
+    ///
+    /// The maximum length of 9 characters is chosen because, as of 2024, all official EPSG codes
+    /// are positive integers with at most 7 digits (e.g., "4326", "3857"), and this limit provides
+    /// a small buffer for potential future codes or extensions while preventing unreasonably long inputs.
+    fn validate_epsg_code(code: &str) -> bool {
+        code.chars().all(|c| c.is_numeric()) && code.len() <= 9
     }
 }
 
@@ -277,23 +285,6 @@ mod test {
     }
 
     #[test]
-    fn crs_lnglat() {
-        let lnglat = LngLat {};
-        assert!(lnglat.crs_equals(&lnglat));
-        assert_eq!(lnglat.to_authority_code().unwrap().unwrap(), "OGC:CRS84");
-
-        let json_value = lnglat.to_json();
-        assert_eq!(json_value, "\"OGC:CRS84\"");
-
-        let lnglat_crs = LngLat::crs();
-        assert_eq!(lnglat_crs, lnglat_crs);
-        assert_ne!(lnglat_crs, Crs::None);
-
-        let lnglat_parsed: Result<Value, _> = serde_json::from_str(&json_value);
-        assert!(LngLat::is_lnglat(&lnglat_parsed.unwrap()))
-    }
-
-    #[test]
     fn crs_projjson() {
         let projjson = OGC_CRS84_PROJJSON.parse::<ProjJSON>().unwrap();
         assert_eq!(projjson.to_authority_code().unwrap().unwrap(), "OGC:CRS84");
@@ -302,7 +293,7 @@ mod test {
         let json_value_roundtrip: Value = serde_json::from_str(&projjson.to_json()).unwrap();
         assert_eq!(json_value_roundtrip, json_value);
 
-        assert!(projjson.crs_equals(&LngLat {}));
+        assert!(projjson.crs_equals(LngLat::crs().unwrap().as_ref()));
         assert!(projjson.crs_equals(&projjson));
 
         let projjson_without_identifier = "{}".parse::<ProjJSON>().unwrap();
@@ -320,7 +311,7 @@ mod test {
             code: "4269".to_string(),
         };
         assert!(auth_code.crs_equals(&auth_code));
-        assert!(!auth_code.crs_equals(&LngLat {}));
+        assert!(!auth_code.crs_equals(LngLat::crs().unwrap().as_ref()));
 
         assert_eq!(
             auth_code.to_authority_code().unwrap(),
@@ -338,6 +329,14 @@ mod test {
         assert!(AuthorityCode::is_authority_code(&auth_code_parsed.unwrap()));
 
         let value: Value = serde_json::from_str("\"EPSG:4269\"").unwrap();
+        let new_crs = deserialize_crs(&value).unwrap();
+        assert_eq!(
+            new_crs.unwrap().to_authority_code().unwrap(),
+            Some("EPSG:4269".to_string())
+        );
+
+        // Ensure we can also just pass a code here
+        let value: Value = serde_json::from_str("\"4269\"").unwrap();
         let new_crs = deserialize_crs(&value).unwrap();
         assert_eq!(
             new_crs.unwrap().to_authority_code().unwrap(),

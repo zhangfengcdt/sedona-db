@@ -21,5 +21,6 @@ mod st_isempty;
 mod st_length;
 mod st_perimeter;
 mod st_point;
+mod st_setsrid;
 pub mod st_union_aggr;
 mod st_xyzm;

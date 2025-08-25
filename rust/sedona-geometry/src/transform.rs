@@ -7,6 +7,7 @@ use std::num::NonZeroUsize;
 use std::rc::Rc;
 
 use lru::LruCache;
+use std::fmt::Debug;
 
 use crate::bounding_box::BoundingBox;
 use crate::error::SedonaGeometryError;
@@ -23,7 +24,7 @@ use geo_traits::{
 };
 
 /// Represents a coordinate reference system (CRS) transformation engine.
-pub trait CrsEngine {
+pub trait CrsEngine: Debug {
     fn get_transform_crs_to_crs(
         &self,
         from: &str,
@@ -69,6 +70,7 @@ impl CrsTransform for Box<dyn CrsTransform> {
 /// let transform2 = cached_engine.get_transform_crs_to_crs("EPSG:4326", "EPSG:3857", None, "")?;
 /// // transform2 is retrieved from cache
 /// ```
+#[derive(Debug)]
 pub struct CachingCrsEngine<T: CrsEngine> {
     engine: T,
     crs_to_crs_cache: RefCell<LruCache<CrsToCrsCacheKey<'static>, Rc<dyn CrsTransform>>>,
