@@ -1,3 +1,4 @@
+mod barrier;
 mod distance;
 pub mod executor;
 mod overlay;

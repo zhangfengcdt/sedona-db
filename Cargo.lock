@@ -4877,6 +4877,7 @@ dependencies = [
  "arrow-json",
  "arrow-schema",
  "criterion",
+ "datafusion",
  "datafusion-common",
  "datafusion-expr",
  "geo-traits 0.2.0",
@@ -4886,6 +4887,7 @@ dependencies = [
  "sedona-schema",
  "sedona-testing",
  "serde_json",
+ "tokio",
  "wkb",
  "wkt 0.13.0",
 ]
