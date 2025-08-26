@@ -4800,6 +4800,7 @@ dependencies = [
  "sedona-geometry",
  "sedona-geoparquet",
  "sedona-geos",
+ "sedona-proj",
  "sedona-s2geography",
  "sedona-schema",
  "sedona-spatial-join",
@@ -5008,11 +5009,22 @@ name = "sedona-proj"
 version = "0.1.0"
 dependencies = [
  "approx",
+ "arrow-array",
+ "arrow-schema",
+ "criterion",
+ "datafusion-common",
+ "datafusion-expr",
  "geo-traits 0.2.0",
  "geo-types",
  "proj",
  "proj-sys",
+ "rstest",
+ "sedona-expr",
+ "sedona-functions",
  "sedona-geometry",
+ "sedona-schema",
+ "sedona-testing",
+ "serde_json",
  "wkb",
 ]
 

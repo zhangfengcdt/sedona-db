@@ -133,6 +133,10 @@ impl SedonaContext {
         #[cfg(feature = "s2geography")]
         out.register_scalar_kernels(sedona_s2geography::register::scalar_kernels().into_iter())?;
 
+        // Register proj scalar kernels if built with proj support
+        #[cfg(feature = "proj")]
+        out.register_scalar_kernels(sedona_proj::register::scalar_kernels().into_iter())?;
+
         Ok(out)
     }
 

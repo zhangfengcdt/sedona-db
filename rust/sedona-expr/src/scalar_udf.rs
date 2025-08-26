@@ -141,19 +141,28 @@ impl ArgMatcher {
             return false;
         }
 
-        for (actual, matcher) in zip(args, &self.matchers) {
-            if !matcher.match_type(actual) {
-                return false;
+        let matcher_iter = self.matchers.iter();
+        let mut arg_iter = args.iter().peekable();
+
+        for matcher in matcher_iter {
+            if let Some(arg) = arg_iter.peek() {
+                if matcher.match_type(arg) {
+                    arg_iter.next(); // Consume the argument
+                    continue; // Move to the next matcher
+                } else if matcher.is_optional() {
+                    continue; // Skip the optional matcher
+                } else {
+                    return false; // Non-optional matcher failed
+                }
+            } else if matcher.is_optional() {
+                continue; // Skip remaining optional matchers
+            } else {
+                return false; // Non-optional matcher failed with no arguments left
             }
         }
 
-        // All remaining matchers must be optional
-        for matcher in self.matchers.iter().skip(args.len()) {
-            if !matcher.is_optional() {
-                return false;
-            }
-        }
-        true
+        // Ensure all arguments are consumed
+        arg_iter.next().is_none()
     }
 
     /// Matches the given Arrow type using PartialEq
@@ -600,15 +609,23 @@ mod tests {
             vec![
                 ArgMatcher::is_geometry(),
                 ArgMatcher::is_optional(ArgMatcher::is_boolean()),
+                ArgMatcher::is_optional(ArgMatcher::is_numeric()),
             ],
             SedonaType::Arrow(DataType::Null),
         );
 
-        // Match when both arguments present and matching
-        assert!(matcher.matches(&[WKB_GEOMETRY, SedonaType::Arrow(DataType::Boolean)]));
+        // Match with all args present and matching
+        assert!(matcher.matches(&[
+            WKB_GEOMETRY,
+            SedonaType::Arrow(DataType::Boolean),
+            SedonaType::Arrow(DataType::Int32)
+        ]));
 
         // Match when first argument present, second is None
         assert!(matcher.matches(&[WKB_GEOMETRY]));
+
+        // Match when skip an optional arg
+        assert!(matcher.matches(&[WKB_GEOMETRY, SedonaType::Arrow(DataType::Int32)]));
 
         // No match when first is None, second is present
         assert!(!matcher.matches(&[SedonaType::Arrow(DataType::Boolean)]));
@@ -626,7 +643,8 @@ mod tests {
         assert!(!matcher.matches(&[
             WKB_GEOGRAPHY,
             SedonaType::Arrow(DataType::Boolean),
-            SedonaType::Arrow(DataType::Boolean)
+            SedonaType::Arrow(DataType::Int32),
+            SedonaType::Arrow(DataType::Int32)
         ]));
     }
 

@@ -267,6 +267,16 @@ impl ScalarUdfTester {
         self.invoke_arrays_scalar(vec![array], arg)
     }
 
+    /// Invoke a binary function with an array, and two scalars
+    pub fn invoke_array_scalar_scalar(
+        &self,
+        array: ArrayRef,
+        arg0: impl Literal,
+        arg1: impl Literal,
+    ) -> Result<ArrayRef> {
+        self.invoke_arrays_scalar_scalar(vec![array], arg0, arg1)
+    }
+
     /// Invoke a binary function with a scalar and an array
     pub fn invoke_scalar_array(&self, arg: impl Literal, array: ArrayRef) -> Result<ArrayRef> {
         self.invoke_scalar_arrays(arg, vec![array])
@@ -319,6 +329,28 @@ impl ScalarUdfTester {
         }
     }
 
+    fn invoke_arrays_scalar_scalar(
+        &self,
+        arrays: Vec<ArrayRef>,
+        arg0: impl Literal,
+        arg1: impl Literal,
+    ) -> Result<ArrayRef> {
+        let mut args = zip(arrays, &self.arg_types)
+            .map(|(array, sedona_type)| {
+                ColumnarValue::Array(array).cast_to(&sedona_type.data_type(), None)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let index = args.len();
+        args.push(Self::scalar_arg(arg0, &self.arg_types[index])?);
+        args.push(Self::scalar_arg(arg1, &self.arg_types[index + 1])?);
+
+        if let ColumnarValue::Array(array) = self.invoke(args)? {
+            Ok(array)
+        } else {
+            internal_err!("Expected array result from array/scalar invoke")
+        }
+    }
+
     fn invoke_arrays(&self, arrays: Vec<ArrayRef>) -> Result<ArrayRef> {
         let args = zip(arrays, &self.arg_types)
             .map(|(array, sedona_type)| {
@@ -334,7 +366,7 @@ impl ScalarUdfTester {
     }
 
     pub fn invoke(&self, args: Vec<ColumnarValue>) -> Result<ColumnarValue> {
-        assert_eq!(args.len(), self.arg_types.len());
+        assert_eq!(args.len(), self.arg_types.len(), "Unexpected arg length");
 
         let mut number_rows = 1;
         for arg in &args {

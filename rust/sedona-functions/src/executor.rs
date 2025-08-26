@@ -434,14 +434,13 @@ mod tests {
     use std::fmt::Write;
     use std::sync::Arc;
 
+    use super::*;
     use arrow_array::{builder::BinaryBuilder, create_array};
     use arrow_schema::DataType;
     use datafusion_common::{cast::as_binary_view_array, scalar::ScalarValue};
     use datafusion_expr::ColumnarValue;
     use rstest::rstest;
     use sedona_schema::datatypes::{WKB_GEOMETRY, WKB_VIEW_GEOMETRY};
-
-    use super::*;
 
     const POINT: [u8; 21] = [
         0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x3f, 0x00, 0x00,

@@ -6,10 +6,29 @@ edition = "2021"   # or use workspace edition with: edition.workspace = true
 [dev-dependencies]
 approx = { workspace = true }
 geo-types = { workspace = true }
+rstest = { workspace = true }
 wkb = { workspace = true }
+sedona-testing = { path = "../sedona-testing", features = ["criterion"] }
+criterion = { workspace = true}
 
 [dependencies]
+serde_json = { workspace = true }
 proj = { workspace = true }
+arrow-schema = { workspace = true }
+arrow-array = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
 proj-sys = { workspace = true }
 geo-traits = { workspace = true }
+sedona-expr = { path = "../sedona-expr" }
+sedona-functions = { path = "../sedona-functions" }
 sedona-geometry = { path = "../sedona-geometry" }
+sedona-schema = { path = "../sedona-schema" }
+wkb = { workspace = true }
+
+[[bench]]
+name = "proj-functions"
+harness = false
+
+[profile.bench]
+debug = true
