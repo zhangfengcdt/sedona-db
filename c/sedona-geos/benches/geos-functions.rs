@@ -12,6 +12,21 @@ fn criterion_benchmark(c: &mut Criterion) {
     benchmark::scalar(c, &f, "geos", "st_area", Polygon(10));
     benchmark::scalar(c, &f, "geos", "st_area", Polygon(500));
 
+    benchmark::scalar(
+        c,
+        &f,
+        "geos",
+        "st_buffer",
+        ArrayScalar(Polygon(10), Float64(1.0, 10.0)),
+    );
+    benchmark::scalar(
+        c,
+        &f,
+        "geos",
+        "st_buffer",
+        ArrayScalar(Polygon(500), Float64(1.0, 10.0)),
+    );
+
     benchmark::scalar(c, &f, "geos", "st_centroid", Polygon(10));
     benchmark::scalar(c, &f, "geos", "st_centroid", Polygon(500));
 

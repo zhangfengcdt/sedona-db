@@ -227,6 +227,16 @@ impl ScalarUdfTester {
         self.invoke_array(create_array(&wkb_values, &self.arg_types[0]))
     }
 
+    /// Invoke this function with a geometry array and a scalar
+    pub fn invoke_wkb_array_scalar(
+        &self,
+        wkb_values: Vec<Option<&str>>,
+        arg: impl Literal,
+    ) -> Result<ArrayRef> {
+        let wkb_array = create_array(&wkb_values, &self.arg_types[0]);
+        self.invoke_arrays_scalar(vec![wkb_array], arg)
+    }
+
     /// Invoke this function with an array
     pub fn invoke_array(&self, array: ArrayRef) -> Result<ArrayRef> {
         self.invoke_arrays(vec![array])

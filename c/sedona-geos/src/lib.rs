@@ -5,6 +5,7 @@ mod geos;
 mod overlay;
 pub mod register;
 mod st_area;
+mod st_buffer;
 mod st_centroid;
 mod st_length;
 mod st_perimeter;

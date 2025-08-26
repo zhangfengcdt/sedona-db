@@ -58,7 +58,7 @@ fn invoke_scalar(geos_geom: &geos::Geometry, writer: &mut impl std::io::Write) -
 
     let wkb = geometry
         .to_wkb()
-        .map_err(|e| DataFusionError::Execution(format!("Failed to calculate area: {e}")))?;
+        .map_err(|e| DataFusionError::Execution(format!("Failed to convert to wkb: {e}")))?;
 
     writer.write_all(wkb.as_ref())?;
     Ok(())

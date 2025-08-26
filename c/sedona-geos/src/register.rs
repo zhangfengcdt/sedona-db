@@ -1,8 +1,8 @@
 use sedona_expr::scalar_udf::ScalarKernelRef;
 
 use crate::{
-    distance::st_distance_impl, st_area::st_area_impl, st_centroid::st_centroid_impl,
-    st_length::st_length_impl, st_perimeter::st_perimeter_impl,
+    distance::st_distance_impl, st_area::st_area_impl, st_buffer::st_buffer_impl,
+    st_centroid::st_centroid_impl, st_length::st_length_impl, st_perimeter::st_perimeter_impl,
 };
 
 use crate::binary_predicates::{
@@ -17,6 +17,7 @@ use crate::overlay::{
 pub fn scalar_kernels() -> Vec<(&'static str, ScalarKernelRef)> {
     vec![
         ("st_area", st_area_impl()),
+        ("st_buffer", st_buffer_impl()),
         ("st_centroid", st_centroid_impl()),
         ("st_contains", st_contains_impl()),
         ("st_coveredby", st_covered_by_impl()),
