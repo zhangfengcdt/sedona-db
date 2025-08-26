@@ -14,11 +14,12 @@ use sedona_schema::datatypes::SedonaType;
 ///
 /// An implementation of WKT writing using GeoRust's wkt crate.
 pub fn st_astext_udf() -> SedonaScalarUDF {
-    SedonaScalarUDF::new(
+    SedonaScalarUDF::new_with_aliases(
         "st_astext",
         vec![Arc::new(STAsText {})],
         Volatility::Immutable,
         Some(st_astext_doc()),
+        vec!["st_aswkt".to_string()],
     )
 }
 
@@ -130,5 +131,11 @@ mod tests {
                 .unwrap(),
             &expected_array,
         );
+    }
+
+    #[test]
+    fn aliases() {
+        let udf: ScalarUDF = st_astext_udf().into();
+        assert!(udf.aliases().contains(&"st_aswkt".to_string()));
     }
 }

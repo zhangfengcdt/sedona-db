@@ -12,11 +12,12 @@ use sedona_schema::datatypes::SedonaType;
 ///
 /// An implementation of WKB writing using GeoRust's wkt crate.
 pub fn st_asbinary_udf() -> SedonaScalarUDF {
-    SedonaScalarUDF::new(
+    SedonaScalarUDF::new_with_aliases(
         "st_asbinary",
         vec![Arc::new(STAsBinary {})],
         Volatility::Immutable,
         Some(st_asbinary_doc()),
+        vec!["st_aswkb".to_string()],
     )
 }
 
@@ -130,5 +131,11 @@ mod tests {
                 .unwrap(),
             &(Arc::new(expected_array) as ArrayRef)
         );
+    }
+
+    #[test]
+    fn aliases() {
+        let udf: ScalarUDF = st_asbinary_udf().into();
+        assert!(udf.aliases().contains(&"st_aswkb".to_string()));
     }
 }
