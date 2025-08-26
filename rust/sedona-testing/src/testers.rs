@@ -222,6 +222,26 @@ impl ScalarUdfTester {
         }
     }
 
+    /// Invoke this function with three scalars
+    pub fn invoke_scalar_scalar_scalar<T0: Literal, T1: Literal, T2: Literal>(
+        &self,
+        arg0: T0,
+        arg1: T1,
+        arg2: T2,
+    ) -> Result<ScalarValue> {
+        let args = vec![
+            Self::scalar_arg(arg0, &self.arg_types[0])?,
+            Self::scalar_arg(arg1, &self.arg_types[1])?,
+            Self::scalar_arg(arg2, &self.arg_types[2])?,
+        ];
+
+        if let ColumnarValue::Scalar(scalar) = self.invoke(args)? {
+            Ok(scalar)
+        } else {
+            internal_err!("Expected scalar result from binary scalar invoke")
+        }
+    }
+
     /// Invoke this function with a geometry array
     pub fn invoke_wkb_array(&self, wkb_values: Vec<Option<&str>>) -> Result<ArrayRef> {
         self.invoke_array(create_array(&wkb_values, &self.arg_types[0]))
@@ -255,6 +275,16 @@ impl ScalarUdfTester {
     /// Invoke a binary function with two arrays
     pub fn invoke_array_array(&self, array0: ArrayRef, array1: ArrayRef) -> Result<ArrayRef> {
         self.invoke_arrays(vec![array0, array1])
+    }
+
+    /// Invoke a binary function with two arrays and a scalar
+    pub fn invoke_array_array_scalar(
+        &self,
+        array0: ArrayRef,
+        array1: ArrayRef,
+        arg: impl Literal,
+    ) -> Result<ArrayRef> {
+        self.invoke_arrays_scalar(vec![array0, array1], arg)
     }
 
     fn invoke_scalar_arrays(&self, arg: impl Literal, arrays: Vec<ArrayRef>) -> Result<ArrayRef> {

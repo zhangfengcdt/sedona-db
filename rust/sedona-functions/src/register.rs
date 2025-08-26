@@ -50,6 +50,7 @@ pub fn default_function_set() -> FunctionSet {
         crate::st_astext::st_astext_udf,
         crate::st_buffer::st_buffer_udf,
         crate::st_dimension::st_dimension_udf,
+        crate::st_dwithin::st_dwithin_udf,
         crate::st_envelope::st_envelope_udf,
         crate::st_geometrytype::st_geometry_type_udf,
         crate::st_geomfromwkb::st_geogfromwkb_udf,

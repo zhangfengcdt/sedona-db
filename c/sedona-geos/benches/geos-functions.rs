@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use sedona_expr::function_set::FunctionSet;
-use sedona_testing::benchmark_util::BenchmarkArgs::ArrayScalar;
+use sedona_testing::benchmark_util::BenchmarkArgs::{ArrayArrayScalar, ArrayScalar};
 use sedona_testing::benchmark_util::{benchmark, BenchmarkArgSpec::*};
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -119,6 +119,22 @@ fn criterion_benchmark(c: &mut Criterion) {
         "geos",
         "st_disjoint",
         ArrayScalar(Polygon(10), Polygon(500)),
+    );
+
+    benchmark::scalar(
+        c,
+        &f,
+        "geos",
+        "st_dwithin",
+        ArrayArrayScalar(Polygon(10), Polygon(10), Float64(1.0, 2.0)),
+    );
+
+    benchmark::scalar(
+        c,
+        &f,
+        "geos",
+        "st_dwithin",
+        ArrayArrayScalar(Polygon(10), Polygon(500), Float64(1.0, 2.0)),
     );
 
     benchmark::scalar(

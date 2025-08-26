@@ -99,6 +99,8 @@ pub enum BenchmarkArgs {
     ArrayScalar(BenchmarkArgSpec, BenchmarkArgSpec),
     /// Invoke a binary function with two arrays
     ArrayArray(BenchmarkArgSpec, BenchmarkArgSpec),
+    /// Invoke a ternary function with two arrays and a scalar
+    ArrayArrayScalar(BenchmarkArgSpec, BenchmarkArgSpec, BenchmarkArgSpec),
 }
 
 impl From<BenchmarkArgSpec> for BenchmarkArgs {
@@ -116,13 +118,17 @@ impl BenchmarkArgs {
     /// Build [BenchmarkData] with the specified number of batches
     pub fn build_data(&self, num_batches: usize) -> Result<BenchmarkData> {
         let array_configs = match self {
-            BenchmarkArgs::Array(_) | BenchmarkArgs::ArrayArray(_, _) => self.specs(),
+            BenchmarkArgs::Array(_)
+            | BenchmarkArgs::ArrayArray(_, _)
+            | BenchmarkArgs::ArrayArrayScalar(_, _, _) => self.specs(),
             BenchmarkArgs::ScalarArray(_, col) | BenchmarkArgs::ArrayScalar(col, _) => {
                 vec![col.clone()]
             }
         };
         let scalar_configs = match self {
-            BenchmarkArgs::ScalarArray(col, _) | BenchmarkArgs::ArrayScalar(_, col) => {
+            BenchmarkArgs::ScalarArray(col, _)
+            | BenchmarkArgs::ArrayScalar(_, col)
+            | BenchmarkArgs::ArrayArrayScalar(_, _, col) => {
                 vec![col.clone()]
             }
             _ => vec![],
@@ -155,6 +161,9 @@ impl BenchmarkArgs {
             | BenchmarkArgs::ArrayScalar(col0, col1)
             | BenchmarkArgs::ArrayArray(col0, col1) => {
                 vec![col0.clone(), col1.clone()]
+            }
+            BenchmarkArgs::ArrayArrayScalar(col0, col1, col2) => {
+                vec![col0.clone(), col1.clone(), col2.clone()]
             }
         }
     }
@@ -330,6 +339,15 @@ impl BenchmarkData {
                 for i in 0..self.num_batches {
                     tester
                         .invoke_array_array(self.arrays[0][i].clone(), self.arrays[1][i].clone())?;
+                }
+            }
+            BenchmarkArgs::ArrayArrayScalar(_, _, _) => {
+                for i in 0..self.num_batches {
+                    tester.invoke_array_array_scalar(
+                        self.arrays[0][i].clone(),
+                        self.arrays[1][i].clone(),
+                        self.scalars[0].clone(),
+                    )?;
                 }
             }
         }
@@ -570,5 +588,41 @@ mod test {
 
         assert_eq!(data.arrays[1].len(), 2);
         assert_eq!(data.arrays[1][0].data_type(), &DataType::Float64);
+    }
+
+    #[test]
+    fn args_array_array_scalar() {
+        let spec = BenchmarkArgs::ArrayArrayScalar(
+            BenchmarkArgSpec::Point,
+            BenchmarkArgSpec::Point,
+            BenchmarkArgSpec::Float64(1.0, 2.0),
+        );
+        assert_eq!(
+            spec.sedona_types(),
+            [
+                WKB_GEOMETRY,
+                WKB_GEOMETRY,
+                DataType::Float64.try_into().unwrap()
+            ]
+        );
+
+        let data = spec.build_data(2).unwrap();
+        assert_eq!(data.num_batches, 2);
+        assert_eq!(data.arrays.len(), 3);
+        assert_eq!(data.scalars.len(), 1);
+
+        assert_eq!(data.arrays[0].len(), 2);
+        assert_eq!(
+            WKB_GEOMETRY,
+            data.arrays[0][0].data_type().try_into().unwrap()
+        );
+
+        assert_eq!(data.arrays[1].len(), 2);
+        assert_eq!(
+            WKB_GEOMETRY,
+            data.arrays[1][0].data_type().try_into().unwrap()
+        );
+
+        assert_eq!(data.scalars[0].data_type(), DataType::Float64);
     }
 }

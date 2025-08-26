@@ -12,6 +12,7 @@ mod st_asbinary;
 mod st_astext;
 mod st_buffer;
 mod st_dimension;
+mod st_dwithin;
 pub mod st_envelope;
 pub mod st_envelope_aggr;
 mod st_geometrytype;
