@@ -120,6 +120,7 @@ pub fn geo_traits_update_xy_bounds(
 /// Update a single interval for bounds of a particular dimension
 ///
 /// Useful for updating bounds when only a single dimension is required.
+/// target must be either "x", "y", "z", or "m"
 pub fn geo_traits_update_dimension_bounds(
     geom: impl GeometryTrait<T = f64>,
     interval: &mut Interval,

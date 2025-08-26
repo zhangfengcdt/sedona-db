@@ -10,7 +10,7 @@ use datafusion_expr::{
 use geo_traits::GeometryTrait;
 use sedona_expr::scalar_udf::{ArgMatcher, SedonaScalarKernel, SedonaScalarUDF};
 use sedona_geometry::{
-    bounds::geo_traits_bounds_xy,
+    bounds::{geo_traits_bounds_m, geo_traits_bounds_xy, geo_traits_bounds_z},
     interval::{Interval, IntervalTrait},
 };
 use sedona_schema::datatypes::SedonaType;
@@ -63,13 +63,62 @@ pub fn st_ymax_udf() -> SedonaScalarUDF {
     )
 }
 
+pub fn st_zmin_udf() -> SedonaScalarUDF {
+    SedonaScalarUDF::new(
+        "st_zmin",
+        vec![Arc::new(STXyzmMinMax {
+            dim: "z",
+            is_max: false,
+        })],
+        Volatility::Immutable,
+        Some(st_xyzm_minmax_doc("z", false)),
+    )
+}
+
+pub fn st_zmax_udf() -> SedonaScalarUDF {
+    SedonaScalarUDF::new(
+        "st_zmax",
+        vec![Arc::new(STXyzmMinMax {
+            dim: "z",
+            is_max: true,
+        })],
+        Volatility::Immutable,
+        Some(st_xyzm_minmax_doc("z", true)),
+    )
+}
+
+pub fn st_mmin_udf() -> SedonaScalarUDF {
+    SedonaScalarUDF::new(
+        "st_mmin",
+        vec![Arc::new(STXyzmMinMax {
+            dim: "m",
+            is_max: false,
+        })],
+        Volatility::Immutable,
+        Some(st_xyzm_minmax_doc("m", false)),
+    )
+}
+
+pub fn st_mmax_udf() -> SedonaScalarUDF {
+    SedonaScalarUDF::new(
+        "st_mmax",
+        vec![Arc::new(STXyzmMinMax {
+            dim: "m",
+            is_max: true,
+        })],
+        Volatility::Immutable,
+        Some(st_xyzm_minmax_doc("m", true)),
+    )
+}
+
 fn st_xyzm_minmax_doc(dim: &str, is_max: bool) -> Documentation {
     let min_or_max = if is_max { "Max" } else { "Min" };
     let func_name = format!("ST_{}{}", dim.to_uppercase(), min_or_max);
     Documentation::builder(
         DOC_SECTION_OTHER,
         format!(
-            "Return true if the geometry has a {} dimension",
+            "Return the {} of the {} dimension of the geometry",
+            min_or_max.to_lowercase(),
             dim.to_uppercase()
         ),
         format!("{} (A: Geometry)", func_name),
@@ -103,19 +152,13 @@ impl SedonaScalarKernel for STXyzmMinMax {
         arg_types: &[SedonaType],
         args: &[ColumnarValue],
     ) -> Result<ColumnarValue> {
-        let dim_index = match self.dim {
-            "x" => 0,
-            "y" => 1,
-            _ => internal_err!("unexpected dim")?,
-        };
-
         let executor = WkbExecutor::new(arg_types, args);
         let mut builder = Float64Builder::with_capacity(executor.num_iterations());
 
         executor.execute_wkb_void(|maybe_item| {
             match maybe_item {
                 Some(item) => {
-                    builder.append_option(invoke_scalar(&item, dim_index, self.is_max)?);
+                    builder.append_option(invoke_scalar(&item, self.dim, self.is_max)?);
                 }
                 None => builder.append_null(),
             }
@@ -128,18 +171,32 @@ impl SedonaScalarKernel for STXyzmMinMax {
 
 fn invoke_scalar(
     item: impl GeometryTrait<T = f64>,
-    dim_index: usize,
+    dim: &'static str,
     is_max: bool,
 ) -> Result<Option<f64>> {
-    let bounds = geo_traits_bounds_xy(item)
-        .map_err(|e| DataFusionError::Internal(format!("Error updating bounds: {}", e)))?;
-
-    let interval: Interval = match dim_index {
-        0 => Interval::try_from(*bounds.x()).map_err(|e| {
-            DataFusionError::Internal(format!("Error converting to interval: {}", e))
-        })?,
-        1 => *bounds.y(),
-        // TODO: handle z and m
+    let interval: Interval = match dim {
+        "x" => {
+            let xy_bounds = geo_traits_bounds_xy(item)
+                .map_err(|e| DataFusionError::Internal(format!("Error updating bounds: {}", e)))?;
+            Interval::try_from(*xy_bounds.x()).map_err(|e| {
+                DataFusionError::Internal(format!("Error converting to interval: {}", e))
+            })?
+        }
+        "y" => {
+            let xy_bounds = geo_traits_bounds_xy(item)
+                .map_err(|e| DataFusionError::Internal(format!("Error updating bounds: {}", e)))?;
+            *xy_bounds.y()
+        }
+        "z" => {
+            let z_bounds = geo_traits_bounds_z(item)
+                .map_err(|e| DataFusionError::Internal(format!("Error updating bounds: {}", e)))?;
+            z_bounds
+        }
+        "m" => {
+            let m_bounds = geo_traits_bounds_m(item)
+                .map_err(|e| DataFusionError::Internal(format!("Error updating bounds: {}", e)))?;
+            m_bounds
+        }
         _ => internal_err!("unexpected dim index")?,
     };
 
@@ -152,6 +209,7 @@ fn invoke_scalar(
 #[cfg(test)]
 mod tests {
     use arrow_array::{create_array as arrow_array, ArrayRef};
+    use datafusion_common::ScalarValue;
     use datafusion_expr::ScalarUDF;
     use rstest::rstest;
     use sedona_schema::datatypes::{WKB_GEOMETRY, WKB_VIEW_GEOMETRY};
@@ -168,6 +226,30 @@ mod tests {
 
         let udf: ScalarUDF = st_xmax_udf().into();
         assert_eq!(udf.name(), "st_xmax");
+        assert!(udf.documentation().is_some());
+
+        let udf: ScalarUDF = st_ymin_udf().into();
+        assert_eq!(udf.name(), "st_ymin");
+        assert!(udf.documentation().is_some());
+
+        let udf: ScalarUDF = st_ymax_udf().into();
+        assert_eq!(udf.name(), "st_ymax");
+        assert!(udf.documentation().is_some());
+
+        let udf: ScalarUDF = st_zmin_udf().into();
+        assert_eq!(udf.name(), "st_zmin");
+        assert!(udf.documentation().is_some());
+
+        let udf: ScalarUDF = st_zmax_udf().into();
+        assert_eq!(udf.name(), "st_zmax");
+        assert!(udf.documentation().is_some());
+
+        let udf: ScalarUDF = st_mmin_udf().into();
+        assert_eq!(udf.name(), "st_mmin");
+        assert!(udf.documentation().is_some());
+
+        let udf: ScalarUDF = st_mmax_udf().into();
+        assert_eq!(udf.name(), "st_mmax");
         assert!(udf.documentation().is_some())
     }
 
@@ -178,16 +260,55 @@ mod tests {
         let xmax_tester = ScalarUdfTester::new(st_xmax_udf().into(), vec![sedona_type.clone()]);
         let ymax_tester = ScalarUdfTester::new(st_ymax_udf().into(), vec![sedona_type.clone()]);
 
+        let zmin_tester = ScalarUdfTester::new(st_zmin_udf().into(), vec![sedona_type.clone()]);
+        let zmax_tester = ScalarUdfTester::new(st_zmax_udf().into(), vec![sedona_type.clone()]);
+        let mmin_tester = ScalarUdfTester::new(st_mmin_udf().into(), vec![sedona_type.clone()]);
+        let mmax_tester = ScalarUdfTester::new(st_mmax_udf().into(), vec![sedona_type.clone()]);
+
         xmin_tester.assert_return_type(DataType::Float64);
         ymin_tester.assert_return_type(DataType::Float64);
         xmax_tester.assert_return_type(DataType::Float64);
         ymax_tester.assert_return_type(DataType::Float64);
+
+        zmin_tester.assert_return_type(DataType::Float64);
+        zmax_tester.assert_return_type(DataType::Float64);
+        mmin_tester.assert_return_type(DataType::Float64);
+        mmax_tester.assert_return_type(DataType::Float64);
 
         let input_wkt = "POLYGON ((-1 0, 0 -2, 3 1, 0 4))";
         xmin_tester.assert_scalar_result_equals(xmin_tester.invoke_scalar(input_wkt).unwrap(), -1);
         ymin_tester.assert_scalar_result_equals(ymin_tester.invoke_scalar(input_wkt).unwrap(), -2);
         xmax_tester.assert_scalar_result_equals(xmax_tester.invoke_scalar(input_wkt).unwrap(), 3);
         ymax_tester.assert_scalar_result_equals(ymax_tester.invoke_scalar(input_wkt).unwrap(), 4);
+
+        zmin_tester.assert_scalar_result_equals(
+            zmin_tester.invoke_scalar(input_wkt).unwrap(),
+            ScalarValue::Null,
+        );
+        zmax_tester.assert_scalar_result_equals(
+            zmax_tester.invoke_scalar(input_wkt).unwrap(),
+            ScalarValue::Null,
+        );
+        mmin_tester.assert_scalar_result_equals(
+            mmin_tester.invoke_scalar(input_wkt).unwrap(),
+            ScalarValue::Null,
+        );
+        mmax_tester.assert_scalar_result_equals(
+            mmax_tester.invoke_scalar(input_wkt).unwrap(),
+            ScalarValue::Null,
+        );
+
+        // Test example with zm and coordinates
+        let input_wkt = "LINESTRING ZM (1 2 3 4, 5 6 7 8)";
+        xmin_tester.assert_scalar_result_equals(xmin_tester.invoke_scalar(input_wkt).unwrap(), 1);
+        xmax_tester.assert_scalar_result_equals(xmax_tester.invoke_scalar(input_wkt).unwrap(), 5);
+        ymin_tester.assert_scalar_result_equals(ymin_tester.invoke_scalar(input_wkt).unwrap(), 2);
+        ymax_tester.assert_scalar_result_equals(ymax_tester.invoke_scalar(input_wkt).unwrap(), 6);
+
+        zmin_tester.assert_scalar_result_equals(zmin_tester.invoke_scalar(input_wkt).unwrap(), 3);
+        zmax_tester.assert_scalar_result_equals(zmax_tester.invoke_scalar(input_wkt).unwrap(), 7);
+        mmin_tester.assert_scalar_result_equals(mmin_tester.invoke_scalar(input_wkt).unwrap(), 4);
+        mmax_tester.assert_scalar_result_equals(mmax_tester.invoke_scalar(input_wkt).unwrap(), 8);
 
         // Test array input
         let input_wkt = vec![None, Some("POINT EMPTY"), Some("GEOMETRYCOLLECTION EMPTY")];
@@ -207,6 +328,23 @@ mod tests {
         );
         assert_array_equal(
             &ymax_tester.invoke_wkb_array(input_wkt.clone()).unwrap(),
+            &expected,
+        );
+
+        assert_array_equal(
+            &zmin_tester.invoke_wkb_array(input_wkt.clone()).unwrap(),
+            &expected,
+        );
+        assert_array_equal(
+            &zmax_tester.invoke_wkb_array(input_wkt.clone()).unwrap(),
+            &expected,
+        );
+        assert_array_equal(
+            &mmin_tester.invoke_wkb_array(input_wkt.clone()).unwrap(),
+            &expected,
+        );
+        assert_array_equal(
+            &mmax_tester.invoke_wkb_array(input_wkt.clone()).unwrap(),
             &expected,
         );
     }
