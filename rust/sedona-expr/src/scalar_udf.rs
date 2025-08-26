@@ -146,7 +146,7 @@ impl ArgMatcher {
 
         for matcher in matcher_iter {
             if let Some(arg) = arg_iter.peek() {
-                if matcher.match_type(arg) {
+                if arg == &&SedonaType::Arrow(DataType::Null) || matcher.match_type(arg) {
                     arg_iter.next(); // Consume the argument
                     continue; // Move to the next matcher
                 } else if matcher.is_optional() {
@@ -646,6 +646,25 @@ mod tests {
             SedonaType::Arrow(DataType::Int32),
             SedonaType::Arrow(DataType::Int32)
         ]));
+    }
+
+    #[test]
+    fn arg_matcher_matches_null() {
+        for type_matcher in [
+            ArgMatcher::is_arrow(DataType::Null),
+            ArgMatcher::is_arrow(DataType::Float32),
+            ArgMatcher::is_geometry_or_geography(),
+            ArgMatcher::is_geometry(),
+            ArgMatcher::is_geography(),
+            ArgMatcher::is_numeric(),
+            ArgMatcher::is_string(),
+            ArgMatcher::is_binary(),
+            ArgMatcher::is_boolean(),
+            ArgMatcher::is_optional(ArgMatcher::is_numeric()),
+        ] {
+            let matcher = ArgMatcher::new(vec![type_matcher], SedonaType::Arrow(DataType::Null));
+            assert!(matcher.matches(&[SedonaType::Arrow(DataType::Null)]));
+        }
     }
 
     #[test]
