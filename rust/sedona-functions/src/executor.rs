@@ -325,6 +325,7 @@ impl ScalarGeo for ScalarValue {
             ScalarValue::Binary(maybe_item)
             | ScalarValue::BinaryView(maybe_item)
             | ScalarValue::LargeBinary(maybe_item) => Ok(maybe_item.as_deref()),
+            ScalarValue::Null => Ok(None),
             _ => internal_err!("Can't iterate over {:?} ScalarValue as &[u8]", self),
         }
     }
@@ -714,6 +715,9 @@ mod tests {
         wkt::to_wkt::write_geometry(&mut wkt_out, &wkb_item).unwrap();
         assert_eq!(wkt_out, "POINT(1 2)");
         drop(wkb_item);
+
+        let null_item = ScalarValue::Null.scalar_from_factory(&factory).unwrap();
+        assert!(null_item.is_none());
 
         let err = ScalarValue::Binary(Some(vec![]))
             .scalar_from_factory(&factory)

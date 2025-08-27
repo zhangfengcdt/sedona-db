@@ -11,6 +11,7 @@ mod st_area;
 mod st_asbinary;
 mod st_astext;
 mod st_buffer;
+mod st_centroid;
 mod st_dimension;
 mod st_dwithin;
 pub mod st_envelope;

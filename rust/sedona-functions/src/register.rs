@@ -49,6 +49,7 @@ pub fn default_function_set() -> FunctionSet {
         crate::st_asbinary::st_asbinary_udf,
         crate::st_astext::st_astext_udf,
         crate::st_buffer::st_buffer_udf,
+        crate::st_centroid::st_centroid_udf,
         crate::st_dimension::st_dimension_udf,
         crate::st_dwithin::st_dwithin_udf,
         crate::st_envelope::st_envelope_udf,

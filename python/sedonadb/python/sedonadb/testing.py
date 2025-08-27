@@ -159,6 +159,8 @@ class DBEngine:
           (which ensures a consistent WKT output format).
         - A tuple of strings as the string output of a single row
         - A string as the string output of a single column of a single row
+        - A bool for a single boolean value
+        - An int or float for single numeric values
 
         Using Arrow table equality is the most strict (ensures exact type equality and
         byte-for-byte value equality); however, string output is most useful for checking
@@ -214,6 +216,15 @@ class DBEngine:
             self.assert_result(result, [expected], **kwargs)
         elif isinstance(expected, str):
             self.assert_result(result, [(expected,)], **kwargs)
+        elif isinstance(expected, bool):
+            self.assert_result(result, [(str(expected).lower(),)], **kwargs)
+        elif isinstance(expected, (int, float)):
+            result_df = self.result_to_pandas(result)
+            assert result_df.shape == (1, 1)
+            result_value = result_df.iloc[0, 0]
+            assert result_value == expected, f"Expected {expected}, got {result_value}"
+        elif expected is None:
+            self.assert_result(result, [(None,)], **kwargs)
         else:
             raise TypeError(
                 f"Can't assert result equality against {type(expected).__name__}"
@@ -506,6 +517,27 @@ class PostGIS(DBEngine):
                 cur.fetchall()
 
         return col_srid
+
+
+def geom_or_null(arg):
+    """Format SQL expression for a geometry object or NULL"""
+    if arg is None:
+        return "NULL"
+    return f"ST_GeomFromText('{arg}')"
+
+
+def geog_or_null(arg):
+    """Format SQL expression for a geography object or NULL"""
+    if arg is None:
+        return "NULL"
+    return f"ST_GeogFromText('{arg}')"
+
+
+def val_or_null(arg):
+    """Format SQL expression for a value or NULL"""
+    if arg is None:
+        return "NULL"
+    return arg
 
 
 def _geometry_columns(schema):
