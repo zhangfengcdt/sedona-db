@@ -145,11 +145,16 @@ async fn main_inner() -> Result<()> {
     };
 
     let commands = args.command;
+    let files = args.file;
 
-    if commands.is_empty() {
+    if commands.is_empty() && files.is_empty() {
         return exec::exec_from_repl(&ctx, &mut print_options)
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)));
+    }
+
+    if !files.is_empty() {
+        exec::exec_from_files(&ctx, files, &print_options).await?;
     }
 
     if !commands.is_empty() {
