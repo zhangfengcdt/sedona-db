@@ -704,7 +704,7 @@ mod tests {
         let ctx = SessionContext::new_with_state(state);
 
         let mut function_set = sedona_functions::register::default_function_set();
-        let scalar_kernels = sedona_geo::register::scalar_kernels();
+        let scalar_kernels = sedona_geos::register::scalar_kernels();
 
         function_set.scalar_udfs().for_each(|udf| {
             ctx.register_udf(udf.clone().into());
@@ -766,11 +766,24 @@ mod tests {
     // Using tokio::sync::OnceCell for async lazy initialization to avoid recomputing expensive
     // test data generation and nested loop join results for each test parameter combination
     static TEST_DATA: OnceCell<(TestPartitions, TestPartitions)> = OnceCell::const_new();
-    static EXPECTED_RESULTS: OnceCell<(RecordBatch, RecordBatch)> = OnceCell::const_new();
+    static RANGE_JOIN_EXPECTED_RESULTS: OnceCell<Vec<RecordBatch>> = OnceCell::const_new();
+    static DIST_JOIN_EXPECTED_RESULTS: OnceCell<Vec<RecordBatch>> = OnceCell::const_new();
 
-    const INNER_JOIN_SQL1: &str = "SELECT L.id l_id, R.id r_id FROM L JOIN R ON ST_Intersects(L.geometry, R.geometry) ORDER BY l_id, r_id";
-    const INNER_JOIN_SQL2: &str =
+    const RANGE_JOIN_SQL1: &str = "SELECT L.id l_id, R.id r_id FROM L JOIN R ON ST_Intersects(L.geometry, R.geometry) ORDER BY l_id, r_id";
+    const RANGE_JOIN_SQL2: &str =
         "SELECT * FROM L JOIN R ON ST_Intersects(L.geometry, R.geometry) ORDER BY L.id, R.id";
+    const RANGE_JOIN_SQLS: &[&str] = &[RANGE_JOIN_SQL1, RANGE_JOIN_SQL2];
+
+    const DIST_JOIN_SQL1: &str = "SELECT L.id l_id, R.id r_id FROM L JOIN R ON ST_Distance(L.geometry, R.geometry) < 1.0 ORDER BY l_id, r_id";
+    const DIST_JOIN_SQL2: &str = "SELECT L.id l_id, R.id r_id FROM L JOIN R ON ST_Distance(L.geometry, R.geometry) < L.dist / 10.0 ORDER BY l_id, r_id";
+    const DIST_JOIN_SQL3: &str = "SELECT L.id l_id, R.id r_id FROM L JOIN R ON ST_Distance(L.geometry, R.geometry) < R.dist / 10.0 ORDER BY l_id, r_id";
+    const DIST_JOIN_SQL4: &str = "SELECT L.id l_id, R.id r_id FROM L JOIN R ON ST_DWithin(L.geometry, R.geometry, 1.0) ORDER BY l_id, r_id";
+    const DIST_JOIN_SQLS: &[&str] = &[
+        DIST_JOIN_SQL1,
+        DIST_JOIN_SQL2,
+        DIST_JOIN_SQL3,
+        DIST_JOIN_SQL4,
+    ];
 
     /// Get test data, computing it only once
     async fn get_default_test_data() -> &'static (TestPartitions, TestPartitions) {
@@ -782,8 +795,19 @@ mod tests {
     }
 
     /// Get expected results, computing them only once
-    async fn get_expected_inner_join_results() -> &'static (RecordBatch, RecordBatch) {
-        EXPECTED_RESULTS
+    async fn get_expected_range_join_results() -> &'static Vec<RecordBatch> {
+        get_or_init_expected_join_results(&RANGE_JOIN_EXPECTED_RESULTS, RANGE_JOIN_SQLS).await
+    }
+
+    async fn get_expected_distance_join_results() -> &'static Vec<RecordBatch> {
+        get_or_init_expected_join_results(&DIST_JOIN_EXPECTED_RESULTS, DIST_JOIN_SQLS).await
+    }
+
+    async fn get_or_init_expected_join_results<'a>(
+        lazy_init_results: &'a OnceCell<Vec<RecordBatch>>,
+        sql_queries: &[&str],
+    ) -> &'a Vec<RecordBatch> {
+        lazy_init_results
             .get_or_init(|| async {
                 let test_data = get_default_test_data().await;
                 let ((left_schema, left_partitions), (right_schema, right_partitions)) = test_data;
@@ -791,31 +815,24 @@ mod tests {
                 let batch_size = 10;
 
                 // Run nested loop join to get expected results
-                let expected_result_1 = run_join_query(
-                    left_schema,
-                    right_schema,
-                    left_partitions.clone(),
-                    right_partitions.clone(),
-                    None,
-                    batch_size,
-                    INNER_JOIN_SQL1,
-                )
-                .await
-                .expect("Failed to generate expected result 1");
+                let mut expected_results = Vec::with_capacity(sql_queries.len());
 
-                let expected_result_2 = run_join_query(
-                    left_schema,
-                    right_schema,
-                    left_partitions.clone(),
-                    right_partitions.clone(),
-                    None,
-                    batch_size,
-                    INNER_JOIN_SQL2,
-                )
-                .await
-                .expect("Failed to generate expected result 2");
+                for (i, sql) in sql_queries.iter().enumerate() {
+                    let result = run_spatial_join_query(
+                        left_schema,
+                        right_schema,
+                        left_partitions.clone(),
+                        right_partitions.clone(),
+                        None,
+                        batch_size,
+                        sql,
+                    )
+                    .await
+                    .unwrap_or_else(|_| panic!("Failed to generate expected result {}", i + 1));
+                    expected_results.push(result);
+                }
 
-                (expected_result_1, expected_result_2)
+                expected_results
             })
             .await
     }
@@ -835,41 +852,59 @@ mod tests {
         spatial_library: SpatialLibrary,
     ) -> Result<()> {
         let test_data = get_default_test_data().await;
-        let expected_results = get_expected_inner_join_results().await;
-
+        let expected_results = get_expected_range_join_results().await;
         let ((left_schema, left_partitions), (right_schema, right_partitions)) = test_data;
-        let (expected_result_1, expected_result_2) = expected_results;
 
         let options = SpatialJoinOptions {
             spatial_library,
             execution_mode,
             ..Default::default()
         };
+        for (idx, sql) in RANGE_JOIN_SQLS.iter().enumerate() {
+            let actual_result = run_spatial_join_query(
+                left_schema,
+                right_schema,
+                left_partitions.clone(),
+                right_partitions.clone(),
+                Some(options.clone()),
+                max_batch_size,
+                sql,
+            )
+            .await?;
+            assert_eq!(&actual_result, &expected_results[idx]);
+        }
 
-        let result_1 = run_join_query(
-            left_schema,
-            right_schema,
-            left_partitions.clone(),
-            right_partitions.clone(),
-            Some(options.clone()),
-            max_batch_size,
-            INNER_JOIN_SQL1,
-        )
-        .await?;
+        Ok(())
+    }
 
-        let result_2 = run_join_query(
-            left_schema,
-            right_schema,
-            left_partitions.clone(),
-            right_partitions.clone(),
-            Some(options),
-            max_batch_size,
-            INNER_JOIN_SQL2,
-        )
-        .await?;
+    #[rstest]
+    #[tokio::test]
+    async fn test_distance_join_with_conf(
+        #[values(30, 1000)] max_batch_size: usize,
+        #[values(SpatialLibrary::Geo, SpatialLibrary::Geos, SpatialLibrary::Tg)]
+        spatial_library: SpatialLibrary,
+    ) -> Result<()> {
+        let test_data = get_default_test_data().await;
+        let expected_results = get_expected_distance_join_results().await;
+        let ((left_schema, left_partitions), (right_schema, right_partitions)) = test_data;
 
-        assert_eq!(&result_1, expected_result_1);
-        assert_eq!(&result_2, expected_result_2);
+        let options = SpatialJoinOptions {
+            spatial_library,
+            ..Default::default()
+        };
+        for (idx, sql) in DIST_JOIN_SQLS.iter().enumerate() {
+            let actual_result = run_spatial_join_query(
+                left_schema,
+                right_schema,
+                left_partitions.clone(),
+                right_partitions.clone(),
+                Some(options.clone()),
+                max_batch_size,
+                sql,
+            )
+            .await?;
+            assert_eq!(&actual_result, &expected_results[idx]);
+        }
 
         Ok(())
     }
@@ -986,7 +1021,7 @@ mod tests {
         if matches!(join_type, JoinType::Left | JoinType::Right | JoinType::Full) {
             // Make sure that we are effectively testing outer joins. If outer joins produces the same result as inner join,
             // it means that the test data is not suitable for testing outer joins.
-            let inner_batches = run_join_query(
+            let inner_batches = run_spatial_join_query(
                 &left_schema,
                 &right_schema,
                 left_partitions,
@@ -1012,7 +1047,7 @@ mod tests {
         sql: &str,
     ) -> Result<RecordBatch> {
         // Run spatial join using SpatialJoinExec
-        let actual = run_join_query(
+        let actual = run_spatial_join_query(
             left_schema,
             right_schema,
             left_partitions.clone(),
@@ -1024,7 +1059,7 @@ mod tests {
         .await?;
 
         // Run spatial join using NestedLoopJoinExec
-        let expected = run_join_query(
+        let expected = run_spatial_join_query(
             left_schema,
             right_schema,
             left_partitions.clone(),
@@ -1042,7 +1077,7 @@ mod tests {
         Ok(actual)
     }
 
-    async fn run_join_query(
+    async fn run_spatial_join_query(
         left_schema: &SchemaRef,
         right_schema: &SchemaRef,
         left_partitions: Vec<Vec<RecordBatch>>,

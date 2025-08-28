@@ -5093,6 +5093,7 @@ dependencies = [
  "sedona-functions",
  "sedona-geo",
  "sedona-geometry",
+ "sedona-geos",
  "sedona-schema",
  "sedona-testing",
  "sedona-tg",

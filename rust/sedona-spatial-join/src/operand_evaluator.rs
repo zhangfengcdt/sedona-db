@@ -1,7 +1,7 @@
 use core::fmt;
 use std::{mem::transmute, sync::Arc};
 
-use arrow_array::{ArrayRef, Float64Array, RecordBatch};
+use arrow_array::{Array, ArrayRef, Float64Array, RecordBatch};
 use datafusion_common::{
     utils::proxy::VecAllocExt, DataFusionError, JoinSide, Result, ScalarValue,
 };
@@ -40,8 +40,8 @@ pub(crate) trait OperandEvaluator: fmt::Debug + Send + Sync {
     fn resolve_distance(
         &self,
         _build_distance: &Option<ColumnarValue>,
-        _probe_distance: &Option<ColumnarValue>,
-        _row_idx: usize,
+        _build_row_idx: usize,
+        _probe_distance: &Option<f64>,
     ) -> Result<Option<f64>> {
         Ok(None)
     }
@@ -235,14 +235,12 @@ impl DistanceOperandEvaluator {
             }
             ColumnarValue::Array(array) => {
                 if let Some(array) = array.as_any().downcast_ref::<Float64Array>() {
-                    array
-                        .iter()
-                        .zip(result.rects.iter_mut())
-                        .for_each(|(distance, (_, rect))| {
-                            if let Some(distance) = distance {
-                                expand_rect_in_place(rect, distance);
-                            }
-                        });
+                    for (geom_idx, rect) in result.rects.iter_mut() {
+                        if !array.is_null(*geom_idx) {
+                            let dist = array.value(*geom_idx);
+                            expand_rect_in_place(rect, dist);
+                        }
+                    }
                 } else {
                     return Err(DataFusionError::Internal(
                         "Distance columnar value is not a Float64Array".to_string(),
@@ -258,6 +256,31 @@ impl DistanceOperandEvaluator {
 
         result.distance = Some(distance_columnar_value);
         Ok(result)
+    }
+}
+
+pub(crate) fn distance_value_at(
+    distance_columnar_value: &ColumnarValue,
+    i: usize,
+) -> Result<Option<f64>> {
+    match distance_columnar_value {
+        ColumnarValue::Scalar(ScalarValue::Float64(dist_opt)) => Ok(*dist_opt),
+        ColumnarValue::Array(array) => {
+            if let Some(array) = array.as_any().downcast_ref::<Float64Array>() {
+                if array.is_null(i) {
+                    Ok(None)
+                } else {
+                    Ok(Some(array.value(i)))
+                }
+            } else {
+                Err(DataFusionError::Internal(
+                    "Distance columnar value is not a Float64Array".to_string(),
+                ))
+            }
+        }
+        _ => Err(DataFusionError::Internal(
+            "Distance columnar value is not a Float64".to_string(),
+        )),
     }
 }
 
@@ -301,33 +324,17 @@ impl OperandEvaluator for DistanceOperandEvaluator {
     fn resolve_distance(
         &self,
         build_distance: &Option<ColumnarValue>,
-        probe_distance: &Option<ColumnarValue>,
-        row_idx: usize,
+        build_row_idx: usize,
+        probe_distance: &Option<f64>,
     ) -> Result<Option<f64>> {
-        let distance = match self.inner.distance_side {
-            JoinSide::Left => build_distance,
-            JoinSide::Right | JoinSide::None => probe_distance,
-        };
-
-        let Some(distance) = distance else {
-            return Ok(None);
-        };
-
-        match distance {
-            ColumnarValue::Scalar(ScalarValue::Float64(Some(distance))) => Ok(Some(*distance)),
-            ColumnarValue::Scalar(ScalarValue::Float64(None)) => Ok(None),
-            ColumnarValue::Array(array) => {
-                let array = array.as_any().downcast_ref::<Float64Array>().ok_or(
-                    DataFusionError::Internal(
-                        "Distance columnar value is not a Float64Array".to_string(),
-                    ),
-                )?;
-                let distance = array.value(row_idx);
-                Ok(Some(distance))
+        match self.inner.distance_side {
+            JoinSide::Left => {
+                let Some(distance) = build_distance else {
+                    return Ok(None);
+                };
+                distance_value_at(distance, build_row_idx)
             }
-            _ => Err(DataFusionError::Internal(
-                "Distance columnar value is not a Float64".to_string(),
-            )),
+            JoinSide::Right | JoinSide::None => Ok(*probe_distance),
         }
     }
 }
@@ -369,8 +376,8 @@ impl OperandEvaluator for KNNOperandEvaluator {
     fn resolve_distance(
         &self,
         _build_distance: &Option<ColumnarValue>,
-        _probe_distance: &Option<ColumnarValue>,
-        _row_idx: usize,
+        _build_row_idx: usize,
+        _probe_distance: &Option<f64>,
     ) -> Result<Option<f64>> {
         // NOTE: We do not support distance-based refinement for KNN predicates in the refiner phase.
         Ok(None)

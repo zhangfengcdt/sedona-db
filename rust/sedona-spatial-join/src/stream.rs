@@ -19,7 +19,7 @@ use std::sync::Arc;
 use crate::index::SpatialIndex;
 use crate::once_fut::{OnceAsync, OnceFut};
 use crate::operand_evaluator::{
-    create_operand_evaluator, EvaluatedGeometryArray, OperandEvaluator,
+    create_operand_evaluator, distance_value_at, EvaluatedGeometryArray, OperandEvaluator,
 };
 use crate::spatial_predicate::SpatialPredicate;
 use crate::utils::{
@@ -524,6 +524,11 @@ impl SpatialJoinBatchIterator {
                 continue;
             };
 
+            let dist = match distance {
+                Some(dist) => distance_value_at(dist, self.current_probe_idx)?,
+                None => None,
+            };
+
             // Handle KNN queries differently from regular spatial joins
             match &self.spatial_predicate {
                 SpatialPredicate::KNearestNeighbors(knn_predicate) => {
@@ -570,7 +575,7 @@ impl SpatialJoinBatchIterator {
                         let join_result_metrics = self.spatial_index.query(
                             wkb,
                             rect,
-                            distance,
+                            &dist,
                             &mut self.build_batch_positions,
                         )?;
 

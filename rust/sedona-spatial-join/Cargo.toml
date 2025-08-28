@@ -49,5 +49,5 @@ rstest = { workspace = true }
 sedona-testing = { path = "../sedona-testing" }
 wkt = { workspace = true }
 tokio = { workspace = true, features = ["macros"] }
-sedona-geo = { path = "../sedona-geo" }
+sedona-geos = { path = "../../c/sedona-geos" }
 rand = { workspace = true }
