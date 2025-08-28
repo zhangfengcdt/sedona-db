@@ -32,7 +32,7 @@ pub fn scalar_kernels() -> Vec<(&'static str, ScalarKernelRef)> {
         ("st_intersection", st_intersection_impl()),
         ("st_intersects", st_intersects_impl()),
         ("st_perimeter", st_perimeter_impl()),
-        ("st_sym_difference", st_sym_difference_impl()),
+        ("st_symdifference", st_sym_difference_impl()),
         ("st_touches", st_touches_impl()),
         ("st_union", st_union_impl()),
         ("st_within", st_within_impl()),

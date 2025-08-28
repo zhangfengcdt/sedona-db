@@ -1,0 +1,285 @@
+import pytest
+from sedonadb.testing import geom_or_null, PostGIS, SedonaDB
+
+
+@pytest.mark.parametrize("eng", [SedonaDB, PostGIS])
+@pytest.mark.parametrize(
+    ("geom1", "geom2", "expected"),
+    [
+        (None, None, None),
+        ("POINT (0 0)", None, None),
+        (None, "POINT (0 0)", None),
+        ("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", "POINT (0 0)", False),
+        ("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", "POINT (0.5 0.5)", True),
+        ("POINT (0 0)", "POINT EMPTY", False),
+        ("POINT (0 0)", "LINESTRING (0 0, 1 1)", False),
+        ("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", "LINESTRING (0 0, 1 1)", True),
+        (
+            "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
+            "POLYGON ((5 5, 6 5, 6 6, 5 6, 5 5))",
+            False,
+        ),
+        (
+            "POINT (1 1)",
+            "GEOMETRYCOLLECTION (POINT (0 0), POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0)), LINESTRING (0 0, 1 1))",
+            False,
+        ),
+    ],
+)
+def test_st_contains(eng, geom1, geom2, expected):
+    eng = eng.create_or_skip()
+    eng.assert_query_result(
+        f"SELECT ST_Contains({geom_or_null(geom1)}, {geom_or_null(geom2)})",
+        expected,
+    )
+
+
+@pytest.mark.parametrize("eng", [SedonaDB, PostGIS])
+@pytest.mark.parametrize(
+    ("geom1", "geom2", "expected"),
+    [
+        (None, None, None),
+        ("POINT (0 0)", None, None),
+        (None, "POINT (0 0)", None),
+        ("POINT (0 0)", "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", True),
+        ("POINT (0.5 0.5)", "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", True),
+        ("POINT (0 0)", "POINT EMPTY", False),
+        ("POINT (0 0)", "LINESTRING (0 0, 1 1)", True),
+        ("LINESTRING (0 0, 1 1)", "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", True),
+        (
+            "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
+            "POLYGON ((5 5, 6 5, 6 6, 5 6, 5 5))",
+            False,
+        ),
+        (
+            "POINT (1 1)",
+            "GEOMETRYCOLLECTION (POINT (0 0), POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0)), LINESTRING (0 0, 1 1))",
+            True,
+        ),
+    ],
+)
+def test_st_covered_by(eng, geom1, geom2, expected):
+    eng = eng.create_or_skip()
+    eng.assert_query_result(
+        f"SELECT ST_CoveredBy({geom_or_null(geom1)}, {geom_or_null(geom2)})",
+        expected,
+    )
+
+
+@pytest.mark.parametrize("eng", [SedonaDB, PostGIS])
+@pytest.mark.parametrize(
+    ("geom1", "geom2", "expected"),
+    [
+        (None, None, None),
+        ("POINT (0 0)", None, None),
+        (None, "POINT (0 0)", None),
+        ("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", "POINT (0 0)", True),
+        ("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", "POINT (0.5 0.5)", True),
+        ("POINT (0 0)", "POINT EMPTY", False),
+        ("POINT (0 0)", "LINESTRING (0 0, 1 1)", False),
+        ("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", "LINESTRING (0 0, 1 1)", True),
+        (
+            "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
+            "POLYGON ((5 5, 6 5, 6 6, 5 6, 5 5))",
+            False,
+        ),
+        (
+            "POINT (1 1)",
+            "GEOMETRYCOLLECTION (POINT (0 0), POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0)), LINESTRING (0 0, 1 1))",
+            False,
+        ),
+    ],
+)
+def test_st_covers(eng, geom1, geom2, expected):
+    eng = eng.create_or_skip()
+    eng.assert_query_result(
+        f"SELECT ST_Covers({geom_or_null(geom1)}, {geom_or_null(geom2)})",
+        expected,
+    )
+
+
+@pytest.mark.parametrize("eng", [SedonaDB, PostGIS])
+@pytest.mark.parametrize(
+    ("geom1", "geom2", "expected"),
+    [
+        (None, None, None),
+        ("POINT (0 0)", None, None),
+        (None, "POINT (0 0)", None),
+        ("POINT (0 0)", "POINT (0 0)", False),
+        (
+            "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
+            "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
+            False,
+        ),
+        ("POINT EMPTY", "POINT (0 0)", True),
+        ("POINT (0 0)", "LINESTRING (0 0, 1 1)", False),
+        ("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", "LINESTRING (0 0, 1 1)", False),
+        (
+            "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
+            "POLYGON ((5 5, 6 5, 6 6, 5 6, 5 5))",
+            True,
+        ),
+        (
+            "POINT (1 1)",
+            "GEOMETRYCOLLECTION (POINT (0 0), POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0)), LINESTRING (0 0, 1 1))",
+            False,
+        ),
+    ],
+)
+def test_st_disjoint(eng, geom1, geom2, expected):
+    eng = eng.create_or_skip()
+    eng.assert_query_result(
+        f"SELECT ST_Disjoint({geom_or_null(geom1)}, {geom_or_null(geom2)})",
+        expected,
+    )
+
+
+@pytest.mark.parametrize("eng", [SedonaDB, PostGIS])
+@pytest.mark.parametrize(
+    ("geom1", "geom2", "expected"),
+    [
+        (None, None, None),
+        ("POINT (0 0)", None, None),
+        (None, "POINT (0 0)", None),
+        ("POINT (0 0)", "POINT (0 0)", True),
+        (
+            "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
+            "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
+            True,
+        ),
+        ("POINT EMPTY", "POINT (0 0)", False),
+        ("POINT (0 0)", "LINESTRING (0 0, 1 1)", False),
+        ("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", "LINESTRING (0 0, 1 1)", False),
+        (
+            "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
+            "POLYGON ((5 5, 6 5, 6 6, 5 6, 5 5))",
+            False,
+        ),
+        (
+            "POINT (1 1)",
+            "GEOMETRYCOLLECTION (POINT (0 0), POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0)), LINESTRING (0 0, 1 1))",
+            False,
+        ),
+    ],
+)
+def test_st_equals(eng, geom1, geom2, expected):
+    eng = eng.create_or_skip()
+    eng.assert_query_result(
+        f"SELECT ST_Equals({geom_or_null(geom1)}, {geom_or_null(geom2)})",
+        expected,
+    )
+
+
+@pytest.mark.parametrize("eng", [SedonaDB, PostGIS])
+@pytest.mark.parametrize(
+    ("geom1", "geom2", "expected"),
+    [
+        (None, None, None),
+        ("POINT (0 0)", None, None),
+        (None, "POINT (0 0)", None),
+        ("POINT (0 0)", "POINT (0 0)", True),
+        ("POINT EMPTY", "POINT (0 0)", False),
+        ("POINT (0 0)", "LINESTRING (0 0, 1 1)", True),
+        ("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", "LINESTRING (0 0, 1 1)", True),
+        (
+            "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
+            "POLYGON ((5 5, 6 5, 6 6, 5 6, 5 5))",
+            False,
+        ),
+        (
+            "POINT (1 1)",
+            "GEOMETRYCOLLECTION (POINT (0 0), POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0)), LINESTRING (0 0, 1 1))",
+            True,
+        ),
+    ],
+)
+def test_st_intersects(eng, geom1, geom2, expected):
+    eng = eng.create_or_skip()
+    eng.assert_query_result(
+        f"SELECT ST_Intersects({geom_or_null(geom1)}, {geom_or_null(geom2)})",
+        expected,
+    )
+
+
+@pytest.mark.parametrize("eng", [SedonaDB, PostGIS])
+@pytest.mark.parametrize(
+    ("geom1", "geom2", "expected"),
+    [
+        (None, None, None),
+        ("POINT (0 0)", "POINT (1 1)", False),
+        ("POINT (0 0)", "LINESTRING (0 0, 1 1)", True),
+        ("POINT (0 0)", "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", True),
+        ("POINT (0 0)", "MULTIPOINT ((0 0), (1 1))", False),
+        (
+            "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
+            "MULTILINESTRING ((0 0, 1 1), (1 1, 2 2))",
+            False,
+        ),
+        (
+            "LINESTRING (0 0, 1 1)",
+            "MULTIPOLYGON (((0 0, 1 0, 1 1, 0 1, 0 0)), ((0 0, 1 0, 1 1, 0 1, 0 0)))",
+            False,
+        ),
+        (
+            "POINT (0 0)",
+            "GEOMETRYCOLLECTION (POINT (0 0), LINESTRING (0 0, 1 1), POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0)))",
+            True,
+        ),
+        # Identical geometries are not considered touching
+        ("POINT (0 0)", "POINT (0 0)", False),
+        (
+            "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
+            "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
+            False,
+        ),
+        ("LINESTRING (0 0, 1 1)", "LINESTRING (0 0, 1 1)", False),
+    ],
+)
+def test_st_touches(eng, geom1, geom2, expected):
+    eng = eng.create_or_skip()
+    eng.assert_query_result(
+        f"SELECT ST_Touches({geom_or_null(geom1)}, {geom_or_null(geom2)})",
+        expected,
+    )
+
+
+@pytest.mark.parametrize("eng", [SedonaDB, PostGIS])
+@pytest.mark.parametrize(
+    ("geom1", "geom2", "expected"),
+    [
+        (None, None, None),
+        ("POINT (0 0)", "POINT (1 1)", False),
+        ("POINT (0 0)", "LINESTRING (0 0, 1 1)", False),
+        ("POINT (0.5 0.5)", "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", True),
+        ("POINT (0 0)", "MULTIPOINT ((0 0), (1 1))", True),
+        (
+            "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
+            "MULTILINESTRING ((0 0, 1 1), (1 1, 2 2))",
+            False,
+        ),
+        (
+            "LINESTRING (0 0, 1 1)",
+            "MULTIPOLYGON (((0 0, 1 0, 1 1, 0 1, 0 0)), ((0 0, 1 0, 1 1, 0 1, 0 0)))",
+            True,
+        ),
+        (
+            "POINT (0 0)",
+            "GEOMETRYCOLLECTION (POINT (0 0), LINESTRING (0 0, 1 1), POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0)))",
+            False,
+        ),
+        # Identical geometries are not considered within each other
+        ("POINT (0 0)", "POINT (0 0)", True),
+        (
+            "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
+            "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
+            True,
+        ),
+        ("LINESTRING (0 0, 1 1)", "LINESTRING (0 0, 1 1)", True),
+    ],
+)
+def test_st_within(eng, geom1, geom2, expected):
+    eng = eng.create_or_skip()
+    eng.assert_query_result(
+        f"SELECT ST_Within({geom_or_null(geom1)}, {geom_or_null(geom2)})",
+        expected,
+    )

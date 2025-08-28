@@ -192,7 +192,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         c,
         &f,
         "geos",
-        "st_sym_difference",
+        "st_symdifference",
         ArrayScalar(Polygon(10), Polygon(10)),
     );
 
@@ -200,7 +200,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         c,
         &f,
         "geos",
-        "st_sym_difference",
+        "st_symdifference",
         ArrayScalar(Polygon(10), Polygon(500)),
     );
 

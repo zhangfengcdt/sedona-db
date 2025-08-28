@@ -69,14 +69,14 @@ impl SedonaScalarKernel for STGeometryType {
 
 fn invoke_scalar(item: &Wkb) -> Result<Option<String>> {
     match item.as_type() {
-        geo_traits::GeometryType::Point(_) => Ok(Some("ST_POINT".to_string())),
-        geo_traits::GeometryType::LineString(_) => Ok(Some("ST_LINESTRING".to_string())),
-        geo_traits::GeometryType::Polygon(_) => Ok(Some("ST_POLYGON".to_string())),
-        geo_traits::GeometryType::MultiPoint(_) => Ok(Some("ST_MULTIPOINT".to_string())),
-        geo_traits::GeometryType::MultiLineString(_) => Ok(Some("ST_MULTILINESTRING".to_string())),
-        geo_traits::GeometryType::MultiPolygon(_) => Ok(Some("ST_MULTIPOLYGON".to_string())),
+        geo_traits::GeometryType::Point(_) => Ok(Some("ST_Point".to_string())),
+        geo_traits::GeometryType::LineString(_) => Ok(Some("ST_LineString".to_string())),
+        geo_traits::GeometryType::Polygon(_) => Ok(Some("ST_Polygon".to_string())),
+        geo_traits::GeometryType::MultiPoint(_) => Ok(Some("ST_MultiPoint".to_string())),
+        geo_traits::GeometryType::MultiLineString(_) => Ok(Some("ST_MultiLineString".to_string())),
+        geo_traits::GeometryType::MultiPolygon(_) => Ok(Some("ST_MultiPolygon".to_string())),
         geo_traits::GeometryType::GeometryCollection(_) => {
-            Ok(Some("ST_GEOMETRYCOLLECTION".to_string()))
+            Ok(Some("ST_GeometryCollection".to_string()))
         }
 
         // Other geometry types in geo that we should not get here: Rect, Triangle, Line
@@ -112,7 +112,7 @@ mod tests {
         let result = tester
             .invoke_scalar("POLYGON ((0 0, 1 0, 0 1, 0 0))")
             .unwrap();
-        tester.assert_scalar_result_equals(result, "ST_POLYGON");
+        tester.assert_scalar_result_equals(result, "ST_Polygon");
 
         let result = tester.invoke_scalar(ScalarValue::Null).unwrap();
         assert!(result.is_null());
@@ -131,13 +131,13 @@ mod tests {
             Utf8,
             [
                 None,
-                Some("ST_POINT"),
-                Some("ST_POLYGON"),
-                Some("ST_LINESTRING"),
-                Some("ST_MULTIPOINT"),
-                Some("ST_MULTILINESTRING"),
-                Some("ST_MULTIPOLYGON"),
-                Some("ST_GEOMETRYCOLLECTION")
+                Some("ST_Point"),
+                Some("ST_Polygon"),
+                Some("ST_LineString"),
+                Some("ST_MultiPoint"),
+                Some("ST_MultiLineString"),
+                Some("ST_MultiPolygon"),
+                Some("ST_GeometryCollection")
             ]
         );
         assert_eq!(&tester.invoke_wkb_array(input_wkt).unwrap(), &expected);
