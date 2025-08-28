@@ -26,7 +26,7 @@ overturemaps download --type=building --bbox=-79.9390,32.7725,-79.9212,32.7813 -
 Start by establishing a connection:
 
 ```python
-import sedona.db as sedonadb
+import sedonadb
 sedona = sedonadb.connect()
 ```
 
