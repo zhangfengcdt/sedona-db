@@ -16,6 +16,7 @@
 # under the License.
 services:
   postgis:
+    platform: linux/amd64
     image: postgis/postgis:latest
     ports:
       - "5432:5432"
