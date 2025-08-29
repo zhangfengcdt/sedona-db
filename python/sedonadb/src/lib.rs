@@ -1,7 +1,8 @@
-use std::ffi::c_void;
-
+use crate::error::PySedonaError;
 use pyo3::{ffi::Py_uintptr_t, prelude::*};
 use sedona_adbc::AdbcSedonadbDriverInit;
+use sedona_proj::register::{configure_global_proj_engine, ProjCrsEngineBuilder};
+use std::ffi::c_void;
 
 mod context;
 mod dataframe;
@@ -40,13 +41,38 @@ fn sedona_adbc_driver_init() -> PyResult<Py_uintptr_t> {
     Ok(driver_init_void as Py_uintptr_t)
 }
 
+#[pyfunction]
+fn configure_proj_shared(
+    shared_library_path: Option<String>,
+    database_path: Option<String>,
+    search_path: Option<String>,
+) -> Result<(), PySedonaError> {
+    let mut builder = ProjCrsEngineBuilder::default();
+
+    if let Some(shared_library_path) = shared_library_path {
+        builder = builder.with_shared_library(shared_library_path.into());
+    }
+
+    if let Some(database_path) = database_path {
+        builder = builder.with_database_path(database_path.into());
+    }
+
+    if let Some(search_path) = search_path {
+        builder = builder.with_search_paths(vec![search_path.into()]);
+    }
+
+    configure_global_proj_engine(builder)?;
+    Ok(())
+}
+
 #[pymodule]
 fn _lib(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(feature = "mimalloc")]
     configure_tg_allocator();
 
-    m.add_function(wrap_pyfunction!(sedona_python_version, m)?)?;
+    m.add_function(wrap_pyfunction!(configure_proj_shared, m)?)?;
     m.add_function(wrap_pyfunction!(sedona_adbc_driver_init, m)?)?;
+    m.add_function(wrap_pyfunction!(sedona_python_version, m)?)?;
 
     m.add_class::<context::InternalContext>()?;
     m.add_class::<dataframe::InternalDataFrame>()?;

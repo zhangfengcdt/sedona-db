@@ -1,16 +1,102 @@
-use proj::{Area, ProjCreateError};
 use sedona_geometry::bounding_box::BoundingBox;
 use sedona_geometry::error::SedonaGeometryError;
 use sedona_geometry::interval::IntervalTrait;
 use sedona_geometry::transform::{CrsEngine, CrsTransform};
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 
-use crate::proj::Proj;
+use crate::error::SedonaProjError;
+use crate::proj::{Proj, ProjContext};
 
-/// A [CrsEngine] implemented using the [proj] crate
+/// Builder for a [ProjCrsEngine]
+///
+/// API for specifying various engine parameters. More parameters may
+/// be added.
+#[derive(Default)]
+pub struct ProjCrsEngineBuilder {
+    shared_library: Option<PathBuf>,
+    database_path: Option<PathBuf>,
+    search_paths: Option<Vec<PathBuf>>,
+}
+
+impl ProjCrsEngineBuilder {
+    /// Set the library source from whence PROJ should be loaded
+    ///
+    /// If unset, proj_sys will be attempted. This is required to be set
+    /// for applications or bindings that build sedona-proj without the
+    /// proj-sys feature.
+    ///
+    /// Note that path will be passed directly to dlopen()/LoadLibrary(),
+    /// which takes into account the working directory. As a security
+    /// measure, applications may wish to check that path is an absolute
+    /// path and/or forbid the use of this mechanism. This should not
+    /// be specified from untrusted input.
+    pub fn with_shared_library(self, path: PathBuf) -> Self {
+        Self {
+            shared_library: Some(path),
+            ..self
+        }
+    }
+
+    /// Set the path to the PROJ database
+    ///
+    /// Set the path to proj.db (including the filename, which is normally
+    /// proj.db). This file is specific to the PROJ version and it is usually
+    /// required when using a shared PROJ at a non-system location.
+    pub fn with_database_path(self, database_path: PathBuf) -> Self {
+        Self {
+            database_path: Some(database_path),
+            ..self
+        }
+    }
+
+    /// Set a vector of paths to search for PROJ data files
+    ///
+    /// PROJ data files include grids and other types of resources. A small set of these
+    /// are normally installed alongside a PROJ build; however, a much larger set can be
+    /// installed separately or downloaded dynamically using PROJ's network capability.
+    /// These files are typically (but not always) tied to the PROJ version and it is
+    /// usually a good idea to specify this explicitly when setting a specific shared
+    /// PROJ at a non-system location.
+    pub fn with_search_paths(self, search_paths: Vec<PathBuf>) -> Self {
+        Self {
+            search_paths: Some(search_paths),
+            ..self
+        }
+    }
+
+    /// Build a [ProjCrsEngine] with the specified options
+    pub fn build(&self) -> Result<ProjCrsEngine, SedonaProjError> {
+        let mut ctx = if let Some(shared_library) = self.shared_library.clone() {
+            ProjContext::try_from_shared_library(shared_library)?
+        } else {
+            ProjContext::try_from_proj_sys()?
+        };
+
+        if let Some(database_path) = &self.database_path {
+            ctx.set_database_path(database_path.to_string_lossy().as_ref())?;
+        }
+
+        if let Some(search_paths) = &self.search_paths {
+            let string_vec = search_paths
+                .iter()
+                .map(|path| path.to_string_lossy().to_string())
+                .collect::<Vec<_>>();
+            ctx.set_search_paths(&string_vec)?;
+        }
+
+        Ok(ProjCrsEngine { ctx: Rc::new(ctx) })
+    }
+}
+
+/// A [CrsEngine] implemented using PROJ
+///
+/// Use the [ProjCrsEngineBuilder] to create this object.
 #[derive(Debug)]
-pub struct ProjCrsEngine;
+pub struct ProjCrsEngine {
+    ctx: Rc<ProjContext>,
+}
 
 impl CrsEngine for ProjCrsEngine {
     fn get_transform_crs_to_crs(
@@ -27,7 +113,7 @@ impl CrsEngine for ProjCrsEngine {
         }
 
         let area = area_of_interest.map(|bbox| {
-            Area::new(
+            (
                 bbox.x().lo(), // west
                 bbox.y().lo(), // south
                 bbox.x().hi(), // east
@@ -35,14 +121,25 @@ impl CrsEngine for ProjCrsEngine {
             )
         });
 
-        let transform = ProjCrsToCrsTransform::new(from, to, area).map_err(|e| {
+        let source_crs = Proj::try_new(self.ctx.clone(), from).map_err(|e| {
+            SedonaGeometryError::Invalid(format!("Failed to create CRS from source '{from}': {e}"))
+        })?;
+        let target_crs = Proj::try_new(self.ctx.clone(), to).map_err(|e| {
             SedonaGeometryError::Invalid(format!(
-                "PROJ creation for CRS Transform failed with error: {e}"
+                "Failed to create CRS from destination '{to}': {e}"
             ))
         })?;
+        let proj = Proj::try_crs_to_crs(self.ctx.clone(), &source_crs, &target_crs, area).map_err(
+            |e| {
+                SedonaGeometryError::Invalid(format!(
+                    "Failed to create transform from '{from}' to '{to}': {e}"
+                ))
+            },
+        )?;
 
-        Ok(Rc::new(transform))
+        Ok(Rc::new(ProjTransform::new(proj)))
     }
+
     fn get_transform_pipeline(
         &self,
         pipeline: &str,
@@ -54,14 +151,17 @@ impl CrsEngine for ProjCrsEngine {
             ));
         }
 
-        let transform = ProjPipelineTransform::new(pipeline)
-            .map_err(|e| SedonaGeometryError::Invalid(format!("PROJ creation error: {e}")))?;
+        let transform = Proj::try_new(self.ctx.clone(), pipeline).map_err(|e| {
+            SedonaGeometryError::Invalid(format!(
+                "Failed to create pipeline transform from source '{pipeline}': {e}"
+            ))
+        })?;
 
-        Ok(Rc::new(transform))
+        Ok(Rc::new(ProjTransform::new(transform)))
     }
 }
 
-/// A `Transform` implemented using the [proj] crate
+/// A [CrsTransform] implemented using the [proj] crate
 #[derive(Debug)]
 pub struct ProjTransform {
     proj: RefCell<Proj>,
@@ -77,7 +177,7 @@ impl ProjTransform {
 
 impl CrsTransform for ProjTransform {
     fn transform_coord(&self, coord: &mut (f64, f64)) -> Result<(), SedonaGeometryError> {
-        let res = self.proj.borrow_mut().convert(*coord).map_err(|e| {
+        let res = self.proj.borrow_mut().transform_xy(*coord).map_err(|e| {
             SedonaGeometryError::Invalid(format!(
                 "PROJ coordinate transformation failed with error: {e}"
             ))
@@ -85,50 +185,6 @@ impl CrsTransform for ProjTransform {
         coord.0 = res.0;
         coord.1 = res.1;
         Ok(())
-    }
-}
-
-/// A [CrsTransform] that transforms coordinates from one CRS to another using PROJ
-#[derive(Debug)]
-pub struct ProjCrsToCrsTransform {
-    transform: ProjTransform,
-}
-
-impl ProjCrsToCrsTransform {
-    pub fn new(from: &str, to: &str, area: Option<Area>) -> Result<Self, ProjCreateError> {
-        let source_crs = Proj::try_new(from)?;
-        let target_crs = Proj::try_new(to)?;
-        let proj = Proj::crs_to_crs(&source_crs, &target_crs, area)?;
-        Ok(Self {
-            transform: ProjTransform::new(proj),
-        })
-    }
-}
-
-impl CrsTransform for ProjCrsToCrsTransform {
-    fn transform_coord(&self, coord: &mut (f64, f64)) -> Result<(), SedonaGeometryError> {
-        self.transform.transform_coord(coord)
-    }
-}
-
-/// A [CrsTransform] that applies a PROJ pipeline transformation
-#[derive(Debug)]
-pub struct ProjPipelineTransform {
-    transform: ProjTransform,
-}
-
-impl ProjPipelineTransform {
-    pub fn new(pipeline: &str) -> Result<Self, ProjCreateError> {
-        let proj = Proj::try_new(pipeline)?;
-        Ok(Self {
-            transform: ProjTransform::new(proj),
-        })
-    }
-}
-
-impl CrsTransform for ProjPipelineTransform {
-    fn transform_coord(&self, coord: &mut (f64, f64)) -> Result<(), SedonaGeometryError> {
-        self.transform.transform_coord(coord)
     }
 }
 
@@ -140,9 +196,10 @@ mod test {
     use geo_types::Point;
     use sedona_geometry::transform::transform;
     use wkb::reader::read_wkb;
+
     #[test]
     fn proj_crs_to_crs() {
-        let engine = ProjCrsEngine;
+        let engine = ProjCrsEngineBuilder::default().build().unwrap();
         let trans = engine
             .get_transform_crs_to_crs("EPSG:2230", "EPSG:26946", None, "")
             .unwrap();
@@ -158,12 +215,15 @@ mod test {
         let trans_error = engine
             .get_transform_crs_to_crs("foo", "bar", None, "")
             .unwrap_err();
-        assert_eq!(trans_error.to_string(), "PROJ creation for CRS Transform failed with error: The underlying PROJ call failed: Invalid PROJ string syntax");
+        assert_eq!(
+            trans_error.to_string(),
+            "Failed to create CRS from source 'foo': Invalid PROJ string syntax"
+        );
     }
 
     #[test]
     fn proj_pipeline() {
-        let engine = ProjCrsEngine;
+        let engine = ProjCrsEngineBuilder::default().build().unwrap();
         let trans = engine
             .get_transform_pipeline(
                 "+proj=pipeline +step +inv +proj=lcc +lat_1=33.88333333333333 +lat_2=32.78333333333333 \
@@ -186,7 +246,7 @@ mod test {
 
     #[test]
     fn transform_coord() {
-        let engine = ProjCrsEngine;
+        let engine = ProjCrsEngineBuilder::default().build().unwrap();
         let trans = engine
             .get_transform_crs_to_crs("EPSG:2230", "EPSG:26946", None, "")
             .unwrap();

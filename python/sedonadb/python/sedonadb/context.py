@@ -1,7 +1,9 @@
+import os
+import sys
 from pathlib import Path
-from typing import Union, Iterable
+from typing import Iterable, Literal, Union
 
-from sedonadb._lib import InternalContext
+from sedonadb._lib import InternalContext, configure_proj_shared
 from sedonadb.dataframe import DataFrame, _create_data_frame
 
 
@@ -104,3 +106,172 @@ class SedonaContext:
 def connect() -> SedonaContext:
     """Create a new [SedonaContext][sedonadb.context.SedonaContext]"""
     return SedonaContext()
+
+
+def configure_proj(
+    preset: Literal["auto", "pyproj", "homebrew", "conda", "system", None] = None,
+    *,
+    shared_library: Union[str, Path] = None,
+    database_path: Union[str, Path] = None,
+    search_path: Union[str, Path] = None,
+    verbose: bool = False,
+):
+    """Configure PROJ source
+
+    SedonaDB loads PROJ dynamically to ensure aligned results and configuration
+    against other Python and/or system libraries. This is normally configured
+    on package load but may need additional configuration (particularly if the
+    automatic configuration fails).
+
+    This function may be called at any time; however, once ST_Transform has
+    been called, subsequent configuration has no effect.
+
+    Args:
+        preset: One of:
+            - None: Use custom values of shared_library and/or other keyword
+              arguments.
+            - auto: Try all presets in the order pyproj, conda, homebrew,
+              system and warn if none succeeded.
+            - pyproj: Attempt to use shared libraries bundled with pyproj.
+              This aligns transformations with those performed by geopandas
+              and is the option that is tried first.
+            - conda: Attempt to load libproj and data files installed via
+              ``conda install proj``.
+            - homebrew: Attempt to load libproj and data files installed
+              via ``brew install proj``. Note that the Homebrew install
+              also includes proj-data grid files and may be able to perform
+              more accurate transforms by default/without network capability.
+            - system: Attempt to load libproj from a directory already on
+              LD_LIBRARY_PATH (linux), DYLD_LIBRARY_PATH (MacOS), or PATH
+              (Windows). This should find the version of PROJ installed
+              by a Linux system package manager.
+
+        shared_library: Path to a PROJ shared library.
+        database_path: Path to the PROJ database (proj.db).
+        search_path: Path to the directory containing PROJ data files.
+        verbose: If True, print information about the configuration process.
+
+    Examples:
+
+        >>> import sedonadb
+        >>> sedonadb.configure_proj("auto")
+    """
+    if preset is not None:
+        if preset == "pyproj":
+            _configure_proj_pyproj()
+            return
+        elif preset == "homebrew":
+            _configure_proj_prefix(
+                os.environ.get("HOMEBREW_PREFIX", default="/opt/homebrew")
+            )
+            return
+        elif preset == "conda":
+            _configure_proj_prefix(os.environ["CONDA_PREFIX"])
+            return
+        elif preset == "system":
+            _configure_proj_system()
+            return
+        elif preset == "auto":
+            tried = ["pyproj", "conda", "homebrew", "system"]
+            errors = []
+            for preset in tried:
+                try:
+                    configure_proj(preset)
+
+                    if verbose:
+                        print(f"Configured PROJ using '{preset}'")
+
+                    return
+                except Exception as e:
+                    if verbose:
+                        print(f"Failed to configure PROJ using '{preset}': {e}")
+                    else:
+                        errors.append(f"{preset}: {e}")
+
+            import warnings
+
+            all_errors = "\n".join(errors)
+            warnings.warn(f"Failed to configure PROJ (tried {tried}):\n{all_errors}")
+            return
+        else:
+            raise ValueError(f"Unknown preset: {preset}")
+
+    # Try to best-effort validate arguments to avoid catching invalid configuration
+    if shared_library is not None:
+        try:
+            import ctypes
+
+            ctypes.CDLL(str(shared_library))
+        except OSError as e:
+            raise ValueError(f"Can't load PROJ shared library '{shared_library}': {e}")
+
+    if database_path is not None and not Path(database_path).exists():
+        raise ValueError(f"Can't configure PROJ: '{database_path}' does not exist")
+
+    if search_path is not None and not Path(search_path).exists():
+        raise ValueError(f"Can't configure PROJ: '{search_path}' does not exist")
+
+    configure_proj_shared(
+        str(shared_library) if shared_library is not None else None,
+        str(database_path) if database_path is not None else None,
+        str(search_path) if search_path is not None else None,
+    )
+
+
+def _configure_proj_pyproj():
+    import pyproj
+
+    data_dir = Path(pyproj.datadir.get_data_dir())
+    database_path = data_dir / "proj.db"
+    possible_files = []
+
+    if sys.platform == "darwin":
+        dylibs_dir = Path(pyproj.__file__).parent / ".dylibs"
+        possible_files.extend(dylibs_dir.glob("libproj*.dylib*"))
+        if not dylibs_dir.exists():
+            raise ValueError(
+                f"Expected PROJ dylib directory '{dylibs_dir}' does not exist"
+            )
+    else:
+        dylibs_dir = Path(pyproj.__file__).parent.parent / "pyproj.libs"
+        if not dylibs_dir.exists():
+            raise ValueError(
+                f"Expected PROJ dll/so directory '{dylibs_dir}' does not exist"
+            )
+
+        possible_files.extend(dylibs_dir.glob("proj*.dll"))
+        possible_files.extend(dylibs_dir.glob("libproj*.so*"))
+
+    if len(possible_files) != 1:
+        all_files = "\n".join(str(s) for s in dylibs_dir.iterdir())
+        raise ValueError(
+            f"Can't find exactly one PROJ shared library in '{dylibs_dir}'. "
+            f"{len(possible_files)} possible matches:\n{all_files}"
+        )
+
+    configure_proj(
+        shared_library=possible_files[0],
+        database_path=database_path,
+        search_path=data_dir,
+    )
+
+
+def _configure_proj_system():
+    if sys.platform == "win32":
+        configure_proj(shared_library="proj.dll")
+    elif sys.platform == "darwin":
+        configure_proj(shared_library="libproj.dylib")
+    else:
+        configure_proj(shared_library="libproj.so")
+
+
+def _configure_proj_prefix(prefix: str):
+    prefix = Path(prefix)
+    if not prefix.exists():
+        raise ValueError(f"Can't configure PROJ from prefix '{prefix}': does not exist")
+
+    configure_proj(
+        shared_library=Path(prefix) / "lib" / "libproj.dylib",
+        database_path=Path(prefix) / "share" / "proj" / "proj.db",
+        search_path=Path(prefix) / "share" / "proj",
+    )

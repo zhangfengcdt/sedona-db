@@ -1,4 +1,4 @@
-use crate::transform::ProjCrsEngine;
+use crate::transform::{ProjCrsEngine, ProjCrsEngineBuilder};
 use arrow_array::builder::BinaryBuilder;
 use arrow_schema::DataType;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
@@ -10,8 +10,9 @@ use sedona_geometry::transform::{transform, CachingCrsEngine, CrsEngine, CrsTran
 use sedona_geometry::wkb_factory::WKB_MIN_PROBABLE_BYTES;
 use sedona_schema::crs::deserialize_crs;
 use sedona_schema::datatypes::{Edges, SedonaType};
+use std::cell::OnceCell;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use wkb::reader::Wkb;
 
 #[derive(Debug)]
@@ -22,11 +23,77 @@ pub fn st_transform_impl() -> ScalarKernelRef {
     Arc::new(STTransform {})
 }
 
+/// Configure the global PROJ engine
+///
+/// Provides an opportunity for a calling application to provide the
+/// [ProjCrsEngineBuilder] whose `build()` method will be used to create
+/// a set of thread local [CrsEngine]s which in turn will perform the actual
+/// computations. This provides an opportunity to configure locations of
+/// various files in addition to network CDN access preferences.
+///
+/// This configuration can be set more than once; however, once the engines
+/// are constructed they cannot currently be reconfigured. This code is structured
+/// deliberately to ensure that if an error occurs creating an engine that the
+/// configuration can be set again. Notably, this will occur if this crate was
+/// built without proj-sys the first time somebody calls st_transform.
+pub fn configure_global_proj_engine(builder: ProjCrsEngineBuilder) -> Result<()> {
+    let mut global_builder = PROJ_ENGINE_BUILDER.try_write().map_err(|_| {
+        DataFusionError::Configuration(
+            "Failed to acquire write lock for global PROJ configuration".to_string(),
+        )
+    })?;
+    global_builder.replace(builder);
+    Ok(())
+}
+
+/// Do something with the global thread-local PROJ engine, creating it if it has not
+/// already been created.
+fn with_global_proj_engine(
+    mut func: impl FnMut(&CachingCrsEngine<ProjCrsEngine>) -> Result<()>,
+) -> Result<()> {
+    PROJ_ENGINE.with(|engine_cell| {
+        // If there is already an engine, use it!
+        if let Some(engine) = engine_cell.get() {
+            return func(engine);
+        }
+
+        // Otherwise, attempt to get the builder
+        let maybe_builder = PROJ_ENGINE_BUILDER.read().map_err(|_| {
+            // Highly unlikely (can only occur when a panic occurred during set)
+            DataFusionError::Internal(
+                "Failed to acquire read lock for global PROJ configuration".to_string(),
+            )
+        })?;
+
+        // ...and build the engine. This will use a default configuration
+        // (i.e., proj_sys or error) if the builder was never set.
+        let proj_engine = maybe_builder
+            .as_ref()
+            .unwrap_or(&ProjCrsEngineBuilder::default())
+            .build()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        engine_cell
+            .set(CachingCrsEngine::new(proj_engine))
+            .map_err(|_| {
+                DataFusionError::Internal("Failed to set cached PROJ transform".to_string())
+            })?;
+        func(engine_cell.get().unwrap())?;
+        Ok(())
+    })
+}
+
+/// Global builder as a thread-safe RwLock. Normally set once on application start
+/// or never set to use all default settings.
+static PROJ_ENGINE_BUILDER: RwLock<Option<ProjCrsEngineBuilder>> =
+    RwLock::<Option<ProjCrsEngineBuilder>>::new(None);
+
 // CrsTransform backed by PROJ is not thread safe, so we define the cache as thread-local
 // to avoid race conditions.
 thread_local! {
-    static PROJ_ENGINE: CachingCrsEngine<ProjCrsEngine> =
-        CachingCrsEngine::new(ProjCrsEngine);
+    static PROJ_ENGINE: OnceCell<CachingCrsEngine<ProjCrsEngine>> = const {
+        OnceCell::<CachingCrsEngine<ProjCrsEngine>>::new()
+    };
 }
 
 struct TransformArgIndexes {
@@ -118,18 +185,22 @@ impl SedonaScalarKernel for STTransform {
             None
         };
 
-        let crs_from_geo = parse_source_crs(&arg_types[indexes.wkb])?;
+        with_global_proj_engine(|engine| {
+            let crs_from_geo = parse_source_crs(&arg_types[indexes.wkb])?;
 
-        let transform = match &second_crs {
-            Some(to_crs) => get_transform_crs_to_crs(&first_crs, to_crs)?,
-            None => get_transform_to_crs(crs_from_geo, &first_crs, lenient)?,
-        };
+            let transform = match &second_crs {
+                Some(to_crs) => get_transform_crs_to_crs(engine, &first_crs, to_crs)?,
+                None => get_transform_to_crs(engine, crs_from_geo, &first_crs, lenient)?,
+            };
 
-        executor.execute_wkb_void(|maybe_wkb| {
-            match maybe_wkb {
-                Some(wkb) => invoke_scalar(&wkb, transform.as_ref(), &mut builder)?,
-                None => builder.append_null(),
-            }
+            executor.execute_wkb_void(|maybe_wkb| {
+                match maybe_wkb {
+                    Some(wkb) => invoke_scalar(&wkb, transform.as_ref(), &mut builder)?,
+                    None => builder.append_null(),
+                }
+
+                Ok(())
+            })?;
 
             Ok(())
         })?;
@@ -139,6 +210,7 @@ impl SedonaScalarKernel for STTransform {
 }
 
 fn get_transform_to_crs(
+    engine: &dyn CrsEngine,
     source_crs_opt: Option<String>,
     to_crs: &str,
     lenient: bool,
@@ -152,15 +224,16 @@ fn get_transform_to_crs(
             ))
         }
     };
-    get_transform_crs_to_crs(&from_crs, to_crs)
+    get_transform_crs_to_crs(engine, &from_crs, to_crs)
 }
 
 fn get_transform_crs_to_crs(
+    engine: &dyn CrsEngine,
     from_crs: &str,
     to_crs: &str,
 ) -> Result<Rc<dyn CrsTransform>, DataFusionError> {
-    PROJ_ENGINE
-        .with(|engine| engine.get_transform_crs_to_crs(from_crs, to_crs, None, ""))
+    engine
+        .get_transform_crs_to_crs(from_crs, to_crs, None, "")
         .map_err(|err| DataFusionError::Execution(format!("Transform error: {err}")))
 }
 
