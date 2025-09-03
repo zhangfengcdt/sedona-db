@@ -368,7 +368,8 @@ impl ScalarUdfTester {
         }
     }
 
-    fn invoke_arrays(&self, arrays: Vec<ArrayRef>) -> Result<ArrayRef> {
+    // Invoke a function with a set of arrays
+    pub fn invoke_arrays(&self, arrays: Vec<ArrayRef>) -> Result<ArrayRef> {
         let args = zip(arrays, &self.arg_types)
             .map(|(array, sedona_type)| {
                 ColumnarValue::Array(array).cast_to(&sedona_type.data_type(), None)
