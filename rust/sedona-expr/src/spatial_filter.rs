@@ -16,6 +16,7 @@
 // under the License.
 use std::sync::Arc;
 
+use arrow_schema::Schema;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::{
@@ -196,23 +197,21 @@ enum ArgRef<'a> {
 }
 
 fn literal_bounds(literal: &Literal) -> Result<BoundingBox> {
-    let sedona_type = SedonaType::from_data_type(&literal.value().data_type())?;
+    let literal_field = literal.return_field(&Schema::empty())?;
+    let sedona_type = SedonaType::from_storage_field(&literal_field)?;
     match &sedona_type {
-        SedonaType::Wkb(_, _) | SedonaType::WkbView(_, _) => {
-            match sedona_type.unwrap_scalar(literal.value())? {
-                ScalarValue::Binary(maybe_vec) | ScalarValue::BinaryView(maybe_vec) => {
-                    if let Some(vec) = maybe_vec {
-                        return wkb_bounds_xy(&vec)
-                            .map_err(|e| DataFusionError::External(Box::new(e)));
-                    }
+        SedonaType::Wkb(_, _) | SedonaType::WkbView(_, _) => match literal.value() {
+            ScalarValue::Binary(maybe_vec) | ScalarValue::BinaryView(maybe_vec) => {
+                if let Some(vec) = maybe_vec {
+                    return wkb_bounds_xy(vec).map_err(|e| DataFusionError::External(Box::new(e)));
                 }
-                _ => {}
             }
-        }
+            _ => {}
+        },
         _ => {}
     }
 
-    sedona_internal_err!("Unexpected scalar type in filter expression")
+    sedona_internal_err!("Unexpected scalar type in filter expression ({literal:?})")
 }
 
 fn parse_args(args: &[Arc<dyn PhysicalExpr>]) -> Vec<ArgRef<'_>> {
@@ -275,7 +274,11 @@ mod test {
 
     #[test]
     fn predicate_intersects() {
-        let literal = Literal::new(create_scalar(Some("POINT (1 2)"), &WKB_GEOMETRY));
+        let storage_field = WKB_GEOMETRY.to_storage_field("", true).unwrap();
+        let literal = Literal::new_with_metadata(
+            create_scalar(Some("POINT (1 2)"), &WKB_GEOMETRY),
+            Some(storage_field.metadata().into()),
+        );
         let bounds = literal_bounds(&literal).unwrap();
 
         let stats_no_info = [GeoStatistics::unspecified()];
@@ -405,10 +408,11 @@ mod test {
     #[test]
     fn predicate_from_expr_intersects() {
         let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new("geometry", 0));
-        let literal: Arc<dyn PhysicalExpr> = Arc::new(Literal::new(create_scalar(
-            Some("POINT (1 2)"),
-            &WKB_GEOMETRY,
-        )));
+        let storage_field = WKB_GEOMETRY.to_storage_field("", true).unwrap();
+        let literal: Arc<dyn PhysicalExpr> = Arc::new(Literal::new_with_metadata(
+            create_scalar(Some("POINT (1 2)"), &WKB_GEOMETRY),
+            Some(storage_field.metadata().into()),
+        ));
         let st_intersects = dummy_st_intersects();
 
         let expr: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::new(

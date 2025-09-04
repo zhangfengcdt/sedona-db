@@ -14,11 +14,8 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use arrow_array::ArrayRef;
 use arrow_schema::{DataType, Field};
 use datafusion_common::error::{DataFusionError, Result};
-use datafusion_common::ScalarValue;
-use datafusion_expr::ColumnarValue;
 use sedona_common::sedona_internal_err;
 use serde_json::Value;
 use std::fmt::{Debug, Display};
@@ -32,6 +29,12 @@ pub enum SedonaType {
     Arrow(DataType),
     Wkb(Edges, Crs),
     WkbView(Edges, Crs),
+}
+
+impl From<DataType> for SedonaType {
+    fn from(value: DataType) -> Self {
+        Self::Arrow(value)
+    }
 }
 
 impl Display for SedonaType {
@@ -113,45 +116,7 @@ pub const WKB_VIEW_GEOGRAPHY: SedonaType = SedonaType::WkbView(Edges::Spherical,
 
 // Implementation details
 
-impl TryFrom<&DataType> for SedonaType {
-    type Error = DataFusionError;
-
-    fn try_from(value: &DataType) -> Result<Self> {
-        SedonaType::from_data_type(value)
-    }
-}
-
-impl TryFrom<DataType> for SedonaType {
-    type Error = DataFusionError;
-
-    fn try_from(value: DataType) -> Result<Self> {
-        SedonaType::from_data_type(&value)
-    }
-}
-
-impl From<&SedonaType> for DataType {
-    fn from(value: &SedonaType) -> Self {
-        value.data_type()
-    }
-}
-
-impl From<SedonaType> for DataType {
-    fn from(value: SedonaType) -> Self {
-        value.data_type()
-    }
-}
-
 impl SedonaType {
-    /// Given a data type, return the appropriate SedonaType
-    ///
-    /// This is expected to be the "wrapped" version of an extension type.
-    pub fn from_data_type(data_type: &DataType) -> Result<SedonaType> {
-        match ExtensionType::from_data_type(data_type) {
-            Some(ext) => Self::from_extension_type(ext),
-            None => Ok(Self::Arrow(data_type.clone())),
-        }
-    }
-
     /// Given a field as it would appear in an external Schema return the appropriate SedonaType
     pub fn from_storage_field(field: &Field) -> Result<SedonaType> {
         match ExtensionType::from_field(field) {
@@ -174,14 +139,6 @@ impl SedonaType {
         }
     }
 
-    /// Compute the Arrow data type used to represent this physical type in DataFusion
-    pub fn data_type(&self) -> DataType {
-        match &self {
-            SedonaType::Arrow(data_type) => data_type.clone(),
-            _ => self.extension_type().unwrap().to_data_type(),
-        }
-    }
-
     /// Returns True if another physical type matches this one for the purposes of dispatch
     ///
     /// For Arrow types this matches on type equality; for other type it matches on edges
@@ -199,70 +156,10 @@ impl SedonaType {
         }
     }
 
-    /// Wrap a [`ColumnarValue`] representing the storage of an [`ExtensionType`]
-    ///
-    /// This operation occurs when reading Arrow data from a datasource where
-    /// field metadata was used to construct the SedonaType or after
-    /// a compute kernel has returned a value.
-    pub fn wrap_arg(&self, arg: &ColumnarValue) -> Result<ColumnarValue> {
-        self.extension_type()
-            .map_or(Ok(arg.clone()), |extension| extension.wrap_arg(arg))
-    }
-
-    /// Wrap an [`ArrayRef`] representing the storage of an [`ExtensionType`]
-    ///
-    /// This operation occurs when reading Arrow data from a datasource where
-    /// field metadata was used to construct the SedonaType or after
-    /// a compute kernel has returned a value.
-    pub fn wrap_array(&self, arg: &ArrayRef) -> Result<ArrayRef> {
-        self.extension_type().map_or(Ok(arg.clone()), |extension| {
-            extension.wrap_array(arg.clone())
-        })
-    }
-
-    /// Wrap an [`ScalarValue`] representing the storage of an [`ExtensionType`]
-    ///
-    /// This operation occurs when reading Arrow data from a datasource where
-    /// field metadata was used to construct the SedonaType or after
-    /// a compute kernel has returned a value.
-    pub fn wrap_scalar(&self, arg: &ScalarValue) -> Result<ScalarValue> {
-        self.extension_type()
-            .map_or(Ok(arg.clone()), |extension| extension.wrap_scalar(arg))
-    }
-
-    /// Unwrap a [`ColumnarValue`] into storage
-    ///
-    /// This operation occurs when exporting Arrow data into an external datasource
-    /// or before passing to a compute kernel.
-    pub fn unwrap_arg(&self, arg: &ColumnarValue) -> Result<ColumnarValue> {
-        self.extension_type()
-            .map_or(Ok(arg.clone()), |extension| extension.unwrap_arg(arg))
-    }
-
-    /// Unwrap a [`ScalarValue`] into storage
-    ///
-    /// This operation occurs when exporting Arrow data into an external datasource
-    /// or before passing to a compute kernel.
-    pub fn unwrap_array(&self, array: &ArrayRef) -> Result<ArrayRef> {
-        self.extension_type()
-            .map_or(Ok(array.clone()), |extension| extension.unwrap_array(array))
-    }
-
-    /// Unwrap a [`ScalarValue`] into storage
-    ///
-    /// This operation occurs when exporting Arrow data into an external datasource
-    /// or before passing to a compute kernel.
-    pub fn unwrap_scalar(&self, scalar: &ScalarValue) -> Result<ScalarValue> {
-        self.extension_type()
-            .map_or(Ok(scalar.clone()), |extension| {
-                extension.unwrap_scalar(scalar)
-            })
-    }
-
     /// Construct a [`Field`] as it would appear in an external `RecordBatch`
     pub fn to_storage_field(&self, name: &str, nullable: bool) -> Result<Field> {
         self.extension_type().map_or(
-            Ok(Field::new(name, self.data_type(), nullable)),
+            Ok(Field::new(name, self.storage_type().clone(), nullable)),
             |extension| Ok(extension.to_field(name, nullable)),
         )
     }
@@ -400,8 +297,8 @@ mod tests {
 
     #[test]
     fn sedona_type_arrow() {
-        let sedona_type = SedonaType::from_data_type(&DataType::Int32).unwrap();
-        assert_eq!(sedona_type.data_type(), DataType::Int32);
+        let sedona_type = SedonaType::Arrow(DataType::Int32);
+        assert_eq!(sedona_type.storage_type(), &DataType::Int32);
         assert_eq!(sedona_type, SedonaType::Arrow(DataType::Int32));
         assert!(sedona_type.match_signature(&SedonaType::Arrow(DataType::Int32)));
         assert!(!sedona_type.match_signature(&SedonaType::Arrow(DataType::Utf8)));
@@ -410,10 +307,9 @@ mod tests {
     #[test]
     fn sedona_type_wkb() {
         assert_eq!(WKB_GEOMETRY, WKB_GEOMETRY);
-
-        assert!(WKB_GEOMETRY.data_type().is_nested());
         assert_eq!(
-            SedonaType::from_data_type(&WKB_GEOMETRY.data_type()).unwrap(),
+            SedonaType::from_storage_field(&WKB_GEOMETRY.to_storage_field("", true).unwrap())
+                .unwrap(),
             WKB_GEOMETRY
         );
 
@@ -428,10 +324,9 @@ mod tests {
         assert_eq!(WKB_VIEW_GEOMETRY, WKB_VIEW_GEOMETRY);
         assert_eq!(WKB_VIEW_GEOGRAPHY, WKB_VIEW_GEOGRAPHY);
 
-        let data_type = WKB_VIEW_GEOMETRY.data_type();
-        assert!(data_type.is_nested());
+        let storage_field = WKB_VIEW_GEOMETRY.to_storage_field("", true).unwrap();
         assert_eq!(
-            SedonaType::from_data_type(&data_type).unwrap(),
+            SedonaType::from_storage_field(&storage_field).unwrap(),
             WKB_VIEW_GEOMETRY
         );
     }
@@ -439,14 +334,14 @@ mod tests {
     #[test]
     fn sedona_type_wkb_geography() {
         assert_eq!(WKB_GEOGRAPHY, WKB_GEOGRAPHY);
-
-        assert!(WKB_GEOGRAPHY.data_type().is_nested());
         assert_eq!(
-            SedonaType::from_data_type(&WKB_GEOGRAPHY.data_type()).unwrap(),
+            SedonaType::from_storage_field(&WKB_GEOGRAPHY.to_storage_field("", true).unwrap())
+                .unwrap(),
             WKB_GEOGRAPHY
         );
 
         assert!(WKB_GEOGRAPHY.match_signature(&WKB_GEOGRAPHY));
+        assert!(!WKB_GEOGRAPHY.match_signature(&WKB_GEOMETRY));
     }
 
     #[test]
@@ -509,17 +404,15 @@ mod tests {
     #[test]
     fn geoarrow_deserialize_invalid() {
         let bad_json =
-            ExtensionType::new("geoarrow.wkb", DataType::Binary, Some(r#"{"#.to_string()))
-                .to_data_type();
-        assert!(SedonaType::from_data_type(&bad_json)
+            ExtensionType::new("geoarrow.wkb", DataType::Binary, Some(r#"{"#.to_string()));
+        assert!(SedonaType::from_extension_type(bad_json)
             .unwrap_err()
             .message()
             .contains("Error deserializing GeoArrow metadata"));
 
         let bad_type =
-            ExtensionType::new("geoarrow.wkb", DataType::Binary, Some(r#"[]"#.to_string()))
-                .to_data_type();
-        assert!(SedonaType::from_data_type(&bad_type)
+            ExtensionType::new("geoarrow.wkb", DataType::Binary, Some(r#"[]"#.to_string()));
+        assert!(SedonaType::from_extension_type(bad_type)
             .unwrap_err()
             .message()
             .contains("Expected GeoArrow metadata as JSON object"));
@@ -528,9 +421,8 @@ mod tests {
             "geoarrow.wkb",
             DataType::Binary,
             Some(r#"{"edges": []}"#.to_string()),
-        )
-        .to_data_type();
-        assert!(SedonaType::from_data_type(&bad_edges_type)
+        );
+        assert!(SedonaType::from_extension_type(bad_edges_type)
             .unwrap_err()
             .message()
             .contains("Unsupported edges JSON type"));
@@ -539,9 +431,8 @@ mod tests {
             "geoarrow.wkb",
             DataType::Binary,
             Some(r#"{"edges": "gazornenplat"}"#.to_string()),
-        )
-        .to_data_type();
-        assert!(SedonaType::from_data_type(&bad_edges_value)
+        );
+        assert!(SedonaType::from_extension_type(bad_edges_value)
             .unwrap_err()
             .message()
             .contains("Unsupported edges value"));

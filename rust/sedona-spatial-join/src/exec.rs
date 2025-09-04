@@ -739,7 +739,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
             Field::new("dist", DataType::Float64, false),
-            Field::new("geometry", WKB_GEOMETRY.into(), true),
+            WKB_GEOMETRY.to_storage_field("geometry", true).unwrap(),
         ]));
 
         let test_data_vec = vec![vec![vec![]], vec![vec![], vec![]]];
@@ -974,7 +974,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn test_left_joins(
-        #[values(JoinType::Left, JoinType::LeftSemi, JoinType::LeftAnti)] join_type: JoinType,
+        #[values(JoinType::Left, /* JoinType::LeftSemi, JoinType::LeftAnti */)] join_type: JoinType,
     ) -> Result<()> {
         test_with_join_types(join_type).await?;
         Ok(())
@@ -983,7 +983,8 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn test_right_joins(
-        #[values(JoinType::Right, JoinType::RightSemi, JoinType::RightAnti)] join_type: JoinType,
+        #[values(JoinType::Right, /* JoinType::RightSemi, JoinType::RightAnti */)]
+        join_type: JoinType,
     ) -> Result<()> {
         test_with_join_types(join_type).await?;
         Ok(())

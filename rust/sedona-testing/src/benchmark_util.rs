@@ -543,7 +543,7 @@ mod test {
         // Make sure we generate different scalars for different columns
         assert_ne!(spec.build_scalar(1).unwrap(), scalar);
 
-        if let ScalarValue::Binary(Some(wkb_bytes)) = WKB_GEOMETRY.unwrap_scalar(&scalar).unwrap() {
+        if let ScalarValue::Binary(Some(wkb_bytes)) = scalar {
             let wkb = wkb::reader::read_wkb(&wkb_bytes).unwrap();
             let analysis = analyze_geometry(&wkb).unwrap();
             assert_eq!(analysis.point_count, 1);
@@ -578,14 +578,10 @@ mod test {
         assert_ne!(spec.build_arrays(1, 2, ROWS_PER_BATCH).unwrap(), arrays);
 
         for array in arrays {
-            assert_eq!(
-                SedonaType::from_data_type(array.data_type()).unwrap(),
-                WKB_GEOMETRY
-            );
+            assert_eq!(array.data_type(), WKB_GEOMETRY.storage_type());
             assert_eq!(array.len(), ROWS_PER_BATCH);
 
-            let unwrapped = WKB_GEOMETRY.unwrap_array(&array).unwrap();
-            let binary_array = as_binary_array(&unwrapped).unwrap();
+            let binary_array = as_binary_array(&array).unwrap();
             assert_eq!(binary_array.null_count(), 0);
 
             for wkb_bytes in binary_array {
@@ -603,7 +599,7 @@ mod test {
     #[test]
     fn arg_spec_float() {
         let spec = BenchmarkArgSpec::Float64(1.0, 2.0);
-        assert_eq!(spec.sedona_type(), DataType::Float64.try_into().unwrap());
+        assert_eq!(spec.sedona_type(), SedonaType::Arrow(DataType::Float64));
 
         let arrays = spec.build_arrays(0, 2, ROWS_PER_BATCH).unwrap();
         assert_eq!(arrays.len(), 2);
@@ -633,7 +629,7 @@ mod test {
 
         let spec =
             BenchmarkArgSpec::Transformed(BenchmarkArgSpec::Float64(1.0, 2.0).into(), udf.into());
-        assert_eq!(spec.sedona_type(), DataType::Float32.try_into().unwrap());
+        assert_eq!(spec.sedona_type(), SedonaType::Arrow(DataType::Float32));
 
         assert_eq!(format!("{spec:?}"), "float32(Float64(1.0, 2.0))");
         let arrays = spec.build_arrays(0, 2, ROWS_PER_BATCH).unwrap();
@@ -663,10 +659,7 @@ mod test {
         assert_eq!(data.scalars.len(), 0);
 
         assert_eq!(data.arrays[0].len(), 2);
-        assert_eq!(
-            WKB_GEOMETRY,
-            data.arrays[0][0].data_type().try_into().unwrap()
-        );
+        assert_eq!(WKB_GEOMETRY.storage_type(), data.arrays[0][0].data_type());
     }
 
     #[test]
@@ -677,7 +670,7 @@ mod test {
         );
         assert_eq!(
             spec.sedona_types(),
-            [WKB_GEOMETRY, DataType::Float64.try_into().unwrap()]
+            [WKB_GEOMETRY, SedonaType::Arrow(DataType::Float64)]
         );
 
         let data = spec.build_data(2, ROWS_PER_BATCH).unwrap();
@@ -685,10 +678,7 @@ mod test {
 
         assert_eq!(data.arrays.len(), 1);
         assert_eq!(data.arrays[0].len(), 2);
-        assert_eq!(
-            WKB_GEOMETRY,
-            data.arrays[0][0].data_type().try_into().unwrap()
-        );
+        assert_eq!(WKB_GEOMETRY.storage_type(), data.arrays[0][0].data_type());
 
         assert_eq!(data.scalars.len(), 1);
         assert_eq!(data.scalars[0].data_type(), DataType::Float64);
@@ -702,17 +692,14 @@ mod test {
         );
         assert_eq!(
             spec.sedona_types(),
-            [WKB_GEOMETRY, DataType::Float64.try_into().unwrap()]
+            [WKB_GEOMETRY, SedonaType::Arrow(DataType::Float64)]
         );
 
         let data = spec.build_data(2, ROWS_PER_BATCH).unwrap();
         assert_eq!(data.num_batches, 2);
 
         assert_eq!(data.scalars.len(), 1);
-        assert_eq!(
-            WKB_GEOMETRY,
-            data.scalars[0].data_type().try_into().unwrap()
-        );
+        assert_eq!(WKB_GEOMETRY.storage_type(), &data.scalars[0].data_type());
 
         assert_eq!(data.arrays.len(), 1);
         assert_eq!(data.arrays[0].len(), 2);
@@ -725,7 +712,7 @@ mod test {
             BenchmarkArgs::ArrayArray(BenchmarkArgSpec::Point, BenchmarkArgSpec::Float64(1.0, 2.0));
         assert_eq!(
             spec.sedona_types(),
-            [WKB_GEOMETRY, DataType::Float64.try_into().unwrap()]
+            [WKB_GEOMETRY, SedonaType::Arrow(DataType::Float64)]
         );
 
         let data = spec.build_data(2, ROWS_PER_BATCH).unwrap();
@@ -734,10 +721,7 @@ mod test {
         assert_eq!(data.scalars.len(), 0);
 
         assert_eq!(data.arrays[0].len(), 2);
-        assert_eq!(
-            WKB_GEOMETRY,
-            data.arrays[0][0].data_type().try_into().unwrap()
-        );
+        assert_eq!(WKB_GEOMETRY.storage_type(), data.arrays[0][0].data_type());
 
         assert_eq!(data.arrays[1].len(), 2);
         assert_eq!(data.arrays[1][0].data_type(), &DataType::Float64);
@@ -754,8 +738,8 @@ mod test {
             spec.sedona_types(),
             [
                 WKB_GEOMETRY,
-                DataType::Float64.try_into().unwrap(),
-                DataType::Utf8.try_into().unwrap()
+                SedonaType::Arrow(DataType::Float64),
+                SedonaType::Arrow(DataType::Utf8)
             ]
         );
 
@@ -764,10 +748,7 @@ mod test {
         assert_eq!(data.arrays.len(), 1);
         assert_eq!(data.scalars.len(), 2);
         assert_eq!(data.arrays[0].len(), 2);
-        assert_eq!(
-            WKB_GEOMETRY,
-            data.arrays[0][0].data_type().try_into().unwrap()
-        );
+        assert_eq!(WKB_GEOMETRY.storage_type(), data.arrays[0][0].data_type());
         assert_eq!(data.scalars[0].data_type(), DataType::Float64);
         assert_eq!(data.scalars[1].data_type(), DataType::Utf8);
     }
@@ -784,7 +765,7 @@ mod test {
             [
                 WKB_GEOMETRY,
                 WKB_GEOMETRY,
-                DataType::Float64.try_into().unwrap()
+                SedonaType::Arrow(DataType::Float64)
             ]
         );
 
@@ -793,15 +774,9 @@ mod test {
         assert_eq!(data.arrays.len(), 3);
         assert_eq!(data.scalars.len(), 1);
         assert_eq!(data.arrays[0].len(), 2);
-        assert_eq!(
-            WKB_GEOMETRY,
-            data.arrays[0][0].data_type().try_into().unwrap()
-        );
+        assert_eq!(WKB_GEOMETRY.storage_type(), data.arrays[0][0].data_type());
         assert_eq!(data.arrays[1].len(), 2);
-        assert_eq!(
-            WKB_GEOMETRY,
-            data.arrays[1][0].data_type().try_into().unwrap()
-        );
+        assert_eq!(WKB_GEOMETRY.storage_type(), data.arrays[1][0].data_type());
 
         assert_eq!(data.scalars[0].data_type(), DataType::Float64);
     }
@@ -818,7 +793,7 @@ mod test {
             [
                 WKB_GEOMETRY,
                 WKB_GEOMETRY,
-                DataType::Float64.try_into().unwrap()
+                SedonaType::Arrow(DataType::Float64)
             ]
         );
 
@@ -827,15 +802,9 @@ mod test {
         assert_eq!(data.arrays.len(), 3);
         assert_eq!(data.scalars.len(), 0);
         assert_eq!(data.arrays[0].len(), 2);
-        assert_eq!(
-            WKB_GEOMETRY,
-            data.arrays[0][0].data_type().try_into().unwrap()
-        );
+        assert_eq!(WKB_GEOMETRY.storage_type(), data.arrays[0][0].data_type());
         assert_eq!(data.arrays[1].len(), 2);
-        assert_eq!(
-            WKB_GEOMETRY,
-            data.arrays[1][0].data_type().try_into().unwrap()
-        );
+        assert_eq!(WKB_GEOMETRY.storage_type(), data.arrays[1][0].data_type());
         assert_eq!(data.arrays[2].len(), 2);
         assert_eq!(data.arrays[2][0].data_type(), &DataType::Float64);
     }
@@ -851,10 +820,10 @@ mod test {
         assert_eq!(
             spec.sedona_types(),
             [
-                DataType::Float64.try_into().unwrap(),
-                DataType::Float64.try_into().unwrap(),
-                DataType::Float64.try_into().unwrap(),
-                DataType::Float64.try_into().unwrap()
+                SedonaType::Arrow(DataType::Float64),
+                SedonaType::Arrow(DataType::Float64),
+                SedonaType::Arrow(DataType::Float64),
+                SedonaType::Arrow(DataType::Float64)
             ]
         );
 

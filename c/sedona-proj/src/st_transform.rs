@@ -415,7 +415,7 @@ mod tests {
 
         let arg_fields: Vec<Arc<Field>> = arg_types
             .into_iter()
-            .map(|arg_type| Arc::new(Field::new("", arg_type.data_type(), true)))
+            .map(|arg_type| Arc::new(arg_type.to_storage_field("", true).unwrap()))
             .collect();
         let row_count = wkb.len();
 
@@ -433,7 +433,7 @@ mod tests {
         };
 
         let return_field = udf.return_field_from_args(return_field_args)?;
-        let return_type = SedonaType::from_data_type(return_field.data_type())?;
+        let return_type = SedonaType::from_storage_field(&return_field)?;
 
         let args = ScalarFunctionArgs {
             args: arg_vals,

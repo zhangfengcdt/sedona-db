@@ -79,7 +79,7 @@ impl SedonaAccumulator for STAnalyzeAggr {
     fn return_type(&self, args: &[SedonaType]) -> Result<Option<SedonaType>> {
         let output_fields = Self::output_fields();
 
-        let r_type = SedonaType::from_data_type(&DataType::Struct(output_fields.into()))?;
+        let r_type = SedonaType::Arrow(DataType::Struct(output_fields.into()));
         let matcher = ArgMatcher::new(vec![ArgMatcher::is_geometry()], r_type);
         matcher.match_args(args)
     }
@@ -387,10 +387,8 @@ impl Accumulator for AnalyzeAccumulator {
             ));
         }
         let arg_types = [self.input_type.clone()];
-        let args = [ColumnarValue::Array(
-            self.input_type.unwrap_array(&values[0])?,
-        )];
-        let executor = WkbExecutor::new(&arg_types, &args);
+        let arg_values = [ColumnarValue::Array(values[0].clone())];
+        let executor = WkbExecutor::new(&arg_types, &arg_values);
         self.execute_update(executor)?;
         Ok(())
     }

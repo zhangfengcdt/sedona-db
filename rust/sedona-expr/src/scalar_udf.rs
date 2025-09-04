@@ -14,11 +14,9 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use std::iter::zip;
-use std::sync::Arc;
-use std::{any::Any, fmt::Debug};
+use std::{any::Any, fmt::Debug, sync::Arc};
 
-use arrow_schema::{DataType, Field, FieldRef};
+use arrow_schema::{DataType, FieldRef};
 use datafusion_common::{not_impl_err, plan_err, Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -475,38 +473,12 @@ impl SedonaScalarUDF {
         Self::new(name, vec![kernel], Volatility::Immutable, None)
     }
 
-    pub fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        let arg_types: Vec<_> = args.iter().map(|arg| arg.data_type()).collect();
-        let return_type = self.return_type(&arg_types)?;
-        let arg_fields: Vec<_> = arg_types
-            .into_iter()
-            .map(|data_type| Arc::new(Field::new("", data_type, true)))
-            .collect();
-
-        let args = ScalarFunctionArgs {
-            args: args.to_vec(),
-            arg_fields,
-            number_rows,
-            return_field: Arc::new(Field::new("", return_type, true)),
-        };
-
-        self.invoke_with_args(args)
-    }
-
     /// Add a new kernel to a Scalar UDF
     ///
     /// Because kernels are resolved in reverse order, the new kernel will take
     /// precedence over any previously added kernels that apply to the same types.
     pub fn add_kernel(&mut self, kernel: ScalarKernelRef) {
         self.kernels.push(kernel);
-    }
-
-    fn physical_types(args: &[DataType]) -> Result<Vec<SedonaType>> {
-        args.iter().map(SedonaType::from_data_type).collect()
     }
 
     fn return_type_impl(
@@ -542,31 +514,31 @@ impl ScalarUDFImpl for SedonaScalarUDF {
         self.documentation.as_ref()
     }
 
-    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-        let arg_types = Self::physical_types(args)?;
-        let scalars = vec![None; args.len()];
-        let (_, out_type) = self.return_type_impl(&arg_types, &scalars)?;
-        Ok(out_type.data_type())
+    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+        sedona_internal_err!("Should not be called (use return_field_from_args())")
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_data_types: Vec<DataType> = args
+        let arg_types = args
             .arg_fields
             .iter()
-            .map(|arg| arg.data_type().clone())
-            .collect();
-        let arg_types = Self::physical_types(&arg_data_types)?;
+            .map(|field| SedonaType::from_storage_field(field))
+            .collect::<Result<Vec<_>>>()?;
         let (_, out_type) = self.return_type_impl(&arg_types, args.scalar_arguments)?;
-        Ok(Field::new("", out_type.data_type(), true).into())
+        Ok(Arc::new(out_type.to_storage_field("", true)?))
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         Ok(arg_types.to_vec())
     }
 
-    fn invoke_with_args(&self, args: datafusion_expr::ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let arg_types: Vec<DataType> = args.args.iter().map(|arg| arg.data_type()).collect();
-        let arg_physical_types = Self::physical_types(&arg_types)?;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| SedonaType::from_storage_field(field))
+            .collect::<Result<Vec<_>>>()?;
+
         let arg_scalars = args
             .args
             .iter()
@@ -578,12 +550,9 @@ impl ScalarUDFImpl for SedonaScalarUDF {
                 }
             })
             .collect::<Vec<_>>();
-        let (kernel, out_type) = self.return_type_impl(&arg_physical_types, &arg_scalars)?;
-        let args_unwrapped: Result<Vec<ColumnarValue>, _> = zip(&arg_physical_types, &args.args)
-            .map(|(a, b)| a.unwrap_arg(b))
-            .collect();
-        let result = kernel.invoke_batch(&arg_physical_types, &args_unwrapped?)?;
-        out_type.wrap_arg(&result)
+
+        let (kernel, _) = self.return_type_impl(&arg_types, &arg_scalars)?;
+        kernel.invoke_batch(&arg_types, &args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -594,6 +563,7 @@ impl ScalarUDFImpl for SedonaScalarUDF {
 #[cfg(test)]
 mod tests {
     use datafusion_common::{scalar::ScalarValue, DFSchema};
+    use sedona_testing::testers::ScalarUdfTester;
 
     use datafusion_expr::{lit, ExprSchemable, ScalarUDF};
     use sedona_schema::{
@@ -703,12 +673,14 @@ mod tests {
         // UDF with no implementations
         let udf = SedonaScalarUDF::new("empty", vec![], Volatility::Immutable, None);
         assert_eq!(udf.name(), "empty");
-        let err = udf.return_type(&[]).unwrap_err();
-        assert_eq!(err.message(), "empty([]): No kernel matching arguments");
-
         assert_eq!(udf.coerce_types(&[])?, vec![]);
 
-        let batch_err = udf.invoke_batch(&[], 5).unwrap_err();
+        let tester = ScalarUdfTester::new(udf.into(), vec![]);
+
+        let err = tester.return_type().unwrap_err();
+        assert_eq!(err.message(), "empty([]): No kernel matching arguments");
+
+        let batch_err = tester.invoke_arrays(vec![]).unwrap_err();
         assert_eq!(
             batch_err.message(),
             "empty([]): No kernel matching arguments"
@@ -744,53 +716,23 @@ mod tests {
             None,
         );
 
-        assert_eq!(udf.name(), "simple_udf");
-
         // Calling with a geo type should return a Null type
-        let wkb_arrow = WKB_GEOMETRY.data_type();
-        let wkb_dummy_val = WKB_GEOMETRY
-            .wrap_arg(&ColumnarValue::Scalar(ScalarValue::Binary(None)))
-            .unwrap();
-
+        let tester = ScalarUdfTester::new(udf.clone().into(), vec![WKB_GEOMETRY]);
+        tester.assert_return_type(DataType::Null);
         assert_eq!(
-            udf.return_type(std::slice::from_ref(&wkb_arrow)).unwrap(),
-            DataType::Null
+            tester.invoke_scalar("POINT (0 1)").unwrap(),
+            ScalarValue::Null
         );
-        assert_eq!(
-            udf.coerce_types(std::slice::from_ref(&wkb_arrow)).unwrap(),
-            vec![wkb_arrow.clone()]
-        );
-
-        if let ColumnarValue::Scalar(scalar) = udf.invoke_batch(&[wkb_dummy_val], 5).unwrap() {
-            assert_eq!(scalar, ScalarValue::Null);
-        } else {
-            panic!("Unexpected batch result");
-        }
 
         // Calling with a Boolean should result in a Boolean
-        let bool_arrow = DataType::Boolean;
-        let bool_dummy_val = ColumnarValue::Scalar(ScalarValue::Boolean(None));
-        assert_eq!(
-            udf.coerce_types(std::slice::from_ref(&bool_arrow)).unwrap(),
-            vec![bool_arrow.clone()]
+        let tester = ScalarUdfTester::new(
+            udf.clone().into(),
+            vec![SedonaType::Arrow(DataType::Boolean)],
         );
-
+        tester.assert_return_type(DataType::Boolean);
         assert_eq!(
-            udf.return_type(std::slice::from_ref(&bool_arrow)).unwrap(),
-            DataType::Boolean
-        );
-
-        if let ColumnarValue::Scalar(scalar) = udf.invoke_batch(&[bool_dummy_val], 5).unwrap() {
-            assert_eq!(scalar, ScalarValue::Boolean(None));
-        } else {
-            panic!("Unexpected batch result");
-        }
-
-        // Calling with something where no types match should error
-        let batch_err = udf.invoke_batch(&[], 5).unwrap_err();
-        assert_eq!(
-            batch_err.message(),
-            "simple_udf([]): No kernel matching arguments"
+            tester.invoke_scalar(true).unwrap(),
+            ScalarValue::Boolean(None)
         );
 
         // Adding a new kernel should result in that kernel getting picked first
@@ -804,10 +746,11 @@ mod tests {
         ));
 
         // Now, calling with a Boolean should result in a Utf8
-        assert_eq!(
-            udf.return_type(std::slice::from_ref(&bool_arrow)).unwrap(),
-            DataType::Utf8
+        let tester = ScalarUdfTester::new(
+            udf.clone().into(),
+            vec![SedonaType::Arrow(DataType::Boolean)],
         );
+        tester.assert_return_type(DataType::Utf8);
     }
 
     #[test]
@@ -818,9 +761,10 @@ mod tests {
             Volatility::Immutable,
             None,
         );
+        let tester = ScalarUdfTester::new(stub.into(), vec![]);
+        tester.assert_return_type(DataType::Boolean);
 
-        assert_eq!(stub.return_type(&[]).unwrap(), DataType::Boolean);
-        let err = stub.invoke_batch(&[], 1).unwrap_err();
+        let err = tester.invoke_arrays(vec![]).unwrap_err();
         assert_eq!(
             err.message(),
             "Implementation for stubby([]) was not registered"
@@ -829,8 +773,7 @@ mod tests {
 
     #[test]
     fn crs_propagation() {
-        let geom_lnglat = SedonaType::Wkb(Edges::Planar, lnglat()).data_type();
-
+        let geom_lnglat = SedonaType::Wkb(Edges::Planar, lnglat());
         let predicate_stub = SedonaScalarUDF::new_stub(
             "stubby",
             ArgMatcher::new(
@@ -842,25 +785,25 @@ mod tests {
         );
 
         // None CRS to None CRS is OK
-        assert_eq!(
-            predicate_stub
-                .return_type(&[WKB_GEOMETRY.data_type(), WKB_GEOMETRY.data_type()])
-                .unwrap(),
-            DataType::Boolean
+        let tester = ScalarUdfTester::new(
+            predicate_stub.clone().into(),
+            vec![WKB_GEOMETRY, WKB_GEOMETRY],
         );
+        tester.assert_return_type(DataType::Boolean);
 
         // lnglat + lnglat is OK
-        assert_eq!(
-            predicate_stub
-                .return_type(&[geom_lnglat.clone(), geom_lnglat.clone()])
-                .unwrap(),
-            DataType::Boolean
+        let tester = ScalarUdfTester::new(
+            predicate_stub.clone().into(),
+            vec![geom_lnglat.clone(), geom_lnglat.clone()],
         );
+        tester.assert_return_type(DataType::Boolean);
 
         // Non-equal CRSes should error
-        let err = predicate_stub
-            .return_type(&[WKB_GEOMETRY.data_type(), geom_lnglat.clone()])
-            .unwrap_err();
+        let tester = ScalarUdfTester::new(
+            predicate_stub.clone().into(),
+            vec![WKB_GEOMETRY, geom_lnglat.clone()],
+        );
+        let err = tester.return_type().unwrap_err();
         assert!(err.message().starts_with("Mismatched CRS arguments"));
 
         // When geometry is output, it should match the crses of the inputs
@@ -874,12 +817,11 @@ mod tests {
             None,
         );
 
-        assert_eq!(
-            geom_out_stub
-                .return_type(&[geom_lnglat.clone(), geom_lnglat.clone()])
-                .unwrap(),
-            geom_lnglat.clone()
+        let tester = ScalarUdfTester::new(
+            geom_out_stub.clone().into(),
+            vec![geom_lnglat.clone(), geom_lnglat.clone()],
         );
+        tester.assert_return_type(geom_lnglat.clone());
     }
 
     #[test]
@@ -901,8 +843,8 @@ mod tests {
         fn parse_type(val: &ColumnarValue) -> Result<SedonaType> {
             if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(scalar_arg1))) = val {
                 match scalar_arg1.as_str() {
-                    "float32" => return Ok(DataType::Float32.try_into().unwrap()),
-                    "float64" => return Ok(DataType::Float64.try_into().unwrap()),
+                    "float32" => return Ok(SedonaType::Arrow(DataType::Float32)),
+                    "float64" => return Ok(SedonaType::Arrow(DataType::Float64)),
                     _ => {}
                 }
             }
@@ -934,7 +876,7 @@ mod tests {
             args: &[ColumnarValue],
         ) -> Result<ColumnarValue> {
             let out_type = Self::parse_type(&args[1])?;
-            args[0].cast_to(&out_type.data_type(), None)
+            args[0].cast_to(out_type.storage_type(), None)
         }
     }
 }
