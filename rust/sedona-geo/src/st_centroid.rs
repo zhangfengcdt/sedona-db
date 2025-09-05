@@ -18,12 +18,11 @@
 use std::sync::Arc;
 
 use arrow_array::builder::BinaryBuilder;
-use arrow_schema::DataType;
 use datafusion_common::error::Result;
 use datafusion_expr::ColumnarValue;
 use sedona_expr::scalar_udf::{ArgMatcher, ScalarKernelRef, SedonaScalarKernel};
 use sedona_functions::executor::WkbExecutor;
-use sedona_schema::datatypes::SedonaType;
+use sedona_schema::datatypes::{SedonaType, WKB_GEOMETRY};
 use wkb::reader::Wkb;
 
 use crate::centroid::extract_centroid_2d;
@@ -38,10 +37,7 @@ struct STCentroid {}
 
 impl SedonaScalarKernel for STCentroid {
     fn return_type(&self, args: &[SedonaType]) -> Result<Option<SedonaType>> {
-        let matcher = ArgMatcher::new(
-            vec![ArgMatcher::is_geometry()],
-            SedonaType::Arrow(DataType::Binary),
-        );
+        let matcher = ArgMatcher::new(vec![ArgMatcher::is_geometry()], WKB_GEOMETRY);
 
         matcher.match_args(args)
     }
@@ -108,7 +104,7 @@ fn create_empty_point_wkb() -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::{create_array, Array, ArrayRef, BinaryArray};
+    use arrow_array::{Array, BinaryArray};
     use datafusion_common::scalar::ScalarValue;
     use rstest::rstest;
     use sedona_functions::register::stubs::st_centroid_udf;
@@ -124,10 +120,7 @@ mod tests {
         udf.add_kernel(st_centroid_impl());
         let tester = ScalarUdfTester::new(udf.into(), vec![sedona_type]);
 
-        assert_eq!(
-            tester.return_type().unwrap(),
-            SedonaType::Arrow(DataType::Binary)
-        );
+        assert_eq!(tester.return_type().unwrap(), WKB_GEOMETRY);
 
         // Test with a polygon
         let result = tester
@@ -153,10 +146,10 @@ mod tests {
         let binary_array = result_array.as_any().downcast_ref::<BinaryArray>().unwrap();
 
         // First element: POINT(1 2) - centroid should be (1, 2)
-        assert!(binary_array.value(0).len() > 0);
+        assert!(!binary_array.value(0).is_empty());
         // Second element: NULL
         assert!(binary_array.is_null(1));
         // Third element: POLYGON centroid should be (1, 1)
-        assert!(binary_array.value(2).len() > 0);
+        assert!(!binary_array.value(2).is_empty());
     }
 }
