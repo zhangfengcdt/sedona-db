@@ -493,7 +493,7 @@ def test_st_isempty(eng, geom, expected):
     ("geom", "expected"),
     [
         (None, None),
-        # ("POINT EMPTY", 0),  # Not supported by geo implementation - throws ArrowInvalid error
+        ("POINT EMPTY", 0),  # OGC standard: empty geometries have length 0
         ("LINESTRING EMPTY", 0),
         ("POINT (0 0)", 0),
         ("LINESTRING (0 0, 0 1)", 1),

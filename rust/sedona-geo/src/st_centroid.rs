@@ -20,12 +20,15 @@ use std::sync::Arc;
 use arrow_array::builder::BinaryBuilder;
 use datafusion_common::error::Result;
 use datafusion_expr::ColumnarValue;
+use geo_generic_alg::Centroid;
 use sedona_expr::scalar_udf::{ArgMatcher, ScalarKernelRef, SedonaScalarKernel};
 use sedona_functions::executor::WkbExecutor;
+use sedona_functions::st_isempty::is_wkb_empty;
 use sedona_schema::datatypes::{SedonaType, WKB_GEOMETRY};
 use wkb::reader::Wkb;
 
-use crate::centroid::extract_centroid_2d;
+use sedona_geometry::wkb_factory;
+use sedona_testing::fixtures::POINT_EMPTY_WKB;
 
 /// ST_Centroid() implementation using centroid extraction
 pub fn st_centroid_impl() -> ScalarKernelRef {
@@ -66,40 +69,23 @@ impl SedonaScalarKernel for STCentroid {
 }
 
 fn invoke_scalar(wkb: &Wkb) -> Result<Vec<u8>> {
-    let (x, y) = extract_centroid_2d(wkb)?;
-
-    // Create WKB for POINT geometry
-    if x.is_nan() || y.is_nan() {
-        // Return POINT EMPTY
-        Ok(create_empty_point_wkb())
-    } else {
-        Ok(create_point_wkb(x, y))
+    // Check for empty geometries first - they should return POINT EMPTY
+    if is_wkb_empty(wkb)? {
+        return Ok(POINT_EMPTY_WKB.to_vec());
     }
-}
 
-fn create_point_wkb(x: f64, y: f64) -> Vec<u8> {
-    let mut wkb = Vec::with_capacity(21);
-    // Little endian
-    wkb.push(0x01);
-    // Point geometry type (1)
-    wkb.extend_from_slice(&1u32.to_le_bytes());
-    // X coordinate
-    wkb.extend_from_slice(&x.to_le_bytes());
-    // Y coordinate
-    wkb.extend_from_slice(&y.to_le_bytes());
-    wkb
-}
+    // Use Centroid trait directly on WKB, similar to how st_area uses unsigned_area()
+    if let Some(centroid_point) = wkb.centroid() {
+        // Extract coordinates from the centroid point
+        let x = centroid_point.x();
+        let y = centroid_point.y();
 
-fn create_empty_point_wkb() -> Vec<u8> {
-    let mut wkb = Vec::with_capacity(21);
-    // Little endian
-    wkb.push(0x01);
-    // Point geometry type (1)
-    wkb.extend_from_slice(&1u32.to_le_bytes());
-    // NaN coordinates for empty point
-    wkb.extend_from_slice(&f64::NAN.to_le_bytes());
-    wkb.extend_from_slice(&f64::NAN.to_le_bytes());
-    wkb
+        wkb_factory::wkb_point((x, y))
+            .map_err(|e| datafusion_common::error::DataFusionError::External(Box::new(e)))
+    } else {
+        // This should not happen for non-empty geometries, return POINT EMPTY as fallback
+        Ok(POINT_EMPTY_WKB.to_vec())
+    }
 }
 
 #[cfg(test)]
@@ -129,9 +115,12 @@ mod tests {
 
         if let ScalarValue::Binary(Some(wkb_data)) = result {
             let wkb = Wkb::try_new(&wkb_data).unwrap();
-            let (x, y) = extract_centroid_2d(&wkb).unwrap();
-            assert_eq!(x, 1.0);
-            assert_eq!(y, 1.0);
+            if let Some(centroid_point) = wkb.centroid() {
+                assert_eq!(centroid_point.x(), 1.0);
+                assert_eq!(centroid_point.y(), 1.0);
+            } else {
+                panic!("Expected centroid point");
+            }
         } else {
             panic!("Expected Binary result");
         }

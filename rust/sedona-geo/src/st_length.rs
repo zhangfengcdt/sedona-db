@@ -24,6 +24,7 @@ use datafusion_expr::ColumnarValue;
 use geo_generic_alg::{Euclidean, Length};
 use sedona_expr::scalar_udf::{ArgMatcher, ScalarKernelRef, SedonaScalarKernel};
 use sedona_functions::executor::WkbExecutor;
+use sedona_functions::st_isempty::is_wkb_empty;
 use sedona_schema::datatypes::SedonaType;
 use wkb::reader::Wkb;
 
@@ -70,7 +71,13 @@ impl SedonaScalarKernel for STLength {
 }
 
 fn invoke_scalar(wkb: &Wkb) -> Result<f64> {
-    // Use the Length trait with Euclidean metric
+    // Check if geometry is empty using st_isempty logic to avoid expensive conversion
+    if is_wkb_empty(wkb)? {
+        return Ok(0.0);
+    }
+
+    // Convert to geometry for length calculation only if not empty (fallback if direct doesn't work)
+    // TODO: Optimize by directly calculating length from WKB after the geo-alg crate supports it
     let geom = item_to_geometry(wkb)?;
 
     use geo_generic_alg::Geometry;
