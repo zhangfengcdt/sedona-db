@@ -166,7 +166,7 @@ class DataFrame:
             >>> con.view("foofy").show()
             ┌────────────┐
             │    geom    │
-            │     wkb    │
+            │  geometry  │
             ╞════════════╡
             │ POINT(0 1) │
             └────────────┘
@@ -187,7 +187,7 @@ class DataFrame:
             >>> con.sql("SELECT ST_Point(0, 1) as geom").collect().show()
             ┌────────────┐
             │    geom    │
-            │     wkb    │
+            │  geometry  │
             ╞════════════╡
             │ POINT(0 1) │
             └────────────┘
@@ -287,7 +287,7 @@ class DataFrame:
             >>> con.sql("SELECT ST_Point(0, 1) as geometry").show()
             ┌────────────┐
             │  geometry  │
-            │     wkb    │
+            │  geometry  │
             ╞════════════╡
             │ POINT(0 1) │
             └────────────┘

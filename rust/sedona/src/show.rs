@@ -24,7 +24,7 @@ use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF};
 use sedona_expr::scalar_udf::{ArgMatcher, SedonaScalarUDF};
-use sedona_schema::datatypes::SedonaType;
+use sedona_schema::datatypes::{Edges, SedonaType};
 use std::iter::zip;
 use std::sync::Arc;
 
@@ -392,13 +392,17 @@ impl DisplayColumn {
     pub fn header(&self, options: &DisplayTableOptions) -> Cell {
         // Don't print the type ever if it's a continuation column
         let is_continuation = self.name == "…" || self.name == "...";
+        let display_type = match &self.sedona_type {
+            SedonaType::Wkb(Edges::Planar, _) | SedonaType::WkbView(Edges::Planar, _) => {
+                "geometry".to_string()
+            }
+            SedonaType::Wkb(Edges::Spherical, _) | SedonaType::WkbView(Edges::Spherical, _) => {
+                "geography".to_string()
+            }
+            _ => self.sedona_type.to_string().to_lowercase(),
+        };
         if options.arrow_options.types_info() && !is_continuation {
-            Cell::new(format!(
-                "{}\n{}",
-                self.name,
-                self.sedona_type.to_string().to_lowercase()
-            ))
-            .set_delimiter('\0')
+            Cell::new(format!("{}\n{}", self.name, display_type)).set_delimiter('\0')
         } else {
             Cell::new(self.name.clone()).set_delimiter('\0')
         }
@@ -524,7 +528,10 @@ impl DisplayColumn {
 #[cfg(test)]
 mod test {
 
-    use sedona_schema::datatypes::WKB_GEOMETRY;
+    use rstest::rstest;
+    use sedona_schema::datatypes::{
+        WKB_GEOGRAPHY, WKB_GEOMETRY, WKB_VIEW_GEOGRAPHY, WKB_VIEW_GEOMETRY,
+    };
     use sedona_testing::create::create_array;
 
     use super::*;
@@ -683,6 +690,76 @@ mod test {
         );
     }
 
+    #[rstest]
+    #[case(WKB_GEOMETRY)]
+    #[case(WKB_VIEW_GEOMETRY)]
+    fn geometry_header(#[case] sedona_type: SedonaType) {
+        let cols = vec![(
+            "geometry",
+            (
+                sedona_type.clone(),
+                create_array(
+                    &[
+                        Some("POINT (0 1)"),
+                        Some("POLYGON ((0 0, 1 0, 0 1, 0 0))"),
+                        None,
+                    ],
+                    &sedona_type,
+                ) as ArrayRef,
+            ),
+        )];
+
+        let mut options = DisplayTableOptions::new();
+        options.table_width = 50;
+        assert_eq!(
+            render_cols(cols.clone(), options.clone()),
+            vec![
+                "+----------------------------+",
+                "|          geometry          |",
+                "+----------------------------+",
+                "| POINT(0 1)                 |",
+                "| POLYGON((0 0,1 0,0 1,0 0)) |",
+                "|                            |",
+                "+----------------------------+"
+            ]
+        );
+    }
+
+    #[rstest]
+    #[case(WKB_GEOGRAPHY)]
+    #[case(WKB_VIEW_GEOGRAPHY)]
+    fn geography_header(#[case] sedona_type: SedonaType) {
+        let cols = vec![(
+            "geography",
+            (
+                sedona_type.clone(),
+                create_array(
+                    &[
+                        Some("POINT (0 1)"),
+                        Some("POLYGON ((0 0, 1 0, 0 1, 0 0))"),
+                        None,
+                    ],
+                    &sedona_type,
+                ) as ArrayRef,
+            ),
+        )];
+
+        let mut options = DisplayTableOptions::new();
+        options.table_width = 50;
+        assert_eq!(
+            render_cols(cols.clone(), options.clone()),
+            vec![
+                "+----------------------------+",
+                "|          geography         |",
+                "+----------------------------+",
+                "| POINT(0 1)                 |",
+                "| POLYGON((0 0,1 0,0 1,0 0)) |",
+                "|                            |",
+                "+----------------------------+"
+            ]
+        );
+    }
+
     #[test]
     fn render_col_type() {
         let mut options = DisplayTableOptions::new();
@@ -693,7 +770,7 @@ mod test {
             vec![
                 "+------+--------------+-----------+--------------+",
                 "| shrt |     long     |  numeric  |   geometry   |",
-                "| utf8 |     utf8     |   int32   |      wkb     |",
+                "| utf8 |     utf8     |   int32   |   geometry   |",
                 "+------+--------------+-----------+--------------+",
                 "| abcd | you see, ... | 123456789 | POINT(0 1)   |",
                 "| efgh | the eleph... | 987654321 | POLYGON((... |",

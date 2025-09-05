@@ -53,7 +53,7 @@ class SedonaContext:
             >>> con.view("foofy").show()
             ┌────────────┐
             │    geom    │
-            │     wkb    │
+            │  geometry  │
             ╞════════════╡
             │ POINT(0 1) │
             └────────────┘

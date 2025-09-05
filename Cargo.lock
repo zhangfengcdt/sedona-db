@@ -4786,6 +4786,7 @@ dependencies = [
  "geo-types",
  "object_store",
  "parking_lot",
+ "rstest",
  "sedona-common",
  "sedona-expr",
  "sedona-functions",
