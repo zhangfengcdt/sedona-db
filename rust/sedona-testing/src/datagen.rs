@@ -29,7 +29,8 @@ use arrow_array::{Float64Array, Int32Array};
 use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
 use datafusion_common::Result;
 use geo_types::{
-    Coord, Geometry, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon, Rect,
+    Coord, Geometry, GeometryCollection, LineString, MultiLineString, MultiPoint, MultiPolygon,
+    Point, Polygon, Rect,
 };
 use rand::distributions::Uniform;
 use rand::rngs::StdRng;
@@ -524,13 +525,13 @@ fn generate_random_geometry<R: rand::Rng>(
         GeometryTypeId::MultiPolygon => {
             Geometry::MultiPolygon(generate_random_multipolygon(rng, options))
         }
-        _ => {
-            // For other geometry types, default to generating a point
-            let x_dist = Uniform::new(options.bounds.min().x, options.bounds.max().x);
-            let y_dist = Uniform::new(options.bounds.min().y, options.bounds.max().y);
-            let x = rng.sample(x_dist);
-            let y = rng.sample(y_dist);
-            Geometry::Point(Point::new(x, y))
+        GeometryTypeId::GeometryCollection => {
+            Geometry::GeometryCollection(generate_random_geometrycollection(rng, options))
+        }
+        GeometryTypeId::Geometry => {
+            let mut copy_options = options.clone();
+            copy_options.geom_type = pick_random_geometry_type(rng);
+            generate_random_geometry(rng, &copy_options)
         }
     }
 }
@@ -637,6 +638,18 @@ fn generate_random_multipolygon<R: rand::Rng>(
     }
 }
 
+fn generate_random_geometrycollection<R: rand::Rng>(
+    rng: &mut R,
+    options: &RandomGeometryOptions,
+) -> GeometryCollection {
+    if rng.gen_bool(options.empty_rate) {
+        GeometryCollection::new_from(vec![])
+    } else {
+        let children = generate_random_children(rng, options, generate_random_geometry);
+        GeometryCollection::new_from(children)
+    }
+}
+
 fn generate_random_children<R: Rng, T, F: Fn(&mut R, &RandomGeometryOptions) -> T>(
     rng: &mut R,
     options: &RandomGeometryOptions,
@@ -668,10 +681,27 @@ fn generate_random_children<R: Rng, T, F: Fn(&mut R, &RandomGeometryOptions) -> 
         child_options.bounds = bounds;
         let child_size = bounds.height().min(bounds.width());
         child_options.size_range = (child_size * 0.9, child_size);
+
+        // If GeometryCollection, pick a random geometry type
+        // Don't support nested GeometryCollection for now to avoid too much recursion
+        if options.geom_type == GeometryTypeId::GeometryCollection {
+            child_options.geom_type = pick_random_geometry_type(rng);
+        }
         children.push(func(rng, &child_options));
     }
 
     children
+}
+
+fn pick_random_geometry_type<R: Rng>(rng: &mut R) -> GeometryTypeId {
+    [
+        GeometryTypeId::Point,
+        GeometryTypeId::LineString,
+        GeometryTypeId::Polygon,
+        GeometryTypeId::MultiPoint,
+        GeometryTypeId::MultiLineString,
+        GeometryTypeId::MultiPolygon,
+    ][rng.gen_range(0..6)]
 }
 
 fn generate_random_circle<R: rand::Rng>(
@@ -1122,6 +1152,24 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_random_geometrycollection_part_count() {
+        let mut rng = StdRng::seed_from_u64(123);
+        let mut options = RandomGeometryOptions::new();
+
+        options.num_parts_range = (3, 3);
+        for _ in 0..100 {
+            let geom = generate_random_geometrycollection(&mut rng, &options);
+            assert_eq!(geom.len(), 3);
+        }
+
+        options.num_parts_range = (10, 10);
+        for _ in 0..100 {
+            let geom = generate_random_geometrycollection(&mut rng, &options);
+            assert_eq!(geom.len(), 10);
+        }
+    }
+
     #[rstest]
     fn test_random_geometry_type(
         #[values(
@@ -1130,7 +1178,8 @@ mod tests {
             GeometryTypeId::Polygon,
             GeometryTypeId::MultiPoint,
             GeometryTypeId::MultiLineString,
-            GeometryTypeId::MultiPolygon
+            GeometryTypeId::MultiPolygon,
+            GeometryTypeId::GeometryCollection
         )]
         geom_type: GeometryTypeId,
     ) {
@@ -1155,7 +1204,8 @@ mod tests {
             GeometryTypeId::Polygon,
             GeometryTypeId::MultiPoint,
             GeometryTypeId::MultiLineString,
-            GeometryTypeId::MultiPolygon
+            GeometryTypeId::MultiPolygon,
+            GeometryTypeId::GeometryCollection
         )]
         geom_type: GeometryTypeId,
     ) {
