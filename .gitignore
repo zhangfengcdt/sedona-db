@@ -38,5 +38,4 @@ coverage/
 site/
 
 # Python cache files
-__pycache__/
-benchmarks/__pycache__/
+__pycache__
