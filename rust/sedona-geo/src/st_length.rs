@@ -21,7 +21,7 @@ use arrow_array::builder::Float64Builder;
 use arrow_schema::DataType;
 use datafusion_common::error::Result;
 use datafusion_expr::ColumnarValue;
-use geo_generic_alg::{Length, Euclidean};
+use geo_generic_alg::{Euclidean, Length};
 use sedona_expr::scalar_udf::{ArgMatcher, ScalarKernelRef, SedonaScalarKernel};
 use sedona_functions::executor::WkbExecutor;
 use sedona_schema::datatypes::SedonaType;
@@ -72,11 +72,11 @@ impl SedonaScalarKernel for STLength {
 fn invoke_scalar(wkb: &Wkb) -> Result<f64> {
     // Use the Length trait with Euclidean metric
     let geom = item_to_geometry(wkb)?;
-    
+
     use geo_generic_alg::Geometry;
     let length = match geom {
         Geometry::Line(line) => Euclidean.length(&line),
-        Geometry::LineString(linestring) => Euclidean.length(&linestring), 
+        Geometry::LineString(linestring) => Euclidean.length(&linestring),
         Geometry::MultiLineString(multilinestring) => Euclidean.length(&multilinestring),
         Geometry::Polygon(polygon) => {
             // For polygon, return the perimeter (exterior ring + holes)
@@ -85,7 +85,7 @@ fn invoke_scalar(wkb: &Wkb) -> Result<f64> {
                 total_length += Euclidean.length(interior);
             }
             total_length
-        },
+        }
         Geometry::MultiPolygon(multipolygon) => {
             // Sum up lengths of all polygon perimeters
             let mut total_length = 0.0;
@@ -96,7 +96,7 @@ fn invoke_scalar(wkb: &Wkb) -> Result<f64> {
                 }
             }
             total_length
-        },
+        }
         Geometry::GeometryCollection(collection) => {
             // Recursively calculate length for all geometries in collection
             let mut total_length = 0.0;
@@ -104,11 +104,11 @@ fn invoke_scalar(wkb: &Wkb) -> Result<f64> {
                 total_length += invoke_scalar_for_geometry(geom)?;
             }
             total_length
-        },
+        }
         // Points have zero length
         _ => 0.0,
     };
-    
+
     Ok(length)
 }
 
@@ -117,7 +117,7 @@ fn invoke_scalar_for_geometry(geom: &geo_generic_alg::Geometry<f64>) -> Result<f
     use geo_generic_alg::Geometry;
     let length = match geom {
         Geometry::Line(line) => Euclidean.length(line),
-        Geometry::LineString(linestring) => Euclidean.length(linestring), 
+        Geometry::LineString(linestring) => Euclidean.length(linestring),
         Geometry::MultiLineString(multilinestring) => Euclidean.length(multilinestring),
         Geometry::Polygon(polygon) => {
             let mut total_length = Euclidean.length(polygon.exterior());
@@ -125,7 +125,7 @@ fn invoke_scalar_for_geometry(geom: &geo_generic_alg::Geometry<f64>) -> Result<f
                 total_length += Euclidean.length(interior);
             }
             total_length
-        },
+        }
         Geometry::MultiPolygon(multipolygon) => {
             let mut total_length = 0.0;
             for polygon in multipolygon.iter() {
@@ -135,17 +135,17 @@ fn invoke_scalar_for_geometry(geom: &geo_generic_alg::Geometry<f64>) -> Result<f
                 }
             }
             total_length
-        },
+        }
         Geometry::GeometryCollection(collection) => {
             let mut total_length = 0.0;
             for geom in collection.iter() {
                 total_length += invoke_scalar_for_geometry(geom)?;
             }
             total_length
-        },
+        }
         _ => 0.0,
     };
-    
+
     Ok(length)
 }
 
@@ -180,9 +180,9 @@ mod tests {
         );
 
         let input_wkt = vec![
-            Some("POINT(1 2)"),  // Point should have 0 length
+            Some("POINT(1 2)"), // Point should have 0 length
             None,
-            Some("LINESTRING (0 0, 3 4)"),  // Should have length 5
+            Some("LINESTRING (0 0, 3 4)"),      // Should have length 5
             Some("LINESTRING (0 0, 1 0, 1 1)"), // Should have length 2
         ];
         let expected: ArrayRef = create_array!(Float64, [Some(0.0), None, Some(5.0), Some(2.0)]);

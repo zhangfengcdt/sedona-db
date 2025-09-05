@@ -71,7 +71,7 @@ impl SedonaScalarKernel for STCentroid {
 
 fn invoke_scalar(wkb: &Wkb) -> Result<Vec<u8>> {
     let (x, y) = extract_centroid_2d(wkb)?;
-    
+
     // Create WKB for POINT geometry
     if x.is_nan() || y.is_nan() {
         // Return POINT EMPTY
@@ -133,7 +133,7 @@ mod tests {
         let result = tester
             .invoke_wkb_scalar(Some("POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))"))
             .unwrap();
-        
+
         if let ScalarValue::Binary(Some(wkb_data)) = result {
             let wkb = Wkb::try_new(&wkb_data).unwrap();
             let (x, y) = extract_centroid_2d(&wkb).unwrap();
@@ -151,7 +151,7 @@ mod tests {
         ];
         let result_array = tester.invoke_wkb_array(input_wkt).unwrap();
         let binary_array = result_array.as_any().downcast_ref::<BinaryArray>().unwrap();
-        
+
         // First element: POINT(1 2) - centroid should be (1, 2)
         assert!(binary_array.value(0).len() > 0);
         // Second element: NULL
