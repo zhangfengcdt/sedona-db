@@ -502,7 +502,10 @@ def test_st_isempty(eng, geom, expected):
         # Geo implementation calculates polygon perimeters as length (differs from OGC standard)
         # This provides more comprehensive length calculation including polygon boundaries
         ("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", 4.0),
-        ("MULTIPOLYGON (((0 0, 1 0, 1 1, 0 1, 0 0)), ((0 0, 1 0, 1 1, 0 1, 0 0)))", 8.0),
+        (
+            "MULTIPOLYGON (((0 0, 1 0, 1 1, 0 1, 0 0)), ((0 0, 1 0, 1 1, 0 1, 0 0)))",
+            8.0,
+        ),
         (
             "GEOMETRYCOLLECTION (LINESTRING (0 0, 1 1), POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0)), LINESTRING (0 0, 1 1))",
             6.82842712474619,
