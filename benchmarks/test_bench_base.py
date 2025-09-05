@@ -24,7 +24,7 @@ class TestBenchBase:
         self.postgis = None  # Skip PostGIS to avoid Docker dependency
         self.duckdb = DuckDB.create_or_skip()
 
-        num_geoms = 10_000
+        num_geoms = 100_000
 
         # Setup tables
         for name, options in [

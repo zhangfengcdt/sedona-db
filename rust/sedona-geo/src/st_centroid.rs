@@ -108,7 +108,7 @@ fn create_empty_point_wkb() -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::{create_array, ArrayRef, BinaryArray};
+    use arrow_array::{create_array, Array, ArrayRef, BinaryArray};
     use datafusion_common::scalar::ScalarValue;
     use rstest::rstest;
     use sedona_functions::register::stubs::st_centroid_udf;
