@@ -36,3 +36,10 @@ coverage/
 
 # documentation
 site/
+
+# Python cache files
+__pycache__/
+benchmarks/__pycache__/
+
+# Claude Code configuration
+CLAUDE.md
