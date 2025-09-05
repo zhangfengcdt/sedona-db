@@ -21,7 +21,7 @@ from sedonadb.testing import DuckDB, PostGIS, SedonaDB
 class TestBenchBase:
     def setup_class(self):
         self.sedonadb = SedonaDB.create_or_skip()
-        self.postgis = None  # Skip PostGIS to avoid Docker dependency
+        self.postgis = PostGIS.create_or_skip()
         self.duckdb = DuckDB.create_or_skip()
 
         num_geoms = 100_000
@@ -80,8 +80,7 @@ class TestBenchBase:
             tab = self.sedonadb.execute_and_collect(query)
 
             self.sedonadb.create_table_arrow(name, tab)
-            if self.postgis is not None:
-                self.postgis.create_table_arrow(name, tab)
+            self.postgis.create_table_arrow(name, tab)
             self.duckdb.create_table_arrow(name, tab)
 
     def _get_eng(self, eng):
