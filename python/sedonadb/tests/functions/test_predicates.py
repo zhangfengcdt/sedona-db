@@ -154,7 +154,7 @@ def test_st_disjoint(eng, geom1, geom2, expected):
 @pytest.mark.parametrize(
     ("geom1", "geom2", "distance", "expected"),
     [
-        (None, "POINT (0 0)", 1.0, None),
+        (None, "POINT (0 0)", 1, None),
         ("POINT (1 1)", None, 1.0, None),
         ("POINT (0 0)", "POINT (0 0)", None, None),
         (None, None, None, None),
@@ -165,13 +165,13 @@ def test_st_disjoint(eng, geom1, geom2, expected):
         (
             "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
             "POLYGON ((5 5, 6 5, 6 6, 5 6, 5 5))",
-            6.0,
+            6.2,
             True,
         ),
         (
             "GEOMETRYCOLLECTION (POINT (0 0), LINESTRING (0 0, 1 1))",
             "GEOMETRYCOLLECTION (POINT (0 0), LINESTRING (0 0, 1 1))",
-            1.0,
+            1,
             True,
         ),
     ],
