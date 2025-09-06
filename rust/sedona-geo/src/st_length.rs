@@ -85,24 +85,13 @@ fn invoke_scalar(wkb: &Wkb) -> Result<f64> {
         Geometry::Line(line) => Euclidean.length(&line),
         Geometry::LineString(linestring) => Euclidean.length(&linestring),
         Geometry::MultiLineString(multilinestring) => Euclidean.length(&multilinestring),
-        Geometry::Polygon(polygon) => {
-            // For polygon, return the perimeter (exterior ring + holes)
-            let mut total_length = Euclidean.length(polygon.exterior());
-            for interior in polygon.interiors() {
-                total_length += Euclidean.length(interior);
-            }
-            total_length
+        Geometry::Polygon(_polygon) => {
+            // OGC standard: polygons have zero length (only line-like geometries have length)
+            0.0
         }
-        Geometry::MultiPolygon(multipolygon) => {
-            // Sum up lengths of all polygon perimeters
-            let mut total_length = 0.0;
-            for polygon in multipolygon.iter() {
-                total_length += Euclidean.length(polygon.exterior());
-                for interior in polygon.interiors() {
-                    total_length += Euclidean.length(interior);
-                }
-            }
-            total_length
+        Geometry::MultiPolygon(_multipolygon) => {
+            // OGC standard: polygons have zero length (only line-like geometries have length)
+            0.0
         }
         Geometry::GeometryCollection(collection) => {
             // Recursively calculate length for all geometries in collection
@@ -126,22 +115,13 @@ fn invoke_scalar_for_geometry(geom: &geo_generic_alg::Geometry<f64>) -> Result<f
         Geometry::Line(line) => Euclidean.length(line),
         Geometry::LineString(linestring) => Euclidean.length(linestring),
         Geometry::MultiLineString(multilinestring) => Euclidean.length(multilinestring),
-        Geometry::Polygon(polygon) => {
-            let mut total_length = Euclidean.length(polygon.exterior());
-            for interior in polygon.interiors() {
-                total_length += Euclidean.length(interior);
-            }
-            total_length
+        Geometry::Polygon(_polygon) => {
+            // OGC standard: polygons have zero length (only line-like geometries have length)
+            0.0
         }
-        Geometry::MultiPolygon(multipolygon) => {
-            let mut total_length = 0.0;
-            for polygon in multipolygon.iter() {
-                total_length += Euclidean.length(polygon.exterior());
-                for interior in polygon.interiors() {
-                    total_length += Euclidean.length(interior);
-                }
-            }
-            total_length
+        Geometry::MultiPolygon(_multipolygon) => {
+            // OGC standard: polygons have zero length (only line-like geometries have length)
+            0.0
         }
         Geometry::GeometryCollection(collection) => {
             let mut total_length = 0.0;
