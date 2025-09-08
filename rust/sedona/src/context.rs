@@ -67,9 +67,6 @@ pub struct SedonaContext {
 impl SedonaContext {
     /// Creates a new context with default options
     pub fn new() -> Self {
-        // Make Scarf call for usage analytics
-        crate::scarf::make_scarf_call("rust");
-
         // This will panic only if the default build settings are
         // incorrect which we test!
         Self::new_from_context(SessionContext::new()).unwrap()
@@ -80,9 +77,6 @@ impl SedonaContext {
     /// Initializes a context from the current environment and registers access
     /// to the local file system.
     pub async fn new_local_interactive() -> Result<Self> {
-        // Make Scarf call for usage analytics
-        crate::scarf::make_scarf_call("rust");
-
         // These three objects enable configuring various elements of the runtime.
         // Eventually we probably want to have a common set of configuration parameters
         // exposed via the CLI/Python as arguments, via ADBC as connection options,
