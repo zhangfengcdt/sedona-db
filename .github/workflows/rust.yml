@@ -102,7 +102,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           # Update this key to force a new cache
-          prefix-key: "rust-${{ matrix.name }}-v1"
+          prefix-key: "rust-${{ matrix.name }}-v2"
 
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main

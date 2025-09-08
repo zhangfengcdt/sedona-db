@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use arrow_array::builder::BinaryBuilder;
-use datafusion_common::error::Result;
+use datafusion_common::{error::Result, exec_err};
 use datafusion_expr::ColumnarValue;
 use geo_generic_alg::Centroid;
 use sedona_expr::scalar_udf::{ArgMatcher, ScalarKernelRef, SedonaScalarKernel};
@@ -28,7 +28,7 @@ use sedona_schema::datatypes::{SedonaType, WKB_GEOMETRY};
 use wkb::reader::Wkb;
 
 use geo_traits::Dimensions;
-use sedona_geometry::wkb_factory;
+use sedona_geometry::wkb_factory::{self, WKB_MIN_PROBABLE_BYTES};
 
 /// ST_Centroid() implementation using centroid extraction
 pub fn st_centroid_impl() -> ScalarKernelRef {
@@ -51,7 +51,8 @@ impl SedonaScalarKernel for STCentroid {
         args: &[ColumnarValue],
     ) -> Result<ColumnarValue> {
         let executor = WkbExecutor::new(arg_types, args);
-        let mut builder = BinaryBuilder::with_capacity(executor.num_iterations(), 1024);
+        let mut builder =
+            BinaryBuilder::with_capacity(executor.num_iterations(), WKB_MIN_PROBABLE_BYTES);
         executor.execute_wkb_void(|maybe_wkb| {
             match maybe_wkb {
                 Some(wkb) => {
@@ -86,23 +87,19 @@ fn invoke_scalar(wkb: &Wkb) -> Result<Vec<u8>> {
         wkb_factory::wkb_point((x, y))
             .map_err(|e| datafusion_common::error::DataFusionError::External(Box::new(e)))
     } else {
-        // This should not happen for non-empty geometries, return POINT EMPTY as fallback
-        let mut empty_point_wkb = Vec::new();
-        wkb_factory::write_wkb_empty_point(&mut empty_point_wkb, Dimensions::Xy)
-            .map_err(|e| datafusion_common::error::DataFusionError::External(Box::new(e)))?;
-        Ok(empty_point_wkb)
+        // This should not happen for non-empty geometries - this indicates an error
+        exec_err!("Failed to compute centroid for geometry")
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::{Array, BinaryArray};
-    use datafusion_common::scalar::ScalarValue;
     use rstest::rstest;
     use sedona_functions::register::stubs::st_centroid_udf;
     use sedona_schema::datatypes::{WKB_GEOMETRY, WKB_VIEW_GEOMETRY};
+    use sedona_testing::compare::assert_array_equal;
+    use sedona_testing::create::create_array;
     use sedona_testing::testers::ScalarUdfTester;
-    use wkb::reader::Wkb;
 
     use super::*;
 
@@ -116,20 +113,9 @@ mod tests {
 
         // Test with a polygon
         let result = tester
-            .invoke_wkb_scalar(Some("POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))"))
+            .invoke_scalar("POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))")
             .unwrap();
-
-        if let ScalarValue::Binary(Some(wkb_data)) = result {
-            let wkb = Wkb::try_new(&wkb_data).unwrap();
-            if let Some(centroid_point) = wkb.centroid() {
-                assert_eq!(centroid_point.x(), 1.0);
-                assert_eq!(centroid_point.y(), 1.0);
-            } else {
-                panic!("Expected centroid point");
-            }
-        } else {
-            panic!("Expected Binary result");
-        }
+        tester.assert_scalar_result_equals(result, "POINT (1 1)");
 
         // Test with array
         let input_wkt = vec![
@@ -138,13 +124,12 @@ mod tests {
             Some("POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))"),
         ];
         let result_array = tester.invoke_wkb_array(input_wkt).unwrap();
-        let binary_array = result_array.as_any().downcast_ref::<BinaryArray>().unwrap();
-
-        // First element: POINT(1 2) - centroid should be (1, 2)
-        assert!(!binary_array.value(0).is_empty());
-        // Second element: NULL
-        assert!(binary_array.is_null(1));
-        // Third element: POLYGON centroid should be (1, 1)
-        assert!(!binary_array.value(2).is_empty());
+        assert_array_equal(
+            &result_array,
+            &create_array(
+                &[Some("POINT (1 2)"), None, Some("POINT (1 1)")],
+                &WKB_GEOMETRY,
+            ),
+        );
     }
 }

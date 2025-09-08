@@ -106,8 +106,10 @@ mod tests {
             None,
             Some("LINESTRING (0 0, 3 4)"),      // Should have length 5
             Some("LINESTRING (0 0, 1 0, 1 1)"), // Should have length 2
+            Some("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))"), // Polygon should have 0 length per OGC standard
         ];
-        let expected: ArrayRef = create_array!(Float64, [Some(0.0), None, Some(5.0), Some(2.0)]);
+        let expected: ArrayRef =
+            create_array!(Float64, [Some(0.0), None, Some(5.0), Some(2.0), Some(0.0)]);
         assert_eq!(&tester.invoke_wkb_array(input_wkt).unwrap(), &expected);
     }
 }
