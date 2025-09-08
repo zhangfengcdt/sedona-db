@@ -23,7 +23,7 @@ use datafusion_expr::ColumnarValue;
 use geo_generic_alg::Centroid;
 use sedona_expr::scalar_udf::{ArgMatcher, ScalarKernelRef, SedonaScalarKernel};
 use sedona_functions::executor::WkbExecutor;
-use sedona_functions::st_isempty::is_wkb_empty;
+use sedona_geometry::is_empty::is_geometry_empty;
 use sedona_schema::datatypes::{SedonaType, WKB_GEOMETRY};
 use wkb::reader::Wkb;
 
@@ -71,7 +71,11 @@ impl SedonaScalarKernel for STCentroid {
 
 fn invoke_scalar(wkb: &Wkb) -> Result<Vec<u8>> {
     // Check for empty geometries first - they should return POINT EMPTY
-    if is_wkb_empty(wkb)? {
+    if is_geometry_empty(wkb).map_err(|e| {
+        datafusion_common::error::DataFusionError::Execution(format!(
+            "Failed to check if geometry is empty: {e}"
+        ))
+    })? {
         let mut empty_point_wkb = Vec::new();
         wkb_factory::write_wkb_empty_point(&mut empty_point_wkb, Dimensions::Xy)
             .map_err(|e| datafusion_common::error::DataFusionError::External(Box::new(e)))?;

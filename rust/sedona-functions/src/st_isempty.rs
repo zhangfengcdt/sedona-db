@@ -23,12 +23,8 @@ use datafusion_common::error::Result;
 use datafusion_expr::{
     scalar_doc_sections::DOC_SECTION_OTHER, ColumnarValue, Documentation, Volatility,
 };
-use geo_traits::{
-    GeometryCollectionTrait, GeometryTrait, LineStringTrait, MultiLineStringTrait, MultiPointTrait,
-    MultiPolygonTrait, PointTrait, PolygonTrait,
-};
-use sedona_common::sedona_internal_err;
 use sedona_expr::scalar_udf::{ArgMatcher, SedonaScalarKernel, SedonaScalarUDF};
+use sedona_geometry::is_empty::is_geometry_empty;
 use sedona_schema::datatypes::SedonaType;
 use wkb::reader::Wkb;
 
@@ -92,24 +88,11 @@ pub fn is_wkb_empty(item: &Wkb) -> Result<bool> {
 }
 
 fn invoke_scalar(item: &Wkb) -> Result<bool> {
-    match item.as_type() {
-        geo_traits::GeometryType::Point(point) => Ok(point.coord().is_none()),
-        geo_traits::GeometryType::LineString(linestring) => Ok(linestring.num_coords() == 0),
-        geo_traits::GeometryType::Polygon(polygon) => {
-            Ok(polygon.num_interiors() == 0 && polygon.exterior().is_none())
-        }
-        geo_traits::GeometryType::MultiPoint(multipoint) => Ok(multipoint.num_points() == 0),
-        geo_traits::GeometryType::MultiLineString(multilinestring) => {
-            Ok(multilinestring.num_line_strings() == 0)
-        }
-        geo_traits::GeometryType::MultiPolygon(multipolygon) => {
-            Ok(multipolygon.num_polygons() == 0)
-        }
-        geo_traits::GeometryType::GeometryCollection(geometrycollection) => {
-            Ok(geometrycollection.num_geometries() == 0)
-        }
-        _ => sedona_internal_err!("Invalid geometry type"),
-    }
+    is_geometry_empty(item).map_err(|e| {
+        datafusion_common::error::DataFusionError::Execution(format!(
+            "Failed to check if geometry is empty: {e}"
+        ))
+    })
 }
 
 #[cfg(test)]
