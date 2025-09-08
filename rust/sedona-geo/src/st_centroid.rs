@@ -27,8 +27,8 @@ use sedona_functions::st_isempty::is_wkb_empty;
 use sedona_schema::datatypes::{SedonaType, WKB_GEOMETRY};
 use wkb::reader::Wkb;
 
+use geo_traits::Dimensions;
 use sedona_geometry::wkb_factory;
-use sedona_testing::fixtures::POINT_EMPTY_WKB;
 
 /// ST_Centroid() implementation using centroid extraction
 pub fn st_centroid_impl() -> ScalarKernelRef {
@@ -71,7 +71,10 @@ impl SedonaScalarKernel for STCentroid {
 fn invoke_scalar(wkb: &Wkb) -> Result<Vec<u8>> {
     // Check for empty geometries first - they should return POINT EMPTY
     if is_wkb_empty(wkb)? {
-        return Ok(POINT_EMPTY_WKB.to_vec());
+        let mut empty_point_wkb = Vec::new();
+        wkb_factory::write_wkb_empty_point(&mut empty_point_wkb, Dimensions::Xy)
+            .map_err(|e| datafusion_common::error::DataFusionError::External(Box::new(e)))?;
+        return Ok(empty_point_wkb);
     }
 
     // Use Centroid trait directly on WKB, similar to how st_area uses unsigned_area()
@@ -84,7 +87,10 @@ fn invoke_scalar(wkb: &Wkb) -> Result<Vec<u8>> {
             .map_err(|e| datafusion_common::error::DataFusionError::External(Box::new(e)))
     } else {
         // This should not happen for non-empty geometries, return POINT EMPTY as fallback
-        Ok(POINT_EMPTY_WKB.to_vec())
+        let mut empty_point_wkb = Vec::new();
+        wkb_factory::write_wkb_empty_point(&mut empty_point_wkb, Dimensions::Xy)
+            .map_err(|e| datafusion_common::error::DataFusionError::External(Box::new(e)))?;
+        Ok(empty_point_wkb)
     }
 }
 
