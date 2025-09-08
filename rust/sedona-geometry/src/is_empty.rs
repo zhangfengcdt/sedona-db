@@ -15,19 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::error::SedonaGeometryError;
 use geo_traits::{
     GeometryCollectionTrait, GeometryTrait, LineStringTrait, MultiLineStringTrait, MultiPointTrait,
     MultiPolygonTrait, PointTrait, PolygonTrait,
 };
-use thiserror::Error;
 
-#[derive(Error, Debug)]
-pub enum IsEmptyError {
-    #[error("Invalid geometry type")]
-    InvalidGeometryType,
-}
-
-pub fn is_geometry_empty<G: GeometryTrait<T = f64>>(geometry: &G) -> Result<bool, IsEmptyError> {
+pub fn is_geometry_empty<G: GeometryTrait<T = f64>>(
+    geometry: &G,
+) -> Result<bool, SedonaGeometryError> {
     match geometry.as_type() {
         geo_traits::GeometryType::Point(point) => Ok(point.coord().is_none()),
         geo_traits::GeometryType::LineString(linestring) => Ok(linestring.num_coords() == 0),
@@ -44,7 +40,9 @@ pub fn is_geometry_empty<G: GeometryTrait<T = f64>>(geometry: &G) -> Result<bool
         geo_traits::GeometryType::GeometryCollection(geometrycollection) => {
             Ok(geometrycollection.num_geometries() == 0)
         }
-        _ => Err(IsEmptyError::InvalidGeometryType),
+        _ => Err(SedonaGeometryError::Invalid(
+            "Invalid geometry type".to_string(),
+        )),
     }
 }
 
