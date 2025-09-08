@@ -51,6 +51,11 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CARGO_INCREMENTAL: 0
+      # Reduce debug info to save disk space
+      CARGO_PROFILE_DEV_DEBUG: 1
+      CARGO_PROFILE_TEST_DEBUG: 1
+      # Limit parallel compilation to reduce memory pressure
+      CARGO_BUILD_JOBS: 2
     steps:
       - uses: actions/checkout@v4
         with:
@@ -97,7 +102,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           # Update this key to force a new cache
-          prefix-key: "rust-${{ matrix.name }}-v1"
+          prefix-key: "rust-${{ matrix.name }}-v2"
 
       - name: Install dependencies
         shell: bash
@@ -112,6 +117,8 @@ jobs:
         if: matrix.name == 'test'
         run: |
           cargo test --workspace --all-targets --all-features
+          # Clean up intermediate build artifacts to free disk space
+          cargo clean -p sedona-s2geography
 
       - name: Doctests
         if: matrix.name == 'test'

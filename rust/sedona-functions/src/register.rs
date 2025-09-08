@@ -123,6 +123,7 @@ pub mod stubs {
     pub use crate::predicates::*;
     pub use crate::referencing::*;
     pub use crate::st_area::st_area_udf;
+    pub use crate::st_centroid::st_centroid_udf;
     pub use crate::st_length::st_length_udf;
     pub use crate::st_perimeter::st_perimeter_udf;
     pub use crate::st_setsrid::st_set_crs_with_engine_udf;
