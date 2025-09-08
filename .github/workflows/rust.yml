@@ -104,23 +104,16 @@ jobs:
           # Update this key to force a new cache
           prefix-key: "rust-${{ matrix.name }}-v1"
 
-      - name: Free up disk space
-        run: |
-          echo "Available disk space before cleanup:"
-          df -h /
-
-          # Remove unnecessary packages and files
-          sudo apt-get clean
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
-          sudo rm -rf /usr/local/share/boost
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-          docker system prune -af
-
-          echo "Available disk space after cleanup:"
-          df -h /
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # Free up space by removing tools we don't need
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
 
       - name: Install dependencies
         shell: bash
