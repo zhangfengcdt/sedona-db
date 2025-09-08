@@ -21,15 +21,13 @@ use arrow_array::builder::Float64Builder;
 use arrow_schema::DataType;
 use datafusion_common::error::Result;
 use datafusion_expr::ColumnarValue;
+use geo_generic_alg::algorithm::{line_measures::Euclidean, LengthMeasurableExt};
 use sedona_expr::scalar_udf::{ArgMatcher, ScalarKernelRef, SedonaScalarKernel};
 use sedona_functions::executor::WkbExecutor;
 use sedona_schema::datatypes::SedonaType;
 use wkb::reader::Wkb;
 
-#[allow(deprecated)]
-use geo_generic_alg::EuclideanLength;
-
-/// ST_Length() implementation using [EuclideanLength]
+/// ST_Length() implementation using [LengthMeasurableExt] with Euclidean metric
 pub fn st_length_impl() -> ScalarKernelRef {
     Arc::new(STLength {})
 }
@@ -70,8 +68,7 @@ impl SedonaScalarKernel for STLength {
 }
 
 fn invoke_scalar(wkb: &Wkb) -> Result<f64> {
-    #[allow(deprecated)]
-    Ok(wkb.euclidean_length())
+    Ok(wkb.length_ext(&Euclidean))
 }
 
 #[cfg(test)]
