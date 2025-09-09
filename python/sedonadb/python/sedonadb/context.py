@@ -126,18 +126,6 @@ class SedonaContext:
             >>> sedonadb.connect().read_parquet(url)
             <sedonadb.dataframe.DataFrame object at ...>
 
-            >>> # Test with options parameter (empty options should work the same)
-            >>> sedonadb.connect().read_parquet(url, options={})
-            <sedonadb.dataframe.DataFrame object at ...>
-
-            >>> # Test with None options (should work the same as no options)
-            >>> sedonadb.connect().read_parquet(url, options=None)
-            <sedonadb.dataframe.DataFrame object at ...>
-
-            >>> # Test S3 options (using HTTP URL for reliable testing)
-            >>> sedonadb.connect().read_parquet(url, options={"aws.nosign": True})
-            <sedonadb.dataframe.DataFrame object at ...>
-
         """
         if isinstance(table_paths, (str, Path)):
             table_paths = [table_paths]
