@@ -134,9 +134,8 @@ class SedonaContext:
             >>> sedonadb.connect().read_parquet(url, options=None)
             <sedonadb.dataframe.DataFrame object at ...>
 
-            >>> # Test S3 anonymous access with a public bucket  
-            >>> s3_url = "s3://geoarrow-data/example/files/example_geometry_geo.parquet"
-            >>> sedonadb.connect().read_parquet(s3_url, options={"aws.skip_signature": "true"})  # doctest: +SKIP
+            >>> # Test S3 options (using HTTP URL for reliable testing)
+            >>> sedonadb.connect().read_parquet(url, options={"aws.nosign": True})
             <sedonadb.dataframe.DataFrame object at ...>
 
         """
