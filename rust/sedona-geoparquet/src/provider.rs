@@ -94,6 +94,11 @@ impl GeoParquetReadOptions<'_> {
             table_options: Some(options),
         }
     }
+
+    /// Get the table options
+    pub fn table_options(&self) -> Option<&HashMap<String, String>> {
+        self.table_options.as_ref()
+    }
 }
 
 #[async_trait]

@@ -103,10 +103,12 @@ impl InternalContext {
             })
             .collect::<Result<HashMap<String, String>, PySedonaError>>()?;
 
+        let geo_options =
+            sedona_geoparquet::provider::GeoParquetReadOptions::from_table_options(rust_options);
         let df = wait_for_future(
             py,
             &self.runtime,
-            self.inner.read_parquet(table_paths, rust_options),
+            self.inner.read_parquet(table_paths, geo_options),
         )??;
         Ok(InternalDataFrame::new(df, self.runtime.clone()))
     }

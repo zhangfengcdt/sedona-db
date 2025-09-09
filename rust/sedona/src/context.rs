@@ -228,23 +228,24 @@ impl SedonaContext {
     pub async fn read_parquet<P: DataFilePaths>(
         &self,
         table_paths: P,
-        options: HashMap<String, String>,
+        options: GeoParquetReadOptions<'_>,
     ) -> Result<DataFrame> {
         let urls = table_paths.to_urls()?;
 
         // Pre-register object store with our custom options before creating GeoParquetReadOptions
         if !urls.is_empty() {
             use crate::object_storage::ensure_object_store_registered_with_options;
+            // Extract the table options from GeoParquetReadOptions for object store registration
+            let table_options_map = options.table_options().cloned().unwrap_or_default();
             ensure_object_store_registered_with_options(
                 &mut self.ctx.state(),
                 urls[0].as_str(),
-                Some(&options),
+                Some(&table_options_map),
             )
             .await?;
         }
 
-        let geo_options = GeoParquetReadOptions::from_table_options(options);
-        let provider = geoparquet_listing_table(&self.ctx, urls, geo_options).await?;
+        let provider = geoparquet_listing_table(&self.ctx, urls, options).await?;
 
         self.ctx.read_table(Arc::new(provider))
     }
