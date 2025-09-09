@@ -29,8 +29,6 @@ SedonaDB only runs on a single machine, so it’s perfect for processing smaller
 
 You can install Python SedonaDB with `pip install apache-sedona`.
 
-You can also install Rust SedonaDB with `cargo add apache-sedona`.
-
 ## Overture buildings example
 
 This section shows how to query the Overture buildings data.
