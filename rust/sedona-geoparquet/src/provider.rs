@@ -88,11 +88,64 @@ impl GeoParquetReadOptions<'_> {
     }
 
     /// Create GeoParquetReadOptions from table options HashMap
-    pub fn from_table_options(options: HashMap<String, String>) -> Self {
-        GeoParquetReadOptions {
+    /// Validates that AWS options are spelled correctly to help catch user errors
+    pub fn from_table_options(options: HashMap<String, String>) -> Result<Self, String> {
+        // Validate AWS options to catch common misspellings
+        for key in options.keys() {
+            if key.starts_with("aws.") {
+                let common_aws_options = [
+                    "aws.access_key_id",
+                    "aws.secret_access_key",
+                    "aws.region",
+                    "aws.endpoint",
+                    "aws.skip_signature",
+                    "aws.nosign", // Alternative name for skip_signature
+                    "aws.bucket_name",
+                    "aws.use_ssl",
+                    "aws.force_path_style",
+                ];
+
+                if !common_aws_options.contains(&key.as_str()) {
+                    // Find potential matches for misspelled options
+                    let close_matches: Vec<&str> = common_aws_options
+                        .iter()
+                        .filter(|&&option| {
+                            // Check for similar starting patterns or abbreviations
+                            let key_start = &key[4..]; // Remove "aws." prefix
+                            let option_start = &option[4..]; // Remove "aws." prefix
+
+                            // Check if the key is a prefix of the option (abbreviation)
+                            // or if they share a common prefix of at least 4 characters
+                            option_start.starts_with(key_start)
+                                || key_start.starts_with(option_start)
+                                || (key_start.len() >= 4
+                                    && option_start.len() >= 4
+                                    && key_start[..4] == option_start[..4])
+                        })
+                        .cloned()
+                        .collect();
+
+                    if !close_matches.is_empty() {
+                        return Err(format!(
+                            "Unknown AWS option '{}'. Did you mean: {}?",
+                            key,
+                            close_matches.join(", ")
+                        ));
+                    } else {
+                        return Err(format!(
+                            "Unknown AWS option '{}'. Valid options are: {}",
+                            key,
+                            common_aws_options.join(", ")
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok(GeoParquetReadOptions {
             inner: ParquetReadOptions::default(),
             table_options: Some(options),
-        }
+        })
     }
 
     /// Get the table options
@@ -111,7 +164,10 @@ impl ReadOptions<'_> for GeoParquetReadOptions<'_> {
         // Merge custom table options if provided
         if let Some(ref custom_options) = self.table_options {
             for (key, value) in custom_options {
-                let _ = table_options.set(key, value);
+                if let Err(_e) = table_options.set(key, value) {
+                    // Silently continue for now - unknown options are ignored for compatibility
+                    // The validation happens in from_table_options() method
+                }
             }
         }
 

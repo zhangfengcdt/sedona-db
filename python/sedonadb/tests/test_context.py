@@ -110,8 +110,8 @@ def test_read_parquet_s3_options_parameter():
     assert "geometry" in tab.schema.names
 
 
-def test_read_parquet_s3_anonymous_access():
-    """Test reading from a public S3 bucket with anonymous access"""
+def test_read_geoparquet_s3_anonymous_access():
+    """Test reading from a public S3 bucket geoparquet file with anonymous access"""
     con = sedonadb.connect()
     s3_url = "s3://wherobots-examples/data/onboarding_1/nyc_buildings.parquet"
 
@@ -121,3 +121,23 @@ def test_read_parquet_s3_anonymous_access():
     ).to_arrow_table()
     assert len(tab) > 0
     assert "geom" in tab.schema.names  # This dataset uses 'geom' instead of 'geometry'
+
+
+def test_read_parquet_invalid_aws_option():
+    """Test that invalid AWS options are caught and provide helpful error messages"""
+    con = sedonadb.connect()
+    url = "https://raw.githubusercontent.com/geoarrow/geoarrow-data/v0.2.0/example/files/example_geometry_geo.parquet"
+
+    # Test with a misspelled AWS option
+    with pytest.raises(
+        sedonadb._lib.SedonaError,
+        match=r"Unknown AWS option 'aws\.skip_sig'\..*aws\.skip_signature",
+    ):
+        con.read_parquet(url, options={"aws.skip_sig": "true"})
+
+    # Test with completely unknown AWS option
+    with pytest.raises(
+        sedonadb._lib.SedonaError,
+        match="Unknown AWS option.*aws.unknown_option.*Valid options are",
+    ):
+        con.read_parquet(url, options={"aws.unknown_option": "value"})
