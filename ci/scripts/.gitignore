@@ -15,7 +15,5 @@
 # specific language governing permissions and limitations
 # under the License.
 
-build/
-dist/
-.cache
-CMakeUserPresets.json
+# Ignore the nasm compiler downloaded when building Windows wheels
+nasm-*

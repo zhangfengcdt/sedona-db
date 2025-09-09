@@ -14,7 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use std::{any::Any, fmt::Debug, sync::Arc};
+use std::{any::Any, fmt::Debug, iter::zip, sync::Arc};
 
 use arrow_schema::{DataType, FieldRef};
 use datafusion_common::{not_impl_err, plan_err, Result, ScalarValue};
@@ -23,7 +23,7 @@ use datafusion_expr::{
     Volatility,
 };
 use sedona_common::sedona_internal_err;
-use sedona_schema::datatypes::{Edges, SedonaType};
+use sedona_schema::datatypes::{Edges, SedonaType, WKB_GEOGRAPHY, WKB_GEOMETRY};
 
 pub type ScalarKernelRef = Arc<dyn SedonaScalarKernel + Send + Sync>;
 
@@ -180,6 +180,31 @@ impl ArgMatcher {
         arg_iter.next().is_none()
     }
 
+    /// Calls each [TypeMatcher]'s `type_if_null()`
+    ///
+    /// This method errors if one or more matchers does not have an
+    /// unambiguous castable-from-null storage type. It is provided
+    /// as a utility for generic kernel implementations that rely on
+    /// the matcher to sanitize input that may contain literal nulls.
+    pub fn types_if_null(&self, args: &[SedonaType]) -> Result<Vec<SedonaType>> {
+        let mut out = Vec::new();
+        for (arg, matcher) in zip(args, &self.matchers) {
+            if let SedonaType::Arrow(DataType::Null) = arg {
+                if let Some(type_if_null) = matcher.type_if_null() {
+                    out.push(type_if_null);
+                } else {
+                    return sedona_internal_err!(
+                        "Matcher {matcher:?} does not provide type_if_null()"
+                    );
+                }
+            } else {
+                out.push(arg.clone());
+            }
+        }
+
+        Ok(out)
+    }
+
     /// Matches any argument
     pub fn is_any() -> Arc<dyn TypeMatcher + Send + Sync> {
         Arc::new(IsAny {})
@@ -240,10 +265,27 @@ impl ArgMatcher {
     }
 }
 
+/// A TypeMatcher is a predicate on a [SedonaType]
+///
+/// TypeMatchers are the building blocks of an [ArgMatcher] that
+/// represent a single argument. This is a generalization of the
+/// DataFusion [Signature] which does not currently consider
+/// extension types and/or how extension arrays might be casted
+/// to conform to a function with a given signature.
 pub trait TypeMatcher: Debug {
+    /// Returns true if this matcher matches a type
     fn match_type(&self, arg: &SedonaType) -> bool;
+
+    /// If this argument is optional, return true
     fn is_optional(&self) -> bool {
         false
+    }
+
+    /// Return the type to which an argument should be casted,
+    /// if applicable. This can be used to generalize null handling
+    /// or casting.
+    fn type_if_null(&self) -> Option<SedonaType> {
+        None
     }
 }
 
@@ -265,6 +307,10 @@ impl TypeMatcher for IsExact {
     fn match_type(&self, arg: &SedonaType) -> bool {
         self.exact_type.match_signature(arg)
     }
+
+    fn type_if_null(&self) -> Option<SedonaType> {
+        Some(self.exact_type.clone())
+    }
 }
 
 #[derive(Debug)]
@@ -279,6 +325,10 @@ impl TypeMatcher for OptionalMatcher {
 
     fn is_optional(&self) -> bool {
         true
+    }
+
+    fn type_if_null(&self) -> Option<SedonaType> {
+        self.inner.type_if_null()
     }
 }
 
@@ -303,6 +353,10 @@ impl TypeMatcher for IsGeometry {
             _ => false,
         }
     }
+
+    fn type_if_null(&self) -> Option<SedonaType> {
+        Some(WKB_GEOMETRY)
+    }
 }
 
 #[derive(Debug)]
@@ -317,6 +371,10 @@ impl TypeMatcher for IsGeography {
             _ => false,
         }
     }
+
+    fn type_if_null(&self) -> Option<SedonaType> {
+        Some(WKB_GEOGRAPHY)
+    }
 }
 
 #[derive(Debug)]
@@ -328,6 +386,10 @@ impl TypeMatcher for IsNumeric {
             SedonaType::Arrow(data_type) => data_type.is_numeric(),
             _ => false,
         }
+    }
+
+    fn type_if_null(&self) -> Option<SedonaType> {
+        Some(SedonaType::Arrow(DataType::Float64))
     }
 }
 
@@ -346,6 +408,10 @@ impl TypeMatcher for IsString {
             _ => false,
         }
     }
+
+    fn type_if_null(&self) -> Option<SedonaType> {
+        Some(SedonaType::Arrow(DataType::Utf8))
+    }
 }
 
 #[derive(Debug)]
@@ -360,6 +426,10 @@ impl TypeMatcher for IsBinary {
             _ => false,
         }
     }
+
+    fn type_if_null(&self) -> Option<SedonaType> {
+        Some(SedonaType::Arrow(DataType::Binary))
+    }
 }
 
 #[derive(Debug)]
@@ -373,6 +443,10 @@ impl TypeMatcher for IsBoolean {
             }
             _ => false,
         }
+    }
+
+    fn type_if_null(&self) -> Option<SedonaType> {
+        Some(SedonaType::Arrow(DataType::Boolean))
     }
 }
 
@@ -594,30 +668,52 @@ mod tests {
         assert!(ArgMatcher::is_geometry_or_geography().match_type(&WKB_GEOGRAPHY));
         assert!(!ArgMatcher::is_geometry_or_geography()
             .match_type(&SedonaType::Arrow(DataType::Binary)));
+        assert_eq!(ArgMatcher::is_geometry_or_geography().type_if_null(), None);
 
         assert!(ArgMatcher::is_geometry().match_type(&WKB_GEOMETRY));
         assert!(!ArgMatcher::is_geometry().match_type(&WKB_GEOGRAPHY));
+        assert_eq!(ArgMatcher::is_geometry().type_if_null(), Some(WKB_GEOMETRY));
 
         assert!(ArgMatcher::is_geography().match_type(&WKB_GEOGRAPHY));
         assert!(!ArgMatcher::is_geography().match_type(&WKB_GEOMETRY));
+        assert_eq!(
+            ArgMatcher::is_geography().type_if_null(),
+            Some(WKB_GEOGRAPHY)
+        );
 
         assert!(ArgMatcher::is_numeric().match_type(&SedonaType::Arrow(DataType::Int32)));
         assert!(ArgMatcher::is_numeric().match_type(&SedonaType::Arrow(DataType::Float64)));
+        assert_eq!(
+            ArgMatcher::is_numeric().type_if_null(),
+            Some(SedonaType::Arrow(DataType::Float64))
+        );
 
         assert!(ArgMatcher::is_string().match_type(&SedonaType::Arrow(DataType::Utf8)));
         assert!(ArgMatcher::is_string().match_type(&SedonaType::Arrow(DataType::Utf8View)));
         assert!(ArgMatcher::is_string().match_type(&SedonaType::Arrow(DataType::LargeUtf8)));
         assert!(!ArgMatcher::is_string().match_type(&SedonaType::Arrow(DataType::Binary)));
+        assert_eq!(
+            ArgMatcher::is_string().type_if_null(),
+            Some(SedonaType::Arrow(DataType::Utf8))
+        );
 
         assert!(ArgMatcher::is_binary().match_type(&SedonaType::Arrow(DataType::Binary)));
         assert!(ArgMatcher::is_binary().match_type(&SedonaType::Arrow(DataType::BinaryView)));
         assert!(!ArgMatcher::is_binary().match_type(&SedonaType::Arrow(DataType::Utf8)));
+        assert_eq!(
+            ArgMatcher::is_binary().type_if_null(),
+            Some(SedonaType::Arrow(DataType::Binary))
+        );
 
         assert!(ArgMatcher::is_boolean().match_type(&SedonaType::Arrow(DataType::Boolean)));
         assert!(!ArgMatcher::is_boolean().match_type(&SedonaType::Arrow(DataType::Int32)));
 
         assert!(ArgMatcher::is_null().match_type(&SedonaType::Arrow(DataType::Null)));
         assert!(!ArgMatcher::is_null().match_type(&SedonaType::Arrow(DataType::Int32)));
+        assert_eq!(
+            ArgMatcher::is_boolean().type_if_null(),
+            Some(SedonaType::Arrow(DataType::Boolean))
+        );
     }
 
     #[test]
