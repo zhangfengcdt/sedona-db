@@ -79,29 +79,19 @@ impl InternalContext {
         // Convert Python options dict to Rust HashMap<String, String>
         let rust_options: HashMap<String, String> = options
             .into_iter()
-            .map(|(k, v)| {
-                let v_str = if v.is_none(py) {
-                    String::new()
+            .filter_map(|(k, v)| {
+                if v.is_none(py) {
+                    None // Filter out None values
                 } else {
                     // Convert PyObject to string
-                    match v.call_method0(py, "__str__") {
-                        Ok(str_obj) => str_obj.extract::<String>(py)
-                            .map_err(|e| PySedonaError::SedonaPython(format!(
-                                "Failed to convert option '{}' __str__ result to string: {}", k, e
-                            )))?,
-                        Err(str_err) => {
-                            // Fallback to direct string extraction
-                            v.extract::<String>(py)
-                                .map_err(|extract_err| PySedonaError::SedonaPython(format!(
-                                    "Failed to convert option '{}' to string: __str__ failed ({}), direct extraction failed ({})",
-                                    k, str_err, extract_err
-                                )))?
-                        }
-                    }
-                };
-                Ok((k, v_str))
+                    let v_str = match v.call_method0(py, "__str__") {
+                        Ok(str_obj) => str_obj.extract::<String>(py).ok(),
+                        Err(_) => v.extract::<String>(py).ok(),
+                    };
+                    v_str.map(|s| (k, s))
+                }
             })
-            .collect::<Result<HashMap<String, String>, PySedonaError>>()?;
+            .collect();
 
         let geo_options =
             sedona_geoparquet::provider::GeoParquetReadOptions::from_table_options(rust_options);
