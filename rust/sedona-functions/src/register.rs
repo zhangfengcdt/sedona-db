@@ -78,6 +78,7 @@ pub fn default_function_set() -> FunctionSet {
         crate::st_haszm::st_hasz_udf,
         crate::st_isempty::st_isempty_udf,
         crate::st_length::st_length_udf,
+        crate::st_makeline::st_makeline_udf,
         crate::st_perimeter::st_perimeter_udf,
         crate::st_point::st_geogpoint_udf,
         crate::st_point::st_point_udf,
@@ -85,7 +86,9 @@ pub fn default_function_set() -> FunctionSet {
         crate::st_pointzm::st_pointm_udf,
         crate::st_pointzm::st_pointzm_udf,
         crate::st_transform::st_transform_udf,
+        crate::st_setsrid::st_set_crs_udf,
         crate::st_setsrid::st_set_srid_udf,
+        crate::st_srid::st_srid_udf,
         crate::st_xyzm::st_m_udf,
         crate::st_xyzm::st_x_udf,
         crate::st_xyzm::st_y_udf,
@@ -103,6 +106,7 @@ pub fn default_function_set() -> FunctionSet {
     register_aggregate_udfs!(
         function_set,
         crate::st_analyze_aggr::st_analyze_aggr_udf,
+        crate::st_collect::st_collect_udf,
         crate::st_envelope_aggr::st_envelope_aggr_udf,
         crate::st_intersection_aggr::st_intersection_aggr_udf,
         crate::st_union_aggr::st_union_aggr_udf,
@@ -121,8 +125,10 @@ pub mod stubs {
     pub use crate::predicates::*;
     pub use crate::referencing::*;
     pub use crate::st_area::st_area_udf;
+    pub use crate::st_centroid::st_centroid_udf;
     pub use crate::st_length::st_length_udf;
     pub use crate::st_perimeter::st_perimeter_udf;
+    pub use crate::st_setsrid::st_set_crs_with_engine_udf;
     pub use crate::st_setsrid::st_set_srid_with_engine_udf;
     pub use crate::st_transform::st_transform_udf;
 }
