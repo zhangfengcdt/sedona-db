@@ -48,7 +48,6 @@ use sedona_schema::datatypes::SedonaType;
 use crate::exec::create_plan_from_sql;
 use crate::{
     catalog::DynamicObjectStoreCatalog,
-    object_storage::ensure_object_store_registered,
     random_geometry_provider::RandomGeometryFunction,
     show::{show_batches, DisplayTableOptions},
 };
@@ -232,19 +231,20 @@ impl SedonaContext {
         options: HashMap<String, String>,
     ) -> Result<DataFrame> {
         let urls = table_paths.to_urls()?;
-        let geo_options = GeoParquetReadOptions::from_table_options(options);
-        let provider =
-            match geoparquet_listing_table(&self.ctx, urls.clone(), geo_options.clone()).await {
-                Ok(provider) => provider,
-                Err(e) => {
-                    if urls.is_empty() {
-                        return Err(e);
-                    }
 
-                    ensure_object_store_registered(&mut self.ctx.state(), urls[0].as_str()).await?;
-                    geoparquet_listing_table(&self.ctx, urls, geo_options).await?
-                }
-            };
+        // Pre-register object store with our custom options before creating GeoParquetReadOptions
+        if !urls.is_empty() {
+            use crate::object_storage::ensure_object_store_registered_with_options;
+            ensure_object_store_registered_with_options(
+                &mut self.ctx.state(),
+                urls[0].as_str(),
+                Some(&options),
+            )
+            .await?;
+        }
+
+        let geo_options = GeoParquetReadOptions::from_table_options(options);
+        let provider = geoparquet_listing_table(&self.ctx, urls, geo_options).await?;
 
         self.ctx.read_table(Arc::new(provider))
     }

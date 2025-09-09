@@ -90,3 +90,34 @@ def test_read_parquet_options_parameter(con, geoarrow_data):
     assert len(tab4) == len(
         tab1
     )  # Should be identical (option ignored but not errored)
+
+
+def test_read_parquet_s3_options_parameter():
+    """Test that S3 options are accepted without errors (using HTTP URL for reliability)"""
+    con = sedonadb.connect()
+    url = "https://raw.githubusercontent.com/geoarrow/geoarrow-data/v0.2.0/example/files/example_geometry_geo.parquet"
+
+    # Test S3 option keys are accepted and processed correctly
+    s3_options = {
+        "aws.skip_signature": "true",
+        "aws.nosign": "true",
+        "aws.region": "us-west-2",
+        "aws.endpoint": "https://s3.amazonaws.com",
+    }
+
+    tab = con.read_parquet(url, options=s3_options).to_arrow_table()
+    assert len(tab) > 0
+    assert "geometry" in tab.schema.names
+
+
+def test_read_parquet_s3_anonymous_access():
+    """Test reading from a public S3 bucket with anonymous access"""
+    con = sedonadb.connect()
+    s3_url = "s3://wherobots-examples/data/onboarding_1/nyc_buildings.parquet"
+
+    # Use aws.skip_signature with region for anonymous access
+    tab = con.read_parquet(
+        s3_url, options={"aws.skip_signature": True, "aws.region": "us-west-2"}
+    ).to_arrow_table()
+    assert len(tab) > 0
+    assert "geom" in tab.schema.names  # This dataset uses 'geom' instead of 'geometry'

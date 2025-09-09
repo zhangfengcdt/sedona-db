@@ -117,7 +117,7 @@ class SedonaContext:
             table_paths: A str, Path, or iterable of paths containing URLs to Parquet
                 files.
             options: Optional dictionary of options to pass to the Parquet reader.
-                For S3 access, use {"aws.nosign": True} for anonymous access to public buckets.
+                For S3 access, use {"aws.skip_signature": True, "aws.region": "us-west-2"} for anonymous access to public buckets.
 
         Examples:
 
