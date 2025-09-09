@@ -14,7 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use arrow_schema::SchemaRef;
 use async_trait::async_trait;
@@ -79,12 +79,21 @@ pub async fn geoparquet_listing_table<P: DataFilePaths>(
 #[derive(Default, Clone)]
 pub struct GeoParquetReadOptions<'a> {
     inner: ParquetReadOptions<'a>,
+    table_options: Option<HashMap<String, String>>,
 }
 
 impl GeoParquetReadOptions<'_> {
     /// Create a new GeoParquetReadOptions with default values
     pub fn new() -> Self {
         Default::default()
+    }
+
+    /// Create GeoParquetReadOptions from table options HashMap
+    pub fn from_table_options(options: HashMap<String, String>) -> Self {
+        GeoParquetReadOptions {
+            inner: ParquetReadOptions::default(),
+            table_options: Some(options),
+        }
     }
 }
 
@@ -93,8 +102,15 @@ impl ReadOptions<'_> for GeoParquetReadOptions<'_> {
     fn to_listing_options(
         &self,
         config: &SessionConfig,
-        table_options: TableOptions,
+        mut table_options: TableOptions,
     ) -> ListingOptions {
+        // Merge custom table options if provided
+        if let Some(ref custom_options) = self.table_options {
+            for (key, value) in custom_options {
+                let _ = table_options.set(key, value);
+            }
+        }
+
         let mut options = self.inner.to_listing_options(config, table_options);
         if let Some(parquet_format) = options.format.as_any().downcast_ref::<ParquetFormat>() {
             options.format = Arc::new(GeoParquetFormat::new(parquet_format));

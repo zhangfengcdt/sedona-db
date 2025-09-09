@@ -226,11 +226,12 @@ impl SedonaContext {
     pub async fn read_parquet<P: DataFilePaths>(
         &self,
         table_paths: P,
-        options: GeoParquetReadOptions<'_>,
+        options: HashMap<String, String>,
     ) -> Result<DataFrame> {
         let urls = table_paths.to_urls()?;
+        let geo_options = GeoParquetReadOptions::from_table_options(options);
         let provider =
-            match geoparquet_listing_table(&self.ctx, urls.clone(), options.clone()).await {
+            match geoparquet_listing_table(&self.ctx, urls.clone(), geo_options.clone()).await {
                 Ok(provider) => provider,
                 Err(e) => {
                     if urls.is_empty() {
@@ -238,7 +239,7 @@ impl SedonaContext {
                     }
 
                     ensure_object_store_registered(&mut self.ctx.state(), urls[0].as_str()).await?;
-                    geoparquet_listing_table(&self.ctx, urls, options).await?
+                    geoparquet_listing_table(&self.ctx, urls, geo_options).await?
                 }
             };
 

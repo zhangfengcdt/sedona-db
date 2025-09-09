@@ -14,7 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use pyo3::prelude::*;
 use sedona::context::SedonaContext;
@@ -74,11 +74,29 @@ impl InternalContext {
         &self,
         py: Python<'py>,
         table_paths: Vec<String>,
+        options: HashMap<String, PyObject>,
     ) -> Result<InternalDataFrame, PySedonaError> {
+        // Convert Python options dict to Rust HashMap<String, String>
+        let rust_options: HashMap<String, String> = options
+            .into_iter()
+            .map(|(k, v)| {
+                let v_str = if v.is_none(py) {
+                    String::new()
+                } else {
+                    // Convert PyObject to string
+                    match v.call_method0(py, "__str__") {
+                        Ok(str_obj) => str_obj.extract::<String>(py)?,
+                        Err(_) => v.extract::<String>(py)?,
+                    }
+                };
+                Ok((k, v_str))
+            })
+            .collect::<Result<HashMap<String, String>, PySedonaError>>()?;
+
         let df = wait_for_future(
             py,
             &self.runtime,
-            self.inner.read_parquet(table_paths, Default::default()),
+            self.inner.read_parquet(table_paths, rust_options),
         )??;
         Ok(InternalDataFrame::new(df, self.runtime.clone()))
     }
