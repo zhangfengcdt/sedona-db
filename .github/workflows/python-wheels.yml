@@ -21,7 +21,7 @@ on:
     branches:
       - main
     paths:
-      - 'ci/scripts/**'
+      - 'ci/scripts/wheels-*'
       - '.github/workflows/python-wheels.yml'
   push:
     branches:
@@ -48,6 +48,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: 'true'
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -67,6 +68,10 @@ jobs:
           repository: microsoft/vcpkg
           ref: ${{ env.VCPKG_REF }}
           path: vcpkg
+
+      - name: Set SedonaDB dev version
+        run: |
+          python ci/scripts/set_dev_version.py
 
       - name: Build and test wheels (sedonadb)
         run: |
@@ -93,6 +98,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: 'true'
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -112,6 +118,10 @@ jobs:
           repository: microsoft/vcpkg
           ref: ${{ env.VCPKG_REF }}
           path: vcpkg
+
+      - name: Set SedonaDB dev version
+        run: |
+          python ci/scripts/set_dev_version.py
 
       - name: Build and test wheels (sedonadb)
         run: |
@@ -141,6 +151,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: 'true'
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -148,6 +159,10 @@ jobs:
 
       - name: Install cibuildwheel
         run: python -m pip install cibuildwheel==3.1.4
+
+      - name: Set SedonaDB dev version
+        run: |
+          python ci/scripts/set_dev_version.py
 
       - name: Build and test wheels (sedonadb)
         run: |
@@ -190,4 +205,4 @@ jobs:
             --as="sedona-nightlies" \
             dist/*
         env:
-          NANOARROW_GEMFURY_TOKEN: ${{ secrets.GEMFURY_PUSH_TOKEN }}
+          GEMFURY_PUSH_TOKEN: ${{ secrets.GEMFURY_PUSH_TOKEN }}
