@@ -76,19 +76,18 @@ impl InternalContext {
         table_paths: Vec<String>,
         options: HashMap<String, PyObject>,
     ) -> Result<InternalDataFrame, PySedonaError> {
-        // Convert Python options dict to Rust HashMap<String, String>
+        // Convert Python options to strings, filtering out None values
         let rust_options: HashMap<String, String> = options
             .into_iter()
             .filter_map(|(k, v)| {
                 if v.is_none(py) {
-                    None // Filter out None values
+                    None
                 } else {
-                    // Convert PyObject to string
-                    let v_str = match v.call_method0(py, "__str__") {
-                        Ok(str_obj) => str_obj.extract::<String>(py).ok(),
-                        Err(_) => v.extract::<String>(py).ok(),
-                    };
-                    v_str.map(|s| (k, s))
+                    v.bind(py)
+                        .str()
+                        .and_then(|s| s.extract())
+                        .map(|s: String| (k, s))
+                        .ok()
                 }
             })
             .collect();
