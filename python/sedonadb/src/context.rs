@@ -85,8 +85,18 @@ impl InternalContext {
                 } else {
                     // Convert PyObject to string
                     match v.call_method0(py, "__str__") {
-                        Ok(str_obj) => str_obj.extract::<String>(py)?,
-                        Err(_) => v.extract::<String>(py)?,
+                        Ok(str_obj) => str_obj.extract::<String>(py)
+                            .map_err(|e| PySedonaError::SedonaPython(format!(
+                                "Failed to convert option '{}' __str__ result to string: {}", k, e
+                            )))?,
+                        Err(str_err) => {
+                            // Fallback to direct string extraction
+                            v.extract::<String>(py)
+                                .map_err(|extract_err| PySedonaError::SedonaPython(format!(
+                                    "Failed to convert option '{}' to string: __str__ failed ({}), direct extraction failed ({})",
+                                    k, str_err, extract_err
+                                )))?
+                        }
                     }
                 };
                 Ok((k, v_str))

@@ -67,7 +67,7 @@ def test_read_parquet_options_type_conversion():
             assert df.count() > 0  # Basic sanity check
         except Exception as e:
             # If it fails, it should not be due to type conversion issues
-            assert "type" not in str(e).lower() or "convert" not in str(e).lower()
+            assert "type" not in str(e).lower() and "convert" not in str(e).lower()
 
 
 @pytest.mark.parametrize(
