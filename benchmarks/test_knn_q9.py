@@ -13,14 +13,14 @@ import sedonadb as sd
 
 def test_knn_execution_timing():
 
-    data_path = "/Users/feng/temp/SpatialBench_sf=1_format=parquet"
+    data_path = "s3://wherobots-benchmark-prod/SpatialBench_sf=1_format=parquet"
     
-    if not os.path.exists(data_path):
-        print(f"❌ Data not found at {data_path}")
-        return 1
+    # if not os.path.exists(data_path):
+    #     print(f"❌ Data not found at {data_path}")
+    #     return 1
         
-    building_path = f"{data_path}/building/*.parquet"
-    trip_path = f"{data_path}/trip/*.parquet"
+    building_path = f"{data_path}/building/"
+    trip_path = f"{data_path}/trip/"
     
     print("🧪 Testing KNN Execution Timing (including .count())")
     print()
@@ -29,11 +29,11 @@ def test_knn_execution_timing():
     ctx = sd.connect()
     
     # Load limited data for testing
-    building_df = ctx.read_parquet(building_path)
+    building_df = ctx.read_parquet(building_path, options={"aws.skip_signature": True, "aws.region": "us-west-2"})
     building_df.to_view('buildings', overwrite=True)
 
     # Load all trips first, then use SQL to get specific trip (avoiding .limit() bug)
-    all_trips_df = ctx.read_parquet(trip_path)
+    all_trips_df = ctx.read_parquet(trip_path, options={"aws.skip_signature": True, "aws.region": "us-west-2"})
     all_trips_df.to_view('all_trips', overwrite=True)
     
     # Get specific trip using SQL to avoid .limit() issues
