@@ -6,8 +6,8 @@ import os
 import sys
 import time
 
-# Add the project root to Python path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Use the installed sedonadb package (via maturin develop)
+# sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import sedonadb as sd
 
@@ -38,7 +38,7 @@ def test_knn_execution_timing():
     
     # Get specific trip using SQL to avoid .limit() issues
     # trip_df = ctx.sql("SELECT * FROM all_trips WHERE t_tripkey = 1")
-    trip_df = ctx.sql("SELECT * FROM all_trips LIMIT 1000")
+    trip_df = ctx.sql("SELECT * FROM all_trips LIMIT 100000")
     trip_df.to_view('trips', overwrite=True)
     # print(trip_df.to_pandas())
     
