@@ -236,7 +236,9 @@ impl SpatialIndexBuilder {
     }
 
     /// Build cached geometries and positions for KNN queries to avoid repeated WKB conversions
-    fn build_cached_geometries(indexed_batches: &[IndexedBatch]) -> (Vec<Geometry<f64>>, Vec<(i32, i32)>) {
+    fn build_cached_geometries(
+        indexed_batches: &[IndexedBatch],
+    ) -> (Vec<Geometry<f64>>, Vec<(i32, i32)>) {
         let mut geometries = Vec::new();
         let mut geometry_positions = Vec::new();
 
@@ -291,7 +293,8 @@ impl SpatialIndexBuilder {
                 .unwrap();
 
         // Pre-compute geometries for KNN queries to avoid repeated WKB-to-geometry conversions
-        let (cached_geometries, cached_geometry_positions) = Self::build_cached_geometries(&self.indexed_batches);
+        let (cached_geometries, cached_geometry_positions) =
+            Self::build_cached_geometries(&self.indexed_batches);
 
         Ok(SpatialIndex {
             schema,
@@ -359,7 +362,7 @@ pub(crate) struct SpatialIndex {
     /// Cached vector of geometries for KNN queries to avoid repeated WKB-to-geometry conversions
     /// This is computed once during index building for performance optimization
     cached_geometries: Vec<Geometry<f64>>,
-    
+
     /// Cached position mapping for geometries to avoid recomputing during KNN queries
     /// Maps geometry index to (batch_idx, row_idx) pairs
     cached_geometry_positions: Vec<(i32, i32)>,
@@ -567,7 +570,7 @@ impl SpatialIndex {
             Some(k as usize),
             None, // no max_distance filter
             distance_metric.as_ref(),
-            &geometries,
+            geometries,
         );
 
         if initial_results.is_empty() {

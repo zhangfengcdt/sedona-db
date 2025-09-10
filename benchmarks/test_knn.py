@@ -35,7 +35,7 @@ class TestBenchKNN(TestBenchBase):
             "size_range": [0.001, 0.01],  # Small building-sized polygons
             "seed": 42,
         }
-        
+
         building_query = f"""
             SELECT
                 geometry as geom,
@@ -46,13 +46,13 @@ class TestBenchKNN(TestBenchBase):
         building_tab = self.sedonadb.execute_and_collect(building_query)
         self.sedonadb.create_table_arrow("knn_buildings", building_tab)
 
-        # Create trip pickup points (probe side - many small geometries)  
+        # Create trip pickup points (probe side - many small geometries)
         trip_options = {
             "geom_type": "Point",
             "target_rows": 10_000,  # Reduced size to avoid partition issues
             "seed": 43,
         }
-        
+
         trip_query = f"""
             SELECT
                 geometry as geom,
@@ -63,14 +63,14 @@ class TestBenchKNN(TestBenchBase):
         self.sedonadb.create_table_arrow("knn_trips", trip_tab)
 
         # Create a smaller test dataset for quick tests
-        small_building_query = f"""
+        small_building_query = """
             SELECT * FROM knn_buildings LIMIT 1000
         """
         small_building_tab = self.sedonadb.execute_and_collect(small_building_query)
         self.sedonadb.create_table_arrow("knn_buildings_small", small_building_tab)
-        
-        small_trip_query = f"""
-            SELECT * FROM knn_trips LIMIT 5000  
+
+        small_trip_query = """
+            SELECT * FROM knn_trips LIMIT 5000
         """
         small_trip_tab = self.sedonadb.execute_and_collect(small_trip_query)
         self.sedonadb.create_table_arrow("knn_trips_small", small_trip_tab)
@@ -80,7 +80,7 @@ class TestBenchKNN(TestBenchBase):
     @pytest.mark.parametrize("dataset_size", ["small", "large"])
     def test_knn_performance(self, benchmark, k, use_spheroid, dataset_size):
         """Benchmark KNN query performance with different parameters"""
-        
+
         if dataset_size == "small":
             trip_table = "knn_trips_small"
             building_table = "knn_buildings_small"
@@ -89,7 +89,7 @@ class TestBenchKNN(TestBenchBase):
             trip_table = "knn_trips_small"  # Use small table to avoid partition issues
             building_table = "knn_buildings"
             trip_limit = 500  # Reduced to avoid DataFusion partition issues
-            
+
         spheroid_str = "TRUE" if use_spheroid else "FALSE"
 
         def run_knn_query():
@@ -103,7 +103,7 @@ class TestBenchKNN(TestBenchBase):
                     SELECT building_id, name, geom as building_geom
                     FROM {building_table}
                 )
-                SELECT 
+                SELECT
                     t.trip_id,
                     b.building_id,
                     b.name,
@@ -117,15 +117,17 @@ class TestBenchKNN(TestBenchBase):
 
         # Run the benchmark
         result_count = benchmark(run_knn_query)
-        
+
         # Verify we got the expected number of results (trips * k)
         expected_count = trip_limit * k
-        assert result_count == expected_count, f"Expected {expected_count} results, got {result_count}"
+        assert result_count == expected_count, (
+            f"Expected {expected_count} results, got {result_count}"
+        )
 
     @pytest.mark.parametrize("k", [1, 5, 10, 20])
     def test_knn_scalability_by_k(self, benchmark, k):
         """Test how KNN performance scales with increasing k values"""
-        
+
         def run_knn_query():
             query = f"""
                 WITH trip_sample AS (
@@ -133,58 +135,62 @@ class TestBenchKNN(TestBenchBase):
                     FROM knn_trips_small
                     LIMIT 50  -- Small sample for k scaling test
                 )
-                SELECT 
+                SELECT
                     COUNT(*) as result_count
                 FROM trip_sample t
                 JOIN knn_buildings_small b ON ST_KNN(t.trip_geom, b.geom, {k}, FALSE)
             """
             result = self.sedonadb.execute_and_collect(query)
-            return result.to_pandas().iloc[0]['result_count']
+            return result.to_pandas().iloc[0]["result_count"]
 
         result_count = benchmark(run_knn_query)
         expected_count = 50 * k  # 50 trips * k neighbors each
-        assert result_count == expected_count, f"Expected {expected_count} results, got {result_count}"
+        assert result_count == expected_count, (
+            f"Expected {expected_count} results, got {result_count}"
+        )
 
     def test_knn_correctness(self):
         """Verify KNN returns results in correct distance order"""
-        
+
         # Test with a known point and verify ordering
         query = """
             WITH test_point AS (
                 SELECT ST_Point(0.0, 0.0) as query_geom
             )
-            SELECT 
+            SELECT
                 ST_Distance(test_point.query_geom, b.geom) as distance,
                 b.building_id
             FROM test_point
             JOIN knn_buildings_small b ON ST_KNN(test_point.query_geom, b.geom, 5, FALSE)
             ORDER BY distance
         """
-        
+
         result = self.sedonadb.execute_and_collect(query).to_pandas()
-        
+
         # Verify we got 5 results
         assert len(result) == 5, f"Expected 5 results, got {len(result)}"
-        
+
         # Verify distances are in ascending order
-        distances = result['distance'].tolist()
-        assert distances == sorted(distances), f"Results not ordered by distance: {distances}"
-        
+        distances = result["distance"].tolist()
+        assert distances == sorted(distances), (
+            f"Results not ordered by distance: {distances}"
+        )
+
         # Verify all distances are non-negative
         assert all(d >= 0 for d in distances), f"Found negative distances: {distances}"
 
     def test_knn_tie_breaking(self):
         """Test KNN behavior with tie-breaking when geometries have equal distances"""
-        
+
         # Create test data with known equal distances
         setup_query = """
             WITH test_points AS (
                 SELECT 1 as id, ST_Point(1.0, 0.0) as geom
                 UNION ALL
-                SELECT 2 as id, ST_Point(-1.0, 0.0) as geom  
+                SELECT 2 as id, ST_Point(-1.0, 0.0) as geom
                 UNION ALL
                 SELECT 3 as id, ST_Point(0.0, 1.0) as geom
-                UNION ALL 
+                UNION ALL
                 SELECT 4 as id, ST_Point(0.0, -1.0) as geom
                 UNION ALL
                 SELECT 5 as id, ST_Point(2.0, 0.0) as geom
@@ -193,25 +199,27 @@ class TestBenchKNN(TestBenchBase):
         """
         tie_test_tab = self.sedonadb.execute_and_collect(setup_query)
         self.sedonadb.create_table_arrow("knn_tie_test", tie_test_tab)
-        
+
         # Query for 2 nearest neighbors from origin - should get 2 of the 4 equidistant points
         query = """
             WITH query_point AS (
                 SELECT ST_Point(0.0, 0.0) as geom
             )
-            SELECT 
+            SELECT
                 t.id,
                 ST_Distance(query_point.geom, t.geom) as distance
             FROM query_point
             JOIN knn_tie_test t ON ST_KNN(query_point.geom, t.geom, 2, FALSE)
             ORDER BY distance, t.id
         """
-        
+
         result = self.sedonadb.execute_and_collect(query).to_pandas()
-        
+
         # Should get exactly 2 results
         assert len(result) == 2, f"Expected 2 results, got {len(result)}"
-        
+
         # Both should be at distance 1.0 (the 4 equidistant points)
-        distances = result['distance'].tolist()
-        assert all(abs(d - 1.0) < 1e-6 for d in distances), f"Expected distances ~1.0, got {distances}"
+        distances = result["distance"].tolist()
+        assert all(abs(d - 1.0) < 1e-6 for d in distances), (
+            f"Expected distances ~1.0, got {distances}"
+        )
