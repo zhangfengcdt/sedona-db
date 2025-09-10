@@ -237,6 +237,13 @@ impl SedonaContext {
             use crate::object_storage::ensure_object_store_registered_with_options;
             // Extract the table options from GeoParquetReadOptions for object store registration
             let table_options_map = options.table_options().cloned().unwrap_or_default();
+            
+            // TODO: Consider registering object stores per-bucket instead of per-scheme to avoid
+            // authentication conflicts. Currently, if a user first accesses a public S3 bucket with
+            // aws.skip_signature=true and then tries to access a private bucket, the cached object
+            // store will still have skip_signature enabled, preventing authentication to the private
+            // bucket. A per-bucket registration approach would solve this by using bucket-specific
+            // cache keys like "s3://bucket-name" instead of just "s3://".
             ensure_object_store_registered_with_options(
                 &mut self.ctx.state(),
                 urls[0].as_str(),
