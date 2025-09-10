@@ -33,7 +33,7 @@ use futures::StreamExt;
 use geo_index::rtree::distance::{DistanceMetric, EuclideanDistance, HaversineDistance};
 use geo_index::rtree::{sort::HilbertSort, RTree, RTreeBuilder, RTreeIndex};
 use geo_index::IndexableNum;
-use geo_types::{Point, Rect};
+use geo_types::{Geometry, Point, Rect};
 use parking_lot::Mutex;
 use sedona_expr::statistics::GeoStatistics;
 use sedona_functions::st_analyze_aggr::AnalyzeAccumulator;
@@ -495,7 +495,7 @@ impl SpatialIndex {
             });
         }
 
-        // Convert probe WKB to geo::Geometry for centroid calculation
+        // Convert probe WKB to geo::Geometry
         let probe_geom = match item_to_geometry(probe_wkb) {
             Ok(geom) => geom,
             Err(_) => {
@@ -507,107 +507,161 @@ impl SpatialIndex {
             }
         };
 
-        // Use geometry centroid as the query point for RTree KNN search
-        use geo_generic_alg::algorithm::Centroid;
-        let probe_centroid = probe_geom.centroid().unwrap_or(Point::new(0.0, 0.0));
-        let query_point = geo_types::Coord {
-            x: probe_centroid.x() as f32,
-            y: probe_centroid.y() as f32,
-        };
+        // Create a vector of geometries for all indexed items
+        let mut geometries: Vec<Geometry<f64>> = Vec::new();
+        let mut geometry_to_position: Vec<(i32, i32)> = Vec::new();
 
-        // Choose distance metric based on use_spheroid parameter
-        let distance_metric: Box<dyn DistanceMetric<f32>> = if use_spheroid {
-            Box::new(HaversineDistance::default())
-        } else {
-            Box::new(EuclideanDistance)
-        };
+        for (batch_idx, indexed_batch) in self.indexed_batches.iter().enumerate() {
+            for (row_idx, wkb_opt) in indexed_batch.geom_array.wkbs().iter().enumerate() {
+                if let Some(wkb) = wkb_opt.as_ref() {
+                    if let Ok(geom) = item_to_geometry(wkb) {
+                        geometries.push(geom);
+                        geometry_to_position.push((batch_idx as i32, row_idx as i32));
+                    }
+                }
+            }
+        }
 
-        // First, do a broader search to get candidates, then refine with exact distance calculation
-        // Use a reasonable search radius to get more candidates than we need
-        // We'll calculate exact distances and sort later
-        let search_radius = 10000.0f32; // Large initial search radius
-        
-        let candidates = self.rtree.search(
-            query_point.x - search_radius,
-            query_point.y - search_radius,
-            query_point.x + search_radius,
-            query_point.y + search_radius,
-        );
-
-        if candidates.is_empty() {
+        if geometries.is_empty() {
             return Ok(JoinResultMetrics {
                 count: 0,
                 candidate_count: 0,
             });
         }
 
-        // Convert data_ids to batch positions and calculate exact distances for all candidates
-        let mut candidates_with_distances: Vec<(f64, (i32, i32))> = Vec::new();
-        
-        for &data_id in &candidates {
-            if let Some(&batch_pos) = self.data_id_to_batch_pos.get(data_id as usize) {
-                let (batch_idx, row_idx) = batch_pos;
-                
-                // Get the actual geometry for exact distance calculation
-                if let Some(indexed_batch) = self.indexed_batches.get(batch_idx as usize) {
-                    if let Some(Some(candidate_wkb)) = indexed_batch.geom_array.wkbs().get(row_idx as usize) {
-                        if let Ok(candidate_geom) = item_to_geometry(candidate_wkb) {
-                            // Calculate exact distance using the specified distance metric
-                            let distance = if use_spheroid {
-                                // For spheroid distance, use Haversine formula
-                                distance_metric.geometry_to_geometry_distance(&probe_geom, &candidate_geom)
-                                    .to_f64().unwrap_or(f64::MAX)
-                            } else {
-                                // For planar distance, use Euclidean
-                                distance_metric.geometry_to_geometry_distance(&probe_geom, &candidate_geom)
-                                    .to_f64().unwrap_or(f64::MAX)
-                            };
-                            
-                            candidates_with_distances.push((distance, (batch_idx, row_idx)));
-                        }
+        // Choose distance metric based on use_spheroid parameter
+        let distance_metric: Box<dyn DistanceMetric<f32>> = if use_spheroid {
+            // For spheroid (geodesic) distance, we use the Haversine formula as an approximation for now.
+            // The distance metric will be used to calculate distances between geometries for ranking purposes.
+            Box::new(HaversineDistance::default())
+        } else {
+            Box::new(EuclideanDistance)
+        };
+
+        // Use neighbors_geometry to find k nearest neighbors
+        let initial_results = self.rtree.neighbors_geometry(
+            &probe_geom,
+            Some(k as usize),
+            None, // no max_distance filter
+            distance_metric.as_ref(),
+            &geometries,
+        );
+
+        if initial_results.is_empty() {
+            return Ok(JoinResultMetrics {
+                count: 0,
+                candidate_count: 0,
+            });
+        }
+
+        let mut final_results = initial_results;
+        let mut candidate_count = final_results.len();
+
+        // Handle tie-breakers if enabled
+        if include_tie_breakers && !final_results.is_empty() && k > 0 {
+            // Calculate distances for the initial k results to find the k-th distance
+            let mut distances_with_indices: Vec<(f64, u32)> = Vec::new();
+
+            for &result_idx in &final_results {
+                if (result_idx as usize) < geometries.len() {
+                    let distance = distance_metric.geometry_to_geometry_distance(
+                        &probe_geom,
+                        &geometries[result_idx as usize],
+                    );
+                    if let Some(distance_f64) = distance.to_f64() {
+                        distances_with_indices.push((distance_f64, result_idx));
                     }
                 }
             }
-        }
 
-        // Sort by distance
-        candidates_with_distances.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            // Sort by distance
+            distances_with_indices
+                .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-        let mut final_results = Vec::new();
-        let candidate_count = candidates_with_distances.len();
+            // Find the k-th distance (if we have at least k results)
+            if distances_with_indices.len() >= k as usize {
+                let k_idx = (k as usize)
+                    .min(distances_with_indices.len())
+                    .saturating_sub(1);
+                let max_distance = distances_with_indices[k_idx].0;
 
-        // Handle tie-breakers if enabled
-        if include_tie_breakers && candidates_with_distances.len() >= k as usize {
-            // Find the k-th distance for tie-breaking
-            let k_idx = (k as usize).min(candidates_with_distances.len()).saturating_sub(1);
-            let k_th_distance = candidates_with_distances[k_idx].0;
-            
-            const DISTANCE_TOLERANCE: f64 = 1e-9;
-            
-            // Include all results up to k, plus any additional results with the same distance as the k-th
-            for (i, &(distance, batch_pos)) in candidates_with_distances.iter().enumerate() {
-                if i < k as usize {
-                    // Include the first k results
-                    final_results.push(batch_pos);
-                } else if (distance - k_th_distance).abs() <= DISTANCE_TOLERANCE {
-                    // Include tie-breakers (same distance as k-th result)
-                    final_results.push(batch_pos);
-                } else {
-                    // No more ties, stop
-                    break;
+                // For tie-breakers, create spatial envelope around probe centroid and use rtree.search()
+                use geo_generic_alg::algorithm::Centroid;
+                let probe_centroid = probe_geom.centroid().unwrap_or(Point::new(0.0, 0.0));
+                let probe_x = probe_centroid.x() as f32;
+                let probe_y = probe_centroid.y() as f32;
+                let max_distance_f32 = match f32::from_f64(max_distance) {
+                    Some(val) => val,
+                    None => {
+                        // If conversion fails, return empty results for this probe
+                        return Ok(JoinResultMetrics {
+                            count: 0,
+                            candidate_count: 0,
+                        });
+                    }
+                };
+
+                // Create envelope bounds around probe centroid
+                let min_x = probe_x - max_distance_f32;
+                let min_y = probe_y - max_distance_f32;
+                let max_x = probe_x + max_distance_f32;
+                let max_y = probe_y + max_distance_f32;
+
+                // Use rtree.search() with envelope bounds (like the old code)
+                let expanded_results = self.rtree.search(min_x, min_y, max_x, max_y);
+
+                candidate_count = expanded_results.len();
+
+                // Calculate distances for all results and find ties
+                let mut all_distances_with_indices: Vec<(f64, u32)> = Vec::new();
+
+                for &result_idx in &expanded_results {
+                    if (result_idx as usize) < geometries.len() {
+                        let distance = distance_metric.geometry_to_geometry_distance(
+                            &probe_geom,
+                            &geometries[result_idx as usize],
+                        );
+                        if let Some(distance_f64) = distance.to_f64() {
+                            all_distances_with_indices.push((distance_f64, result_idx));
+                        }
+                    }
                 }
+
+                // Sort by distance
+                all_distances_with_indices
+                    .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+                // Include all results up to and including those with the same distance as the k-th result
+                const DISTANCE_TOLERANCE: f64 = 1e-9;
+                let mut tie_breaker_results: Vec<u32> = Vec::new();
+
+                for (i, &(distance, result_idx)) in all_distances_with_indices.iter().enumerate() {
+                    if i < k as usize {
+                        // Include the first k results
+                        tie_breaker_results.push(result_idx);
+                    } else if (distance - max_distance).abs() <= DISTANCE_TOLERANCE {
+                        // Include tie-breakers (same distance as k-th result)
+                        tie_breaker_results.push(result_idx);
+                    } else {
+                        // No more ties, stop
+                        break;
+                    }
+                }
+
+                final_results = tie_breaker_results;
             }
         } else {
             // When tie-breakers are disabled, limit results to exactly k
-            let take_count = std::cmp::min(k as usize, candidates_with_distances.len());
-            for i in 0..take_count {
-                final_results.push(candidates_with_distances[i].1);
+            if final_results.len() > k as usize {
+                final_results.truncate(k as usize);
             }
         }
 
-        // Add final results to build_batch_positions
-        for batch_pos in final_results.iter() {
-            build_batch_positions.push(*batch_pos);
+        // Convert results to build_batch_positions
+        for &result_idx in &final_results {
+            if (result_idx as usize) < geometry_to_position.len() {
+                build_batch_positions.push(geometry_to_position[result_idx as usize]);
+            }
         }
 
         Ok(JoinResultMetrics {

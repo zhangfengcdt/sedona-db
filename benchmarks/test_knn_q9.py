@@ -13,8 +13,6 @@ import sedonadb as sd
 
 def test_knn_execution_timing():
 
-    trips_processed = 1
-
     data_path = "/Users/feng/temp/SpatialBench_sf=1_format=parquet"
     
     if not os.path.exists(data_path):
@@ -33,9 +31,16 @@ def test_knn_execution_timing():
     # Load limited data for testing
     building_df = ctx.read_parquet(building_path)
     building_df.to_view('buildings', overwrite=True)
+
+    # Load all trips first, then use SQL to get specific trip (avoiding .limit() bug)
+    all_trips_df = ctx.read_parquet(trip_path)
+    all_trips_df.to_view('all_trips', overwrite=True)
     
-    trip_df = ctx.read_parquet(trip_path).limit(trips_processed)
+    # Get specific trip using SQL to avoid .limit() issues
+    # trip_df = ctx.sql("SELECT * FROM all_trips WHERE t_tripkey = 1")
+    trip_df = ctx.sql("SELECT * FROM all_trips LIMIT 1000")
     trip_df.to_view('trips', overwrite=True)
+    # print(trip_df.to_pandas())
     
     print(f"✅ Loaded {building_df.count():,} buildings and {trip_df.count():,} trips")
     print()
@@ -52,53 +57,19 @@ def test_knn_execution_timing():
     """
     
     print("🔄 Running Q9 query and measuring execution time...")
-    
+
     # Measure the actual execution (what you suggested)
     start_time = time.time()
     result = ctx.sql(q9_query)
     result_count = result.count()
     execution_time = time.time() - start_time
-    
-    per_trip_ms = (execution_time / trips_processed)
-    trips_per_sec = trips_processed / execution_time
-    expected_results = trips_processed * 5
-    
-    print(f"⏱️  Total execution time: {execution_time:.3f}s")
-    print(f"📊 Results returned: {result_count:,} (expected: {expected_results:,})")
-    print(f"⚡ Per trip: {per_trip_ms:.2f}ms")
-    print(f"🔥 Throughput: {trips_per_sec:.1f} trips/second")
-    print()
-    
-    # Extrapolate to full dataset
-    full_trip_count = 6_000_000  # Full SpatialBench dataset
-    projected_time_seconds = (per_trip_ms / 1000) * full_trip_count
-    projected_hours = projected_time_seconds / 3600
-    projected_minutes = projected_time_seconds / 60
-    
-    print("🔮 Full Q9 Performance Projection:")
-    print(f"📊 Dataset: {full_trip_count:,} trips × k=5 = {full_trip_count * 5:,} KNN results")
-    
-    if projected_hours < 1:
-        time_str = f"{projected_minutes:.1f} minutes"
-        assessment = "🚀 EXCELLENT" if projected_minutes < 60 else "✅ GOOD"
-    else:
-        time_str = f"{projected_hours:.1f} hours"
-        assessment = "⚠️ SLOW" if projected_hours > 2 else "✅ ACCEPTABLE"
-    
-    print(f"⏱️  Estimated time: {time_str}")
-    print(f"🎯 Assessment: {assessment}")
-    
-    print()
-    print("🎯 Key Findings:")
-    if per_trip_ms < 1:
-        print("   🚀 Excellent KNN performance - optimization is working perfectly!")
-    elif per_trip_ms < 10:
-        print("   ✅ Good KNN performance - clear optimization benefits")
-    elif per_trip_ms < 50:
-        print("   ⚠️  Moderate performance - there may be additional bottlenecks")
-    else:
-        print("   ❌ Slow performance - optimization may not be fully effective")
-    
+
+    # Convert the result to a Pandas DataFrame and print it
+    # result_df = result.to_pandas()
+    # print(result_df)
+
+    print(f"⏱️  Total execution time: {execution_time:.3f}s for {result_count:,} results")
+
     return 0
 
 if __name__ == "__main__":
