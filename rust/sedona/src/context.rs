@@ -19,7 +19,6 @@ use std::{collections::VecDeque, sync::Arc};
 use crate::exec::create_plan_from_sql;
 use crate::{
     catalog::DynamicObjectStoreCatalog,
-    object_storage::ensure_object_store_registered,
     random_geometry_provider::RandomGeometryFunction,
     show::{show_batches, DisplayTableOptions},
 };
@@ -220,18 +219,28 @@ impl SedonaContext {
         options: GeoParquetReadOptions<'_>,
     ) -> Result<DataFrame> {
         let urls = table_paths.to_urls()?;
-        let provider =
-            match geoparquet_listing_table(&self.ctx, urls.clone(), options.clone()).await {
-                Ok(provider) => provider,
-                Err(e) => {
-                    if urls.is_empty() {
-                        return Err(e);
-                    }
 
-                    ensure_object_store_registered(&mut self.ctx.state(), urls[0].as_str()).await?;
-                    geoparquet_listing_table(&self.ctx, urls, options).await?
-                }
-            };
+        // Pre-register object store with our custom options before creating GeoParquetReadOptions
+        if !urls.is_empty() {
+            use crate::object_storage::ensure_object_store_registered_with_options;
+            // Extract the table options from GeoParquetReadOptions for object store registration
+            let table_options_map = options.table_options().cloned().unwrap_or_default();
+
+            // TODO: Consider registering object stores per-bucket instead of per-scheme to avoid
+            // authentication conflicts. Currently, if a user first accesses a public S3 bucket with
+            // aws.skip_signature=true and then tries to access a private bucket, the cached object
+            // store will still have skip_signature enabled, preventing authentication to the private
+            // bucket. A per-bucket registration approach would solve this by using bucket-specific
+            // cache keys like "s3://bucket-name" instead of just "s3://".
+            ensure_object_store_registered_with_options(
+                &mut self.ctx.state(),
+                urls[0].as_str(),
+                Some(&table_options_map),
+            )
+            .await?;
+        }
+
+        let provider = geoparquet_listing_table(&self.ctx, urls, options).await?;
 
         self.ctx.read_table(Arc::new(provider))
     }
