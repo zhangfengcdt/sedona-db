@@ -94,9 +94,7 @@ impl InternalContext {
 
         let geo_options =
             sedona_geoparquet::provider::GeoParquetReadOptions::from_table_options(rust_options)
-                .map_err(|e| {
-                    PySedonaError::SedonaPython(format!("Invalid table options: {}", e))
-                })?;
+                .map_err(|e| PySedonaError::SedonaPython(format!("Invalid table options: {e}")))?;
         let df = wait_for_future(
             py,
             &self.runtime,
