@@ -438,6 +438,7 @@ impl FileSource for GeoParquetFileSource {
             self.metadata_size_hint,
             self.predicate.clone().unwrap(),
             base_config.file_schema.clone(),
+            self.inner.table_parquet_options().global.pruning,
         ))
     }
 
@@ -678,7 +679,7 @@ mod test {
 
     #[rstest]
     #[tokio::test]
-    async fn pruning_geoparquet_metadata(#[values("st_intersects", "st_within")] udf_name: &str) {
+    async fn pruning_geoparquet_metadata(#[values("st_intersects", "st_contains")] udf_name: &str) {
         let data_dir = geoarrow_data_dir().unwrap();
         let ctx = setup_context();
 
@@ -690,10 +691,8 @@ mod test {
         )
         .into();
 
-        let definitely_non_intersecting_scalar = create_scalar(
-            Some("POLYGON ((100 200), (100 300), (200 300), (100 200))"),
-            &WKB_GEOMETRY,
-        );
+        let definitely_non_intersecting_scalar =
+            create_scalar(Some("POINT (100 200)"), &WKB_GEOMETRY);
         let storage_field = WKB_GEOMETRY.to_storage_field("", true).unwrap();
 
         let df = ctx
@@ -712,10 +711,7 @@ mod test {
         let batches_out = df.collect().await.unwrap();
         assert!(batches_out.is_empty());
 
-        let definitely_intersecting_scalar = create_scalar(
-            Some("POLYGON ((30 10), (30 20), (40 20), (40 10), (30 10))"),
-            &WKB_GEOMETRY,
-        );
+        let definitely_intersecting_scalar = create_scalar(Some("POINT (30 10)"), &WKB_GEOMETRY);
         let df = ctx
             .table(format!("{data_dir}/example/files/*_geo.parquet"))
             .await
@@ -729,6 +725,46 @@ mod test {
             ]))
             .unwrap();
 
+        let batches_out = df.collect().await.unwrap();
+        assert!(!batches_out.is_empty());
+    }
+
+    #[tokio::test]
+    async fn should_not_prune_geoparquet_metadata_after_disabling_pruning() {
+        let data_dir = geoarrow_data_dir().unwrap();
+        let ctx = setup_context();
+        ctx.sql("SET datafusion.execution.parquet.pruning TO false")
+            .await
+            .expect("Disabling parquet pruning failed");
+
+        let udf: ScalarUDF = SimpleScalarUDF::new_with_signature(
+            "st_intersects",
+            Signature::any(2, Volatility::Immutable),
+            DataType::Boolean,
+            Arc::new(|_args| Ok(ScalarValue::Boolean(Some(true)).into())),
+        )
+        .into();
+
+        let definitely_non_intersecting_scalar =
+            create_scalar(Some("POINT (100 200)"), &WKB_GEOMETRY);
+        let storage_field = WKB_GEOMETRY.to_storage_field("", true).unwrap();
+
+        let df = ctx
+            .table(format!("{data_dir}/example/files/*_geo.parquet"))
+            .await
+            .unwrap()
+            .filter(udf.call(vec![
+                col("geometry"),
+                Expr::Literal(
+                    definitely_non_intersecting_scalar,
+                    Some(storage_field.metadata().into()),
+                ),
+            ]))
+            .unwrap();
+
+        // Even if the query window does not intersect with the data, we should not prune
+        // any files because pruning has been disabled. We can retrieve the data here
+        // because the dummy UDF always returns true.
         let batches_out = df.collect().await.unwrap();
         assert!(!batches_out.is_empty());
     }

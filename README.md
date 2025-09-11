@@ -36,8 +36,8 @@ This section shows how to query the Overture buildings data.
 Start by establishing a connection:
 
 ```python
-import sedonadb
-sd = sedonadb.connect()
+import sedona.db
+sd = sedona.db.connect()
 ```
 
 Set some AWS environment variables to access the data:
