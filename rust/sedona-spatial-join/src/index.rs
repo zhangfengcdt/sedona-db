@@ -235,25 +235,21 @@ impl SpatialIndexBuilder {
         geom_idx_vec
     }
 
-    /// Build cached geometries and positions for KNN queries to avoid repeated WKB conversions
-    fn build_cached_geometries(
-        indexed_batches: &[IndexedBatch],
-    ) -> (Vec<Geometry<f64>>, Vec<(i32, i32)>) {
+    /// Build cached geometries for KNN queries to avoid repeated WKB conversions
+    fn build_cached_geometries(indexed_batches: &[IndexedBatch]) -> Vec<Geometry<f64>> {
         let mut geometries = Vec::new();
-        let mut geometry_positions = Vec::new();
 
-        for (batch_idx, indexed_batch) in indexed_batches.iter().enumerate() {
-            for (row_idx, wkb_opt) in indexed_batch.geom_array.wkbs().iter().enumerate() {
+        for indexed_batch in indexed_batches.iter() {
+            for wkb_opt in indexed_batch.geom_array.wkbs().iter() {
                 if let Some(wkb) = wkb_opt.as_ref() {
                     if let Ok(geom) = item_to_geometry(wkb) {
                         geometries.push(geom);
-                        geometry_positions.push((batch_idx as i32, row_idx as i32));
                     }
                 }
             }
         }
 
-        (geometries, geometry_positions)
+        geometries
     }
 
     /// Finish building and return the completed SpatialIndex.
@@ -293,8 +289,7 @@ impl SpatialIndexBuilder {
                 .unwrap();
 
         // Pre-compute geometries for KNN queries to avoid repeated WKB-to-geometry conversions
-        let (cached_geometries, cached_geometry_positions) =
-            Self::build_cached_geometries(&self.indexed_batches);
+        let cached_geometries = Self::build_cached_geometries(&self.indexed_batches);
 
         Ok(SpatialIndex {
             schema,
@@ -309,7 +304,6 @@ impl SpatialIndexBuilder {
             probe_threads_counter: AtomicUsize::new(self.probe_threads_count),
             reservation: self.reservation,
             cached_geometries,
-            cached_geometry_positions,
         })
     }
 }
@@ -362,10 +356,6 @@ pub(crate) struct SpatialIndex {
     /// Cached vector of geometries for KNN queries to avoid repeated WKB-to-geometry conversions
     /// This is computed once during index building for performance optimization
     cached_geometries: Vec<Geometry<f64>>,
-
-    /// Cached position mapping for geometries to avoid recomputing during KNN queries
-    /// Maps geometry index to (batch_idx, row_idx) pairs
-    cached_geometry_positions: Vec<(i32, i32)>,
 }
 
 /// Indexed batch containing the original record batch and the evaluated geometry array.
@@ -434,7 +424,6 @@ impl SpatialIndex {
             probe_threads_counter,
             reservation,
             cached_geometries: Vec::new(),
-            cached_geometry_positions: Vec::new(),
         }
     }
 
@@ -546,7 +535,6 @@ impl SpatialIndex {
 
         // Use pre-computed cached geometries for performance
         let geometries = &self.cached_geometries;
-        let geometry_to_position = &self.cached_geometry_positions;
 
         if geometries.is_empty() {
             return Ok(JoinResultMetrics {
@@ -683,10 +671,10 @@ impl SpatialIndex {
             }
         }
 
-        // Convert results to build_batch_positions
+        // Convert results to build_batch_positions using existing data_id_to_batch_pos mapping
         for &result_idx in &final_results {
-            if (result_idx as usize) < geometry_to_position.len() {
-                build_batch_positions.push(geometry_to_position[result_idx as usize]);
+            if (result_idx as usize) < self.data_id_to_batch_pos.len() {
+                build_batch_positions.push(self.data_id_to_batch_pos[result_idx as usize]);
             }
         }
 
