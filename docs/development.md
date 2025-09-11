@@ -34,6 +34,12 @@ git submodule init
 git submodule update --recursive
 ```
 
+Additionally, some of the data required in the tests can be downloaded by running the following script.
+
+```bash
+python submodules/download-assets.py
+```
+
 Some crates wrap external native libraries and require system dependencies
 to build. At this time the only crate that requires this is the sedona-s2geography
 crate, which requires [CMake](https://cmake.org),
