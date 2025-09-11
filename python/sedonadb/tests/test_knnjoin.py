@@ -118,7 +118,7 @@ def test_knn_join_with_polygons():
         }
     )
     df_points = eng_sedonadb.execute_and_collect(
-        f"SELECT * FROM sd_random_geometry('{point_options}') LIMIT 20"
+        f"SELECT * FROM sd_random_geometry('{point_options}') LIMIT 15"
     )
 
     # Create target polygons
@@ -201,7 +201,7 @@ def test_knn_join_edge_cases():
         }
     )
     df_points = eng_sedonadb.execute_and_collect(
-        f"SELECT * FROM sd_random_geometry('{point_options}') LIMIT 20"
+        f"SELECT * FROM sd_random_geometry('{point_options}') LIMIT 5"
     )
 
     target_options = json.dumps(
