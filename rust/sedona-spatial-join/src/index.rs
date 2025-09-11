@@ -252,6 +252,50 @@ impl SpatialIndexBuilder {
         geometries
     }
 
+    /// Estimate the memory usage of cached geometries for memory reservation
+    /// This provides a rough approximation of the memory used by geo::Geometry objects
+    fn estimate_geometry_memory(geometries: &[Geometry<f64>]) -> usize {
+        // Rough estimation based on geometry types:
+        // - Each Point: ~32 bytes (2 f64s + overhead)
+        // - Each LineString: base size + (num_coords * 16 bytes)
+        // - Each Polygon: base size + exterior ring + interior rings
+        // - Add some overhead for Vec storage and enum variants
+        
+        const BASE_GEOMETRY_SIZE: usize = 64; // Base size for geometry enum + overhead
+        const POINT_SIZE: usize = 16; // 2 f64s (x, y)
+        const COORDINATE_SIZE: usize = 16; // 2 f64s per coordinate
+        
+        geometries.iter().map(|geom| {
+            BASE_GEOMETRY_SIZE + match geom {
+                Geometry::Point(_) => POINT_SIZE,
+                Geometry::LineString(ls) => ls.coords().count() * COORDINATE_SIZE,
+                Geometry::Polygon(poly) => {
+                    let exterior_coords = poly.exterior().coords().count() * COORDINATE_SIZE;
+                    let interior_coords: usize = poly.interiors()
+                        .iter()
+                        .map(|ring| ring.coords().count() * COORDINATE_SIZE)
+                        .sum();
+                    exterior_coords + interior_coords
+                },
+                Geometry::MultiPoint(mp) => mp.0.len() * POINT_SIZE,
+                Geometry::MultiLineString(mls) => mls.0.iter()
+                    .map(|ls| ls.coords().count() * COORDINATE_SIZE)
+                    .sum::<usize>(),
+                Geometry::MultiPolygon(mp) => mp.0.iter()
+                    .map(|poly| {
+                        let exterior = poly.exterior().coords().count() * COORDINATE_SIZE;
+                        let interiors: usize = poly.interiors()
+                            .iter()
+                            .map(|ring| ring.coords().count() * COORDINATE_SIZE)
+                            .sum();
+                        exterior + interiors
+                    })
+                    .sum::<usize>(),
+                _ => 256, // Conservative estimate for other geometry types
+            }
+        }).sum()
+    }
+
     /// Finish building and return the completed SpatialIndex.
     pub fn finish(mut self, schema: SchemaRef) -> Result<SpatialIndex> {
         if self.indexed_batches.is_empty() {
@@ -290,6 +334,12 @@ impl SpatialIndexBuilder {
 
         // Pre-compute geometries for KNN queries to avoid repeated WKB-to-geometry conversions
         let cached_geometries = Self::build_cached_geometries(&self.indexed_batches);
+        
+        // Reserve memory for cached geometries with rough estimation
+        let geometry_memory_estimate = Self::estimate_geometry_memory(&cached_geometries);
+        let geometry_consumer = MemoryConsumer::new("SpatialJoinGeometryCache");
+        let mut geometry_reservation = geometry_consumer.register(&self.memory_pool);
+        geometry_reservation.try_grow(geometry_memory_estimate)?;
 
         Ok(SpatialIndex {
             schema,
@@ -304,6 +354,7 @@ impl SpatialIndexBuilder {
             probe_threads_counter: AtomicUsize::new(self.probe_threads_count),
             reservation: self.reservation,
             cached_geometries,
+            cached_geometry_reservation: geometry_reservation,
         })
     }
 }
@@ -356,6 +407,11 @@ pub(crate) struct SpatialIndex {
     /// Cached vector of geometries for KNN queries to avoid repeated WKB-to-geometry conversions
     /// This is computed once during index building for performance optimization
     cached_geometries: Vec<Geometry<f64>>,
+    
+    /// Memory reservation for tracking the memory usage of cached geometries
+    /// Cleared on `SpatialIndex` drop
+    #[expect(dead_code)]
+    cached_geometry_reservation: MemoryReservation,
 }
 
 /// Indexed batch containing the original record batch and the evaluated geometry array.
@@ -410,6 +466,7 @@ impl SpatialIndex {
         );
         let refiner_reservation = reservation.split(0);
         let refiner_reservation = ConcurrentReservation::try_new(0, refiner_reservation).unwrap();
+        let cached_geometry_reservation = reservation.split(0);
         let rtree = RTreeBuilder::<f32>::new(0).finish::<HilbertSort>();
         Self {
             schema,
@@ -424,6 +481,7 @@ impl SpatialIndex {
             probe_threads_counter,
             reservation,
             cached_geometries: Vec::new(),
+            cached_geometry_reservation,
         }
     }
 
