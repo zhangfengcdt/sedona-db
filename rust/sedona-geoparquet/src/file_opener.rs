@@ -46,6 +46,7 @@ pub struct GeoParquetFileOpener {
     metadata_size_hint: Option<usize>,
     predicate: Arc<dyn PhysicalExpr>,
     file_schema: SchemaRef,
+    enable_pruning: bool,
 }
 
 impl GeoParquetFileOpener {
@@ -56,6 +57,7 @@ impl GeoParquetFileOpener {
         metadata_size_hint: Option<usize>,
         predicate: Arc<dyn PhysicalExpr>,
         file_schema: SchemaRef,
+        enable_pruning: bool,
     ) -> Self {
         Self {
             inner,
@@ -63,12 +65,13 @@ impl GeoParquetFileOpener {
             metadata_size_hint,
             predicate,
             file_schema,
+            enable_pruning,
         }
     }
 }
 
 impl FileOpener for GeoParquetFileOpener {
-    fn open(&self, file_meta: FileMeta, _file: PartitionedFile) -> Result<FileOpenFuture> {
+    fn open(&self, file_meta: FileMeta, file: PartitionedFile) -> Result<FileOpenFuture> {
         let self_clone = self.clone();
 
         Ok(Box::pin(async move {
@@ -81,25 +84,28 @@ impl FileOpener for GeoParquetFileOpener {
             .await?;
 
             let mut access_plan = ParquetAccessPlan::new_all(parquet_metadata.num_row_groups());
-            let spatial_filter = SpatialFilter::try_from_expr(&self_clone.predicate)?;
 
-            if let Some(geoparquet_metadata) =
-                GeoParquetMetadata::try_from_parquet_metadata(&parquet_metadata)?
-            {
-                filter_access_plan_using_geoparquet_file_metadata(
-                    &self_clone.file_schema,
-                    &mut access_plan,
-                    &spatial_filter,
-                    &geoparquet_metadata,
-                )?;
+            if self_clone.enable_pruning {
+                let spatial_filter = SpatialFilter::try_from_expr(&self_clone.predicate)?;
 
-                filter_access_plan_using_geoparquet_covering(
-                    &self_clone.file_schema,
-                    &mut access_plan,
-                    &spatial_filter,
-                    &geoparquet_metadata,
-                    &parquet_metadata,
-                )?;
+                if let Some(geoparquet_metadata) =
+                    GeoParquetMetadata::try_from_parquet_metadata(&parquet_metadata)?
+                {
+                    filter_access_plan_using_geoparquet_file_metadata(
+                        &self_clone.file_schema,
+                        &mut access_plan,
+                        &spatial_filter,
+                        &geoparquet_metadata,
+                    )?;
+
+                    filter_access_plan_using_geoparquet_covering(
+                        &self_clone.file_schema,
+                        &mut access_plan,
+                        &spatial_filter,
+                        &geoparquet_metadata,
+                        &parquet_metadata,
+                    )?;
+                }
             }
 
             // When we have built-in GEOMETRY/GEOGRAPHY types, we can filter the access plan
@@ -115,7 +121,7 @@ impl FileOpener for GeoParquetFileOpener {
                 metadata_size_hint: self_clone.metadata_size_hint,
             };
 
-            self_clone.inner.open(file_meta, _file)?.await
+            self_clone.inner.open(file_meta, file)?.await
         }))
     }
 }

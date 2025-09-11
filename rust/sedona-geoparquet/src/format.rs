@@ -438,6 +438,7 @@ impl FileSource for GeoParquetFileSource {
             self.metadata_size_hint,
             self.predicate.clone().unwrap(),
             base_config.file_schema.clone(),
+            self.inner.table_parquet_options().global.pruning,
         ))
     }
 
