@@ -260,40 +260,51 @@ impl SpatialIndexBuilder {
         // - Each LineString: base size + (num_coords * 16 bytes)
         // - Each Polygon: base size + exterior ring + interior rings
         // - Add some overhead for Vec storage and enum variants
-        
+
         const BASE_GEOMETRY_SIZE: usize = 64; // Base size for geometry enum + overhead
         const POINT_SIZE: usize = 16; // 2 f64s (x, y)
         const COORDINATE_SIZE: usize = 16; // 2 f64s per coordinate
-        
-        geometries.iter().map(|geom| {
-            BASE_GEOMETRY_SIZE + match geom {
-                Geometry::Point(_) => POINT_SIZE,
-                Geometry::LineString(ls) => ls.coords().count() * COORDINATE_SIZE,
-                Geometry::Polygon(poly) => {
-                    let exterior_coords = poly.exterior().coords().count() * COORDINATE_SIZE;
-                    let interior_coords: usize = poly.interiors()
-                        .iter()
-                        .map(|ring| ring.coords().count() * COORDINATE_SIZE)
-                        .sum();
-                    exterior_coords + interior_coords
-                },
-                Geometry::MultiPoint(mp) => mp.0.len() * POINT_SIZE,
-                Geometry::MultiLineString(mls) => mls.0.iter()
-                    .map(|ls| ls.coords().count() * COORDINATE_SIZE)
-                    .sum::<usize>(),
-                Geometry::MultiPolygon(mp) => mp.0.iter()
-                    .map(|poly| {
-                        let exterior = poly.exterior().coords().count() * COORDINATE_SIZE;
-                        let interiors: usize = poly.interiors()
+
+        geometries
+            .iter()
+            .map(|geom| {
+                BASE_GEOMETRY_SIZE
+                    + match geom {
+                        Geometry::Point(_) => POINT_SIZE,
+                        Geometry::LineString(ls) => ls.coords().count() * COORDINATE_SIZE,
+                        Geometry::Polygon(poly) => {
+                            let exterior_coords =
+                                poly.exterior().coords().count() * COORDINATE_SIZE;
+                            let interior_coords: usize = poly
+                                .interiors()
+                                .iter()
+                                .map(|ring| ring.coords().count() * COORDINATE_SIZE)
+                                .sum();
+                            exterior_coords + interior_coords
+                        }
+                        Geometry::MultiPoint(mp) => mp.0.len() * POINT_SIZE,
+                        Geometry::MultiLineString(mls) => mls
+                            .0
                             .iter()
-                            .map(|ring| ring.coords().count() * COORDINATE_SIZE)
-                            .sum();
-                        exterior + interiors
-                    })
-                    .sum::<usize>(),
-                _ => 256, // Conservative estimate for other geometry types
-            }
-        }).sum()
+                            .map(|ls| ls.coords().count() * COORDINATE_SIZE)
+                            .sum::<usize>(),
+                        Geometry::MultiPolygon(mp) => mp
+                            .0
+                            .iter()
+                            .map(|poly| {
+                                let exterior = poly.exterior().coords().count() * COORDINATE_SIZE;
+                                let interiors: usize = poly
+                                    .interiors()
+                                    .iter()
+                                    .map(|ring| ring.coords().count() * COORDINATE_SIZE)
+                                    .sum();
+                                exterior + interiors
+                            })
+                            .sum::<usize>(),
+                        _ => 256, // Conservative estimate for other geometry types
+                    }
+            })
+            .sum()
     }
 
     /// Finish building and return the completed SpatialIndex.
@@ -334,7 +345,7 @@ impl SpatialIndexBuilder {
 
         // Pre-compute geometries for KNN queries to avoid repeated WKB-to-geometry conversions
         let cached_geometries = Self::build_cached_geometries(&self.indexed_batches);
-        
+
         // Reserve memory for cached geometries with rough estimation
         let geometry_memory_estimate = Self::estimate_geometry_memory(&cached_geometries);
         let geometry_consumer = MemoryConsumer::new("SpatialJoinGeometryCache");
@@ -407,7 +418,7 @@ pub(crate) struct SpatialIndex {
     /// Cached vector of geometries for KNN queries to avoid repeated WKB-to-geometry conversions
     /// This is computed once during index building for performance optimization
     cached_geometries: Vec<Geometry<f64>>,
-    
+
     /// Memory reservation for tracking the memory usage of cached geometries
     /// Cleared on `SpatialIndex` drop
     #[expect(dead_code)]
