@@ -236,75 +236,29 @@ impl SpatialIndexBuilder {
     }
 
     /// Build cached geometries for KNN queries to avoid repeated WKB conversions
-    fn build_cached_geometries(indexed_batches: &[IndexedBatch]) -> Vec<Geometry<f64>> {
+    /// Returns both geometries and total WKB size for memory estimation
+    fn build_cached_geometries(indexed_batches: &[IndexedBatch]) -> (Vec<Geometry<f64>>, usize) {
         let mut geometries = Vec::new();
+        let mut total_wkb_size = 0;
 
         for indexed_batch in indexed_batches.iter() {
             for wkb_opt in indexed_batch.geom_array.wkbs().iter() {
                 if let Some(wkb) = wkb_opt.as_ref() {
                     if let Ok(geom) = item_to_geometry(wkb) {
                         geometries.push(geom);
+                        total_wkb_size += wkb.buf().len();
                     }
                 }
             }
         }
 
-        geometries
+        (geometries, total_wkb_size)
     }
 
-    /// Estimate the memory usage of cached geometries for memory reservation
-    /// This provides a rough approximation of the memory used by geo::Geometry objects
-    fn estimate_geometry_memory(geometries: &[Geometry<f64>]) -> usize {
-        // Rough estimation based on geometry types:
-        // - Each Point: ~32 bytes (2 f64s + overhead)
-        // - Each LineString: base size + (num_coords * 16 bytes)
-        // - Each Polygon: base size + exterior ring + interior rings
-        // - Add some overhead for Vec storage and enum variants
-
-        const BASE_GEOMETRY_SIZE: usize = 64; // Base size for geometry enum + overhead
-        const POINT_SIZE: usize = 16; // 2 f64s (x, y)
-        const COORDINATE_SIZE: usize = 16; // 2 f64s per coordinate
-
-        geometries
-            .iter()
-            .map(|geom| {
-                BASE_GEOMETRY_SIZE
-                    + match geom {
-                        Geometry::Point(_) => POINT_SIZE,
-                        Geometry::LineString(ls) => ls.coords().count() * COORDINATE_SIZE,
-                        Geometry::Polygon(poly) => {
-                            let exterior_coords =
-                                poly.exterior().coords().count() * COORDINATE_SIZE;
-                            let interior_coords: usize = poly
-                                .interiors()
-                                .iter()
-                                .map(|ring| ring.coords().count() * COORDINATE_SIZE)
-                                .sum();
-                            exterior_coords + interior_coords
-                        }
-                        Geometry::MultiPoint(mp) => mp.0.len() * POINT_SIZE,
-                        Geometry::MultiLineString(mls) => mls
-                            .0
-                            .iter()
-                            .map(|ls| ls.coords().count() * COORDINATE_SIZE)
-                            .sum::<usize>(),
-                        Geometry::MultiPolygon(mp) => mp
-                            .0
-                            .iter()
-                            .map(|poly| {
-                                let exterior = poly.exterior().coords().count() * COORDINATE_SIZE;
-                                let interiors: usize = poly
-                                    .interiors()
-                                    .iter()
-                                    .map(|ring| ring.coords().count() * COORDINATE_SIZE)
-                                    .sum();
-                                exterior + interiors
-                            })
-                            .sum::<usize>(),
-                        _ => 256, // Conservative estimate for other geometry types
-                    }
-            })
-            .sum()
+    /// Estimate the memory usage of cached geometries based on WKB size with overhead
+    fn estimate_geometry_memory(wkb_size: usize) -> usize {
+        // Use WKB size as base + overhead for geo::Geometry objects
+        wkb_size * 2
     }
 
     /// Finish building and return the completed SpatialIndex.
@@ -344,10 +298,11 @@ impl SpatialIndexBuilder {
                 .unwrap();
 
         // Pre-compute geometries for KNN queries to avoid repeated WKB-to-geometry conversions
-        let cached_geometries = Self::build_cached_geometries(&self.indexed_batches);
+        let (cached_geometries, total_wkb_size) =
+            Self::build_cached_geometries(&self.indexed_batches);
 
-        // Reserve memory for cached geometries with rough estimation
-        let geometry_memory_estimate = Self::estimate_geometry_memory(&cached_geometries);
+        // Reserve memory for cached geometries using WKB size with overhead
+        let geometry_memory_estimate = Self::estimate_geometry_memory(total_wkb_size);
         let geometry_consumer = MemoryConsumer::new("SpatialJoinGeometryCache");
         let mut geometry_reservation = geometry_consumer.register(&self.memory_pool);
         geometry_reservation.try_grow(geometry_memory_estimate)?;
