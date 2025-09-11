@@ -235,6 +235,32 @@ impl SpatialIndexBuilder {
         geom_idx_vec
     }
 
+    /// Build cached geometries for KNN queries to avoid repeated WKB conversions
+    /// Returns both geometries and total WKB size for memory estimation
+    fn build_cached_geometries(indexed_batches: &[IndexedBatch]) -> (Vec<Geometry<f64>>, usize) {
+        let mut geometries = Vec::new();
+        let mut total_wkb_size = 0;
+
+        for indexed_batch in indexed_batches.iter() {
+            for wkb_opt in indexed_batch.geom_array.wkbs().iter() {
+                if let Some(wkb) = wkb_opt.as_ref() {
+                    if let Ok(geom) = item_to_geometry(wkb) {
+                        geometries.push(geom);
+                        total_wkb_size += wkb.buf().len();
+                    }
+                }
+            }
+        }
+
+        (geometries, total_wkb_size)
+    }
+
+    /// Estimate the memory usage of cached geometries based on WKB size with overhead
+    fn estimate_geometry_memory(wkb_size: usize) -> usize {
+        // Use WKB size as base + overhead for geo::Geometry objects
+        wkb_size * 2
+    }
+
     /// Finish building and return the completed SpatialIndex.
     pub fn finish(mut self, schema: SchemaRef) -> Result<SpatialIndex> {
         if self.indexed_batches.is_empty() {
@@ -271,6 +297,16 @@ impl SpatialIndexBuilder {
             ConcurrentReservation::try_new(REFINER_RESERVATION_PREALLOC_SIZE, refiner_reservation)
                 .unwrap();
 
+        // Pre-compute geometries for KNN queries to avoid repeated WKB-to-geometry conversions
+        let (cached_geometries, total_wkb_size) =
+            Self::build_cached_geometries(&self.indexed_batches);
+
+        // Reserve memory for cached geometries using WKB size with overhead
+        let geometry_memory_estimate = Self::estimate_geometry_memory(total_wkb_size);
+        let geometry_consumer = MemoryConsumer::new("SpatialJoinGeometryCache");
+        let mut geometry_reservation = geometry_consumer.register(&self.memory_pool);
+        geometry_reservation.try_grow(geometry_memory_estimate)?;
+
         Ok(SpatialIndex {
             schema,
             evaluator,
@@ -283,6 +319,8 @@ impl SpatialIndexBuilder {
             visited_left_side,
             probe_threads_counter: AtomicUsize::new(self.probe_threads_count),
             reservation: self.reservation,
+            cached_geometries,
+            cached_geometry_reservation: geometry_reservation,
         })
     }
 }
@@ -331,6 +369,15 @@ pub(crate) struct SpatialIndex {
     /// Cleared on `SpatialIndex` drop
     #[expect(dead_code)]
     reservation: MemoryReservation,
+
+    /// Cached vector of geometries for KNN queries to avoid repeated WKB-to-geometry conversions
+    /// This is computed once during index building for performance optimization
+    cached_geometries: Vec<Geometry<f64>>,
+
+    /// Memory reservation for tracking the memory usage of cached geometries
+    /// Cleared on `SpatialIndex` drop
+    #[expect(dead_code)]
+    cached_geometry_reservation: MemoryReservation,
 }
 
 /// Indexed batch containing the original record batch and the evaluated geometry array.
@@ -385,6 +432,7 @@ impl SpatialIndex {
         );
         let refiner_reservation = reservation.split(0);
         let refiner_reservation = ConcurrentReservation::try_new(0, refiner_reservation).unwrap();
+        let cached_geometry_reservation = reservation.split(0);
         let rtree = RTreeBuilder::<f32>::new(0).finish::<HilbertSort>();
         Self {
             schema,
@@ -398,6 +446,8 @@ impl SpatialIndex {
             visited_left_side: None,
             probe_threads_counter,
             reservation,
+            cached_geometries: Vec::new(),
+            cached_geometry_reservation,
         }
     }
 
@@ -507,20 +557,8 @@ impl SpatialIndex {
             }
         };
 
-        // Create a vector of geometries for all indexed items
-        let mut geometries: Vec<Geometry<f64>> = Vec::new();
-        let mut geometry_to_position: Vec<(i32, i32)> = Vec::new();
-
-        for (batch_idx, indexed_batch) in self.indexed_batches.iter().enumerate() {
-            for (row_idx, wkb_opt) in indexed_batch.geom_array.wkbs().iter().enumerate() {
-                if let Some(wkb) = wkb_opt.as_ref() {
-                    if let Ok(geom) = item_to_geometry(wkb) {
-                        geometries.push(geom);
-                        geometry_to_position.push((batch_idx as i32, row_idx as i32));
-                    }
-                }
-            }
-        }
+        // Use pre-computed cached geometries for performance
+        let geometries = &self.cached_geometries;
 
         if geometries.is_empty() {
             return Ok(JoinResultMetrics {
@@ -544,7 +582,7 @@ impl SpatialIndex {
             Some(k as usize),
             None, // no max_distance filter
             distance_metric.as_ref(),
-            &geometries,
+            geometries,
         );
 
         if initial_results.is_empty() {
@@ -657,10 +695,10 @@ impl SpatialIndex {
             }
         }
 
-        // Convert results to build_batch_positions
+        // Convert results to build_batch_positions using existing data_id_to_batch_pos mapping
         for &result_idx in &final_results {
-            if (result_idx as usize) < geometry_to_position.len() {
-                build_batch_positions.push(geometry_to_position[result_idx as usize]);
+            if (result_idx as usize) < self.data_id_to_batch_pos.len() {
+                build_batch_positions.push(self.data_id_to_batch_pos[result_idx as usize]);
             }
         }
 
