@@ -26,13 +26,14 @@ class TestBenchKNN(TestBenchBase):
         self.sedonadb = SedonaDB.create_or_skip()
 
         # Create building-like polygons (index side - fewer, larger geometries)
-        # Note: Dataset sizes are limited to avoid DataFusion CoalescePartitionsExec issues
-        # with large synthetic datasets. Real-world Parquet data typically doesn't have this limitation.
+        # Note: Dataset sizes are limited to avoid performance issues observed when processing
+        # very large synthetic datasets. Large synthetic datasets have been observed to cause
+        # memory pressure or performance degradation in DataFusion operations.
         building_options = {
             "geom_type": "Polygon",
             "target_rows": 2_000,  # Reasonable size for benchmarking
             "vertices_per_linestring_range": [4, 8],
-            "size_range": [0.001, 0.01],  # Small building-sized polygons
+            "size_range": [0.001, 0.01],
             "seed": 42,
         }
 
@@ -49,7 +50,7 @@ class TestBenchKNN(TestBenchBase):
         # Create trip pickup points (probe side - many small geometries)
         trip_options = {
             "geom_type": "Point",
-            "target_rows": 10_000,  # Reduced size to avoid partition issues
+            "target_rows": 10_000,
             "seed": 43,
         }
 
@@ -86,9 +87,9 @@ class TestBenchKNN(TestBenchBase):
             building_table = "knn_buildings_small"
             trip_limit = 100  # Test with 100 trips
         else:
-            trip_table = "knn_trips_small"  # Use small table to avoid partition issues
+            trip_table = "knn_trips_small"
             building_table = "knn_buildings"
-            trip_limit = 500  # Reduced to avoid DataFusion partition issues
+            trip_limit = 500
 
         spheroid_str = "TRUE" if use_spheroid else "FALSE"
 
