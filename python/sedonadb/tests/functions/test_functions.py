@@ -294,6 +294,34 @@ def test_st_envelope(eng, geom, expected):
 @pytest.mark.parametrize(
     ("geom", "expected"),
     [
+        # Failing on None for SedonaDB: with datafusion optimizer exception
+        ("POINT EMPTY", "POINT (nan nan)"),
+        ("POLYGON EMPTY", "POLYGON EMPTY"),
+        ("LINESTRING EMPTY", "LINESTRING EMPTY"),
+        ("MULTIPOINT EMPTY", "MULTIPOINT EMPTY"),
+        ("MULTILINESTRING EMPTY", "MULTILINESTRING EMPTY"),
+        ("MULTIPOLYGON EMPTY", "MULTIPOLYGON EMPTY"),
+        ("GEOMETRYCOLLECTION EMPTY", "GEOMETRYCOLLECTION EMPTY"),
+        ("POINT (0 1)", "POINT (1 0)"),
+        ("LINESTRING (0 1, 2 3)", "LINESTRING (1 0, 3 2)"),
+        ("MULTIPOINT (0 1, 2 3)", "MULTIPOINT (1 0, 3 2)"),
+        (
+            "GEOMETRYCOLLECTION (POINT (1 2), LINESTRING (3 4, 5 6), POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0)))",
+            "GEOMETRYCOLLECTION (POINT (2 1), LINESTRING (4 3, 6 5), POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0)))",
+        ),
+    ],
+)
+def test_st_flipcoordinates(eng, geom, expected):
+    eng = eng.create_or_skip()
+    eng.assert_query_result(
+        f"SELECT ST_FlipCoordinates({geom_or_null(geom)})", expected
+    )
+
+
+@pytest.mark.parametrize("eng", [SedonaDB, PostGIS])
+@pytest.mark.parametrize(
+    ("geom", "expected"),
+    [
         (None, None),
         ("POINT EMPTY", "ST_Point"),
         ("POLYGON EMPTY", "ST_Polygon"),
