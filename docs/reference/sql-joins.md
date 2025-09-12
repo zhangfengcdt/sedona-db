@@ -59,20 +59,17 @@ Use the `barrier` function to prevent filter pushdown and control predicate eval
 
 ### Example
 
-Control the evaluation order of predicates in a KNN join to ensure the spatial operation is performed before filtering.
+Find the 3 nearest high-rated restaurants to luxury hotels, ensuring the KNN join completes before filtering.
 
 ```sql
--- Without barrier: optimizer may push down predicates before the KNN join
-SELECT *
-FROM restaurants r
-INNER JOIN hotels h ON ST_KNN(h.geometry, r.geometry, 3, false)
-WHERE r.rating > 4.0 AND h.stars >= 3;
-
--- With barrier: ensures the KNN join completes before filtering
-SELECT *
-FROM restaurants r
-INNER JOIN hotels h ON ST_KNN(h.geometry, r.geometry, 3, false)
-WHERE barrier('r_rating > 4.0 AND h_stars >= 3',
-              'r_rating', r.rating,
-              'h_stars', h.stars);
+SELECT
+    h.name AS hotel,
+    r.name AS restaurant,
+    r.rating
+FROM hotels AS h
+INNER JOIN restaurants AS r
+ON ST_KNN(h.geometry, r.geometry, 3, false)
+WHERE barrier('rating > 4.0 AND stars >= 4',
+              'rating', r.rating,
+              'stars', h.stars)
 ```
