@@ -24,7 +24,7 @@ class TestBenchBase:
         self.postgis = PostGIS.create_or_skip()
         self.duckdb = DuckDB.create_or_skip()
 
-        num_geoms = 100_000
+        num_geoms = 1_000
 
         # Setup tables
         for name, base_options in [

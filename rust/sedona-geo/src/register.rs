@@ -22,7 +22,7 @@ use crate::st_line_interpolate_point::st_line_interpolate_point_impl;
 use crate::st_union_aggr::st_union_aggr_impl;
 use crate::{
     st_area::st_area_impl, st_centroid::st_centroid_impl, st_intersects::st_intersects_impl,
-    st_length::st_length_impl,
+    st_length::st_length_impl, st_perimeter::st_perimeter_impl,
 };
 
 pub fn scalar_kernels() -> Vec<(&'static str, ScalarKernelRef)> {
@@ -31,6 +31,7 @@ pub fn scalar_kernels() -> Vec<(&'static str, ScalarKernelRef)> {
         ("st_area", st_area_impl()),
         ("st_centroid", st_centroid_impl()),
         ("st_length", st_length_impl()),
+        ("st_perimeter", st_perimeter_impl()),
         ("st_lineinterpolatepoint", st_line_interpolate_point_impl()),
     ]
 }
