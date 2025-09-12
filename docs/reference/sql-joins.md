@@ -57,6 +57,12 @@ ON ST_KNN(cities_l.geometry, cities_r.geometry, 5, false)
 
 Use the `barrier` function to prevent filter pushdown and control predicate evaluation order in complex spatial joins. This function creates an optimization barrier by evaluating boolean expressions at runtime.
 
+The `barrier` function takes a boolean expression as a string, followed by pairs of variable names and their values that will be substituted into the expression:
+
+```sql
+barrier(expression, var_name1, var_value1, var_name2, var_value2, ...)
+```
+
 ### Example
 
 Find the 3 nearest high-rated restaurants to luxury hotels, ensuring the KNN join completes before filtering.
