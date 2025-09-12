@@ -63,6 +63,11 @@ The `barrier` function takes a boolean expression as a string, followed by pairs
 barrier(expression, var_name1, var_value1, var_name2, var_value2, ...)
 ```
 
+The placement of filters relative to KNN joins changes the semantic meaning of the query:
+
+- **Filter before KNN**: First filters the data, then finds K nearest neighbors from the filtered subset. This answers "What are the K nearest high-rated restaurants?"
+- **Filter after KNN**: First finds K nearest neighbors from all data, then filters those results. This answers "Of the K nearest restaurants, which ones are high-rated?"
+
 ### Example
 
 Find the 3 nearest high-rated restaurants to luxury hotels, ensuring the KNN join completes before filtering.
@@ -79,3 +84,5 @@ WHERE barrier('rating > 4.0 AND stars >= 4',
               'rating', r.rating,
               'stars', h.stars)
 ```
+
+With the barrier function, this query first finds the 3 nearest restaurants to each hotel (regardless of rating), then filters to keep only those pairs where the restaurant has rating > 4.0 and the hotel has stars >= 4. Without the barrier, an optimizer might push the filters down, changing the query to first filter for high-rated restaurants and luxury hotels, then find the 3 nearest among those filtered sets.
