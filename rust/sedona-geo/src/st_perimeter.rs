@@ -117,7 +117,7 @@ mod tests {
                 Some(5.0),
                 Some(14.0),
                 Some(3.236_067_977_499_79), // 1 + sqrt(1.25) + sqrt(1.25)
-                Some(8.0)                 // 4 + 4
+                Some(8.0)                   // 4 + 4
             ]
         );
         assert_eq!(&tester.invoke_wkb_array(input_wkt).unwrap(), &expected);
