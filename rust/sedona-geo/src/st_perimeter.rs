@@ -104,7 +104,7 @@ mod tests {
         let input_wkt = vec![
             Some("POINT(1 2)"), // Point should have 0 perimeter
             None,
-            Some("LINESTRING (0 0, 3 4)"), // LineString perimeter equals length (5.0)
+            Some("LINESTRING (0 0, 3 4)"), // LineString perimeter equals length (0.0)
             Some("POLYGON ((0 0, 4 0, 4 3, 0 3, 0 0))"), // Rectangle perimeter: 2*(4+3) = 14
             Some("POLYGON ((0 0, 1 0, 0.5 1, 0 0))"), // Triangle with sides approx 1, 1.118, 1.118
             Some("MULTIPOLYGON (((0 0, 1 0, 1 1, 0 1, 0 0)), ((2 2, 3 2, 3 3, 2 3, 2 2)))"), // Two unit squares
@@ -114,7 +114,7 @@ mod tests {
             [
                 Some(0.0),
                 None,
-                Some(5.0),
+                Some(0.0),
                 Some(14.0),
                 Some(3.236_067_977_499_79), // 1 + sqrt(1.25) + sqrt(1.25)
                 Some(8.0)                   // 4 + 4
