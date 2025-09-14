@@ -122,6 +122,10 @@ impl LngLat {
     pub fn is_authority_code_lnglat(string_value: &str) -> bool {
         string_value == "OGC:CRS84" || string_value == "EPSG:4326"
     }
+
+    pub fn srid() -> Option<u32> {
+        Some(4326)
+    }
 }
 
 /// Implementation of an authority:code CoordinateReferenceSystem
@@ -213,6 +217,8 @@ impl CoordinateReferenceSystem for AuthorityCode {
     fn srid(&self) -> Result<Option<u32>> {
         if self.authority.eq_ignore_ascii_case("EPSG") {
             Ok(self.code.parse::<u32>().ok())
+        } else if LngLat::is_lnglat(self) {
+            Ok(LngLat::srid())
         } else {
             Ok(None)
         }
@@ -287,9 +293,8 @@ impl CoordinateReferenceSystem for ProjJSON {
         let authority_code_opt = self.to_authority_code()?;
         if let Some(authority_code) = authority_code_opt {
             if LngLat::is_authority_code_lnglat(&authority_code) {
-                return Ok(Some(4326));
-            }
-            if let Some((_, code)) = AuthorityCode::split_auth_code(&authority_code) {
+                return Ok(LngLat::srid());
+            } else if let Some((_, code)) = AuthorityCode::split_auth_code(&authority_code) {
                 return Ok(code.parse::<u32>().ok());
             }
         }
@@ -391,5 +396,9 @@ mod test {
             Some("EPSG:4269".to_string())
         );
         assert_eq!(new_crs.unwrap().srid().unwrap(), Some(4269));
+
+        let value: Value = serde_json::from_str("\"EPSG:4326\"").unwrap();
+        let new_crs = deserialize_crs(&value).unwrap();
+        assert_eq!(new_crs.clone().unwrap().srid().unwrap(), Some(4326));
     }
 }
