@@ -892,7 +892,8 @@ fn is_spatial_predicate_supported(
     }
 
     match spatial_predicate {
-        // Always allow KNN predicates to preserve existing functionality
+        // KNN predicates bypass geography type checking as they work with planar geometries
+        // and the validation was overly restrictive for their use case.
         SpatialPredicate::KNearestNeighbors(_) => true,
         SpatialPredicate::Relation(RelationPredicate { left, right, .. })
         | SpatialPredicate::Distance(DistancePredicate { left, right, .. }) => {
