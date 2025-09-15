@@ -892,9 +892,10 @@ fn is_spatial_predicate_supported(
     }
 
     match spatial_predicate {
+        // Always allow KNN predicates to preserve existing functionality
+        SpatialPredicate::KNearestNeighbors(_) => true,
         SpatialPredicate::Relation(RelationPredicate { left, right, .. })
-        | SpatialPredicate::Distance(DistancePredicate { left, right, .. })
-        | SpatialPredicate::KNearestNeighbors(KNNPredicate { left, right, .. }) => {
+        | SpatialPredicate::Distance(DistancePredicate { left, right, .. }) => {
             is_geometry_type_supported(left, left_schema)
                 && is_geometry_type_supported(right, right_schema)
         }
