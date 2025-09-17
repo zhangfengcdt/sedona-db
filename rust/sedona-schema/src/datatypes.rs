@@ -20,7 +20,7 @@ use sedona_common::sedona_internal_err;
 use serde_json::Value;
 use std::fmt::{Debug, Display};
 
-use crate::crs::{deserialize_crs, CoordinateReferenceSystem, Crs};
+use crate::crs::{deserialize_crs, Crs};
 use crate::extension_type::ExtensionType;
 
 /// Data types supported by Sedona that resolve to a concrete Arrow DataType
@@ -34,48 +34,6 @@ pub enum SedonaType {
 impl From<DataType> for SedonaType {
     fn from(value: DataType) -> Self {
         Self::Arrow(value)
-    }
-}
-
-impl Display for SedonaType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SedonaType::Arrow(data_type) => Display::fmt(data_type, f),
-            SedonaType::Wkb(edges, crs) => display_geometry("wkb", edges, crs, f),
-            SedonaType::WkbView(edges, crs) => display_geometry("wkb_view", edges, crs, f),
-        }
-    }
-}
-
-fn display_geometry(
-    name: &str,
-    edges: &Edges,
-    crs: &Crs,
-    f: &mut std::fmt::Formatter<'_>,
-) -> std::fmt::Result {
-    match edges {
-        Edges::Planar => {}
-        Edges::Spherical => write!(f, "spherical ")?,
-    }
-
-    write!(f, "{name}")?;
-
-    if let Some(crs) = crs {
-        write!(f, " <{}>", &crs)?;
-    }
-
-    Ok(())
-}
-
-impl Display for dyn CoordinateReferenceSystem + Send + Sync {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Ok(Some(auth_code)) = self.to_authority_code() {
-            write!(f, "{}", auth_code.to_lowercase())
-        } else {
-            // We can probably try harder to get compact output out of more
-            // types of CRSes
-            write!(f, "{{...}}")
-        }
     }
 }
 
@@ -139,23 +97,6 @@ impl SedonaType {
         }
     }
 
-    /// Returns True if another physical type matches this one for the purposes of dispatch
-    ///
-    /// For Arrow types this matches on type equality; for other type it matches on edges
-    /// but not crs.
-    pub fn match_signature(&self, other: &SedonaType) -> bool {
-        match (self, other) {
-            (SedonaType::Arrow(data_type), SedonaType::Arrow(other_data_type)) => {
-                data_type == other_data_type
-            }
-            (SedonaType::Wkb(edges, _), SedonaType::Wkb(other_edges, _)) => edges == other_edges,
-            (SedonaType::WkbView(edges, _), SedonaType::WkbView(other_edges, _)) => {
-                edges == other_edges
-            }
-            _ => false,
-        }
-    }
-
     /// Construct a [`Field`] as it would appear in an external `RecordBatch`
     pub fn to_storage_field(&self, name: &str, nullable: bool) -> Result<Field> {
         self.extension_type().map_or(
@@ -194,6 +135,109 @@ impl SedonaType {
             _ => None,
         }
     }
+
+    /// The logical type name for this type
+    ///
+    /// The logical type name is used in tabular display and schema printing. Notably,
+    /// it renders Wkb and WkbView as "geometry" or "geography" depending on the edge
+    /// type. For Arrow types, this similarly strips the storage details (e.g.,
+    /// both Utf8 and Utf8View types render as "utf8").
+    pub fn logical_type_name(&self) -> String {
+        match self {
+            SedonaType::Wkb(Edges::Planar, _) | SedonaType::WkbView(Edges::Planar, _) => {
+                "geometry".to_string()
+            }
+            SedonaType::Wkb(Edges::Spherical, _) | SedonaType::WkbView(Edges::Spherical, _) => {
+                "geography".to_string()
+            }
+            SedonaType::Arrow(data_type) => match data_type {
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => "utf8".to_string(),
+                DataType::Binary
+                | DataType::LargeBinary
+                | DataType::BinaryView
+                | DataType::FixedSizeBinary(_) => "binary".to_string(),
+                DataType::List(_)
+                | DataType::LargeList(_)
+                | DataType::ListView(_)
+                | DataType::LargeListView(_)
+                | DataType::FixedSizeList(_, _) => "list".to_string(),
+                DataType::Dictionary(_, value_type) => {
+                    SedonaType::Arrow(value_type.as_ref().clone()).logical_type_name()
+                }
+                DataType::RunEndEncoded(_, value_field) => {
+                    match SedonaType::from_storage_field(value_field) {
+                        Ok(value_sedona_type) => value_sedona_type.logical_type_name(),
+                        Err(_) => format!("{value_field:?}"),
+                    }
+                }
+                _ => {
+                    let data_type_str = data_type.to_string();
+                    if let Some(params_start) = data_type_str.find('(') {
+                        data_type_str[0..params_start].to_string().to_lowercase()
+                    } else {
+                        data_type_str.to_lowercase()
+                    }
+                }
+            },
+        }
+    }
+
+    /// Returns True if another physical type matches this one for the purposes of dispatch
+    ///
+    /// For Arrow types this matches on type equality; for other type it matches on edges
+    /// but not crs.
+    pub fn match_signature(&self, other: &SedonaType) -> bool {
+        match (self, other) {
+            (SedonaType::Arrow(data_type), SedonaType::Arrow(other_data_type)) => {
+                data_type == other_data_type
+            }
+            (SedonaType::Wkb(edges, _), SedonaType::Wkb(other_edges, _)) => edges == other_edges,
+            (SedonaType::WkbView(edges, _), SedonaType::WkbView(other_edges, _)) => {
+                edges == other_edges
+            }
+            _ => false,
+        }
+    }
+}
+
+// Implementation details for type serialization and display
+
+impl Display for SedonaType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SedonaType::Arrow(data_type) => Display::fmt(data_type, f),
+            SedonaType::Wkb(edges, crs) => display_geometry("Wkb", edges, crs, f),
+            SedonaType::WkbView(edges, crs) => display_geometry("WkbView", edges, crs, f),
+        }
+    }
+}
+
+fn display_geometry(
+    name: &str,
+    edges: &Edges,
+    crs: &Crs,
+    f: &mut std::fmt::Formatter<'_>,
+) -> std::fmt::Result {
+    let mut params = Vec::new();
+
+    if let Some(crs) = crs {
+        params.push(crs.to_string());
+    }
+
+    match edges {
+        Edges::Planar => {}
+        Edges::Spherical => {
+            params.push("Spherical".to_string());
+        }
+    }
+
+    match params.len() {
+        0 => write!(f, "{name}")?,
+        1 => write!(f, "{name}({})", params[0])?,
+        _ => write!(f, "{name}({})", params.join(", "))?,
+    }
+
+    Ok(())
 }
 
 // Implementation details for importing/exporting types from/to Arrow + metadata
@@ -347,20 +391,88 @@ mod tests {
     #[test]
     fn sedona_type_to_string() {
         assert_eq!(SedonaType::Arrow(DataType::Int32).to_string(), "Int32");
-        assert_eq!(WKB_GEOMETRY.to_string(), "wkb");
-        assert_eq!(WKB_GEOGRAPHY.to_string(), "spherical wkb");
-        assert_eq!(WKB_VIEW_GEOMETRY.to_string(), "wkb_view");
-        assert_eq!(WKB_VIEW_GEOGRAPHY.to_string(), "spherical wkb_view");
+        assert_eq!(WKB_GEOMETRY.to_string(), "Wkb");
+        assert_eq!(WKB_GEOGRAPHY.to_string(), "Wkb(Spherical)");
+        assert_eq!(WKB_VIEW_GEOMETRY.to_string(), "WkbView");
+        assert_eq!(WKB_VIEW_GEOGRAPHY.to_string(), "WkbView(Spherical)");
         assert_eq!(
             SedonaType::Wkb(Edges::Planar, lnglat()).to_string(),
-            "wkb <ogc:crs84>"
+            "Wkb(ogc:crs84)"
         );
 
         let projjson_value: Value = r#"{}"#.parse().unwrap();
         let projjson_crs = deserialize_crs(&projjson_value).unwrap();
         assert_eq!(
             SedonaType::Wkb(Edges::Planar, projjson_crs).to_string(),
-            "wkb <{...}>"
+            "Wkb({...})"
+        );
+    }
+
+    #[test]
+    fn sedona_logical_type_name() {
+        assert_eq!(WKB_GEOMETRY.logical_type_name(), "geometry");
+        assert_eq!(WKB_GEOGRAPHY.logical_type_name(), "geography");
+
+        assert_eq!(
+            SedonaType::Arrow(DataType::Int32).logical_type_name(),
+            "int32"
+        );
+
+        assert_eq!(
+            SedonaType::Arrow(DataType::Utf8).logical_type_name(),
+            "utf8"
+        );
+        assert_eq!(
+            SedonaType::Arrow(DataType::Utf8View).logical_type_name(),
+            "utf8"
+        );
+
+        assert_eq!(
+            SedonaType::Arrow(DataType::Binary).logical_type_name(),
+            "binary"
+        );
+        assert_eq!(
+            SedonaType::Arrow(DataType::BinaryView).logical_type_name(),
+            "binary"
+        );
+
+        assert_eq!(
+            SedonaType::Arrow(DataType::Duration(arrow_schema::TimeUnit::Microsecond))
+                .logical_type_name(),
+            "duration"
+        );
+
+        assert_eq!(
+            SedonaType::Arrow(DataType::List(
+                Field::new("item", DataType::Int32, true).into()
+            ))
+            .logical_type_name(),
+            "list"
+        );
+        assert_eq!(
+            SedonaType::Arrow(DataType::ListView(
+                Field::new("item", DataType::Int32, true).into()
+            ))
+            .logical_type_name(),
+            "list"
+        );
+
+        assert_eq!(
+            SedonaType::Arrow(DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Binary)
+            ))
+            .logical_type_name(),
+            "binary"
+        );
+
+        assert_eq!(
+            SedonaType::Arrow(DataType::RunEndEncoded(
+                Field::new("ends", DataType::Int32, true).into(),
+                Field::new("values", DataType::Binary, true).into()
+            ))
+            .logical_type_name(),
+            "binary"
         );
     }
 
