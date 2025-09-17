@@ -28,19 +28,29 @@ The `sd.sql()` function is designed to query tables that have already been regis
 
 The correct process is a two-step approach:
 
-1. **Load** the Parquet file into a DataFrame using `sd.read_parquet()`.
-1. **Register** the DataFrame as a temporary view using `.createOrReplaceTempView()`.
+1. **Load** the Parquet file into a data frame using `sd.read_parquet()`.
+1. **Register** the data frame view with `to_view()`.
 1. **Query** the view using `sd.sql()`.
 
-```python
-# 1. Load the Parquet file from a URL into a DataFrame
+```python linenums="1" title="Read a parquet file with SedonaDB"
+
+import sedona.db
+sd = sedona.db.connect()
+
+df = sd.read_parquet(
+    's3://wherobots-benchmark-prod/SpatialBench_sf=1_format=parquet/'
+    'building/building.parquet'
+)
+
+# Load the Parquet file, which creates a Pandas data frame
 df = sd.read_parquet('s3://wherobots-benchmark-prod/SpatialBench_sf=1_format=parquet/building/building.parquet')
 
-# 2. Register the DataFrame as a temporary view named 'buildings'
-df.createOrReplaceTempView('buildings')
+# Convert the Pandas data frame to a Spark data frame AND
+#    register it as a temporary view in a single line.
+spark.createDataFrame(df).to_view("zone")
 
-# 3. Now, query the view using SQL
-sd.sql("SELECT * FROM buildings LIMIT 10").show()
+# Now, query the view using SQL
+sd.sql("SELECT * FROM zone LIMIT 10").show()
 ```
 
 ### Common Errors
@@ -56,6 +66,6 @@ sd.sql("SELECT * FROM 's3://wherobots-benchmark-prod/SpatialBench_sf=1_format=pa
 
 **Resulting Error:**
 
-```
+```bash
 sedonadb._lib.SedonaError: Error during planning: table '...s3://...' not found
 ```
