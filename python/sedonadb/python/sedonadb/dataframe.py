@@ -353,6 +353,49 @@ class DataFrame:
         width = _out_width(width)
         print(self._impl.show(self._ctx, limit, width, ascii), end="")
 
+    def explain(
+        self,
+        type: str = "standard",
+        format: str = "indent",
+    ) -> "DataFrame":
+        """Return the execution plan for this DataFrame as a DataFrame
+
+        Retrieves the logical and physical execution plans that will be used to
+        compute this DataFrame. This is useful for understanding query
+        performance and optimization.
+
+        Args:
+            type: The type of explain plan to generate. Supported values are:
+                "standard" (default) - shows logical and physical plans,
+                "extended" - includes additional query optimization details,
+                "analyze" - executes the plan and reports actual metrics.
+            format: The format to use for displaying the plan. Supported formats are
+                "indent" (default), "tree", "pgjson" and "graphviz".
+
+        Returns:
+            A DataFrame containing the execution plan information with columns
+            'plan_type' and 'plan'.
+
+        Examples:
+
+            >>> import sedonadb
+            >>> con = sedonadb.connect()
+            >>> df = con.sql("SELECT 1 as one")
+            >>> df.explain().show()
+            ┌───────────────┬─────────────────────────────────┐
+            │   plan_type   ┆               plan              │
+            │      utf8     ┆               utf8              │
+            ╞═══════════════╪═════════════════════════════════╡
+            │ logical_plan  ┆ Projection: Int64(1) AS one     │
+            │               ┆   EmptyRelation                 │
+            ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+            │ physical_plan ┆ ProjectionExec: expr=[1 as one] │
+            │               ┆   PlaceholderRowExec            │
+            │               ┆                                 │
+            └───────────────┴─────────────────────────────────┘
+        """
+        return DataFrame(self._ctx, self._impl.explain(type, format))
+
     def __repr__(self) -> str:
         if global_options().interactive:
             width = _out_width()

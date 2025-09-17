@@ -368,6 +368,68 @@ def test_show(con, capsys):
     assert capsys.readouterr().out.strip() == expected
 
 
+def test_show_explained(con, capsys):
+    con.sql("EXPLAIN SELECT 1 as one").show()
+    expected = """
+┌───────────────┬─────────────────────────────────┐
+│   plan_type   ┆               plan              │
+│      utf8     ┆               utf8              │
+╞═══════════════╪═════════════════════════════════╡
+│ logical_plan  ┆ Projection: Int64(1) AS one     │
+│               ┆   EmptyRelation                 │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ physical_plan ┆ ProjectionExec: expr=[1 as one] │
+│               ┆   PlaceholderRowExec            │
+│               ┆                                 │
+└───────────────┴─────────────────────────────────┘
+    """.strip()
+    assert capsys.readouterr().out.strip() == expected
+
+
+def test_explain(con, capsys):
+    con.sql("SELECT 1 as one").explain().show()
+    expected = """
+┌───────────────┬─────────────────────────────────┐
+│   plan_type   ┆               plan              │
+│      utf8     ┆               utf8              │
+╞═══════════════╪═════════════════════════════════╡
+│ logical_plan  ┆ Projection: Int64(1) AS one     │
+│               ┆   EmptyRelation                 │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ physical_plan ┆ ProjectionExec: expr=[1 as one] │
+│               ┆   PlaceholderRowExec            │
+│               ┆                                 │
+└───────────────┴─────────────────────────────────┘
+    """.strip()
+    assert capsys.readouterr().out.strip() == expected
+
+    con.sql("SELECT 1 as one").explain(format="tree").show()
+    expected = """
+┌───────────────┬───────────────────────────────┐
+│   plan_type   ┆              plan             │
+│      utf8     ┆              utf8             │
+╞═══════════════╪═══════════════════════════════╡
+│ physical_plan ┆ ┌───────────────────────────┐ │
+│               ┆ │       ProjectionExec      │ │
+│               ┆ │    --------------------   │ │
+│               ┆ │           one: 1          │ │
+│               ┆ └─────────────┬─────────────┘ │
+│               ┆ ┌─────────────┴─────────────┐ │
+│               ┆ │     PlaceholderRowExec    │ │
+│               ┆ └───────────────────────────┘ │
+│               ┆                               │
+└───────────────┴───────────────────────────────┘
+    """.strip()
+    assert capsys.readouterr().out.strip() == expected
+
+    query_plan = con.sql("SELECT 1 as one").explain(type="analyze").to_pandas()
+    assert query_plan.iloc[0, 0] == "Plan with Metrics"
+
+    query_plan = con.sql("SELECT 1 as one").explain(type="extended").to_pandas()
+    assert query_plan.iloc[0, 0] == "initial_logical_plan"
+    assert len(query_plan) > 10
+
+
 def test_repr(con):
     assert repr(con.sql("SELECT 1 as one")).startswith(
         "<sedonadb.dataframe.DataFrame object"

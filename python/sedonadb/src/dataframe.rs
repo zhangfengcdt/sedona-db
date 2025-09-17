@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 use std::ffi::CString;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow_array::ffi::FFI_ArrowSchema;
@@ -25,7 +26,7 @@ use datafusion::catalog::MemTable;
 use datafusion::logical_expr::SortExpr;
 use datafusion::prelude::DataFrame;
 use datafusion_common::Column;
-use datafusion_expr::Expr;
+use datafusion_expr::{ExplainFormat, ExplainOption, Expr};
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use pyo3::prelude::*;
 use pyo3::types::PyCapsule;
@@ -184,6 +185,26 @@ impl InternalDataFrame {
         )??;
 
         Ok(content)
+    }
+
+    fn explain(&self, explain_type: &str, format: &str) -> Result<Self, PySedonaError> {
+        let format = ExplainFormat::from_str(format)?;
+        let (analyze, verbose) = match explain_type {
+            "standard" => (false, false),
+            "extended" => (false, true),
+            "analyze" => (true, false),
+            _ => {
+                return Err(PySedonaError::SedonaPython(
+                    "explain type must be one of 'standard', 'extended', or 'analyze'".to_string(),
+                ))
+            }
+        };
+        let explain_option = ExplainOption::default()
+            .with_analyze(analyze)
+            .with_verbose(verbose)
+            .with_format(format);
+        let explain_df = self.inner.clone().explain_with_options(explain_option)?;
+        Ok(Self::new(explain_df, self.runtime.clone()))
     }
 
     fn __datafusion_table_provider__<'py>(
