@@ -246,6 +246,30 @@ impl GeometryFactory for WkbGeometryFactory {
     }
 }
 
+/// A [GeometryFactory] whose geometry type are raw WKB bytes
+///
+/// Using this geometry factory iterates over items as references to the raw underlying
+/// bytes, which is useful for writing optimized kernels that do not need the full buffer to
+/// be validated and/or parsed.
+#[derive(Default)]
+pub struct WkbBytesFactory {}
+
+impl GeometryFactory for WkbBytesFactory {
+    type Geom<'a> = &'a [u8];
+
+    fn try_from_wkb<'a>(&self, wkb_bytes: &'a [u8]) -> Result<Self::Geom<'a>> {
+        Ok(wkb_bytes)
+    }
+}
+
+/// Alias for an executor that iterates over geometries in their raw [Wkb] bytes.
+///
+/// This [GenericExecutor] implementation provides more optimization opportunities,
+/// but it requires additional manual processing of the raw [Wkb] bytes compared to
+/// the [WkbExecutor].
+pub(crate) type WkbBytesExecutor<'a, 'b> =
+    GenericExecutor<'a, 'b, WkbBytesFactory, WkbBytesFactory>;
+
 /// Trait for iterating over a container type as geometry scalars
 ///
 /// Currently the only scalar type supported is [Wkb]; however, for future
