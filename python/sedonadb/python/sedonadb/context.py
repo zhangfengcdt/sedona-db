@@ -22,6 +22,7 @@ from typing import Any, Dict, Iterable, Literal, Optional, Union
 from sedonadb._lib import InternalContext, configure_proj_shared
 from sedonadb.dataframe import DataFrame, _create_data_frame
 from sedonadb.utility import sedona  # noqa: F401
+from sedonadb._options import Options
 
 
 class SedonaContext:
@@ -30,10 +31,23 @@ class SedonaContext:
     This object keeps track of state such as registered functions,
     registered tables, and available memory. This is similar to a
     Spark SessionContext or a database connection.
+
+    Examples:
+
+        >>> sd = sedona.db.connect()
+        >>> sd.options.interactive = True
+        >>> sd.sql("SELECT 1 as one")
+        ┌───────┐
+        │  one  │
+        │ int64 │
+        ╞═══════╡
+        │     1 │
+        └───────┘
     """
 
     def __init__(self):
         self._impl = InternalContext()
+        self.options = Options()
 
     def create_data_frame(self, obj: Any, schema: Any = None) -> DataFrame:
         """Create a DataFrame from an in-memory or protocol-enabled object.
@@ -64,7 +78,7 @@ class SedonaContext:
             │     1 │
             └───────┘
         """
-        return _create_data_frame(self._impl, obj, schema)
+        return _create_data_frame(self._impl, obj, schema, self.options)
 
     def view(self, name: str) -> DataFrame:
         """Create a [DataFrame][sedonadb.dataframe.DataFrame] from a named view
@@ -88,7 +102,7 @@ class SedonaContext:
             >>> sd.drop_view("foofy")
 
         """
-        return DataFrame(self._impl, self._impl.view(name))
+        return DataFrame(self._impl, self._impl.view(name), self.options)
 
     def drop_view(self, name: str) -> None:
         """Remove a named view
@@ -135,6 +149,7 @@ class SedonaContext:
         return DataFrame(
             self._impl,
             self._impl.read_parquet([str(path) for path in table_paths], options),
+            self.options,
         )
 
     def sql(self, sql: str) -> DataFrame:
@@ -153,7 +168,7 @@ class SedonaContext:
             <sedonadb.dataframe.DataFrame object at ...>
 
         """
-        return DataFrame(self._impl, self._impl.sql(sql))
+        return DataFrame(self._impl, self._impl.sql(sql), self.options)
 
 
 def connect() -> SedonaContext:
