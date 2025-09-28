@@ -30,7 +30,9 @@ use datafusion_execution::{
 use datafusion_expr::{ColumnarValue, JoinType};
 use datafusion_physical_plan::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use futures::StreamExt;
-use geo_index::rtree::distance::{DistanceMetric, EuclideanDistance, HaversineDistance};
+use geo_index::rtree::distance::{
+    DistanceMetric, EuclideanDistance, HaversineDistance, IndexedDistanceMetric,
+};
 use geo_index::rtree::{sort::HilbertSort, RTree, RTreeBuilder, RTreeIndex};
 use geo_index::IndexableNum;
 use geo_types::{Geometry, Point, Rect};
@@ -567,22 +569,15 @@ impl SpatialIndex {
             });
         }
 
-        // Choose distance metric based on use_spheroid parameter
-        let distance_metric: Box<dyn DistanceMetric<f32>> = if use_spheroid {
-            // For spheroid (geodesic) distance, we use the Haversine formula as an approximation for now.
-            // The distance metric will be used to calculate distances between geometries for ranking purposes.
-            Box::new(HaversineDistance::default())
-        } else {
-            Box::new(EuclideanDistance)
-        };
+        // Create an indexed distance metric adapter for KNN queries
+        let indexed_metric = SedonaKnnAdapter::new(geometries, use_spheroid);
 
         // Use neighbors_geometry to find k nearest neighbors
         let initial_results = self.rtree.neighbors_geometry(
             &probe_geom,
             Some(k as usize),
             None, // no max_distance filter
-            distance_metric.as_ref(),
-            geometries,
+            &indexed_metric,
         );
 
         if initial_results.is_empty() {
@@ -602,9 +597,11 @@ impl SpatialIndex {
 
             for &result_idx in &final_results {
                 if (result_idx as usize) < geometries.len() {
-                    let distance = distance_metric.geometry_to_geometry_distance(
-                        &probe_geom,
-                        &geometries[result_idx as usize],
+                    let distance = indexed_metric.indexed_distance(
+                        -1,
+                        result_idx as usize,
+                        Some(&probe_geom),
+                        (0.0, 0.0, 0.0, 0.0), // bbox not used for distance calculation
                     );
                     if let Some(distance_f64) = distance.to_f64() {
                         distances_with_indices.push((distance_f64, result_idx));
@@ -655,9 +652,11 @@ impl SpatialIndex {
 
                 for &result_idx in &expanded_results {
                     if (result_idx as usize) < geometries.len() {
-                        let distance = distance_metric.geometry_to_geometry_distance(
-                            &probe_geom,
-                            &geometries[result_idx as usize],
+                        let distance = indexed_metric.indexed_distance(
+                            -1,
+                            result_idx as usize,
+                            Some(&probe_geom),
+                            (0.0, 0.0, 0.0, 0.0), // bbox not used for distance calculation
                         );
                         if let Some(distance_f64) = distance.to_f64() {
                             all_distances_with_indices.push((distance_f64, result_idx));
@@ -936,6 +935,70 @@ async fn collect_build_partition(
 
 /// Rough estimate for in-memory size of the rtree per rect in bytes
 const RTREE_MEMORY_ESTIMATE_PER_RECT: usize = 60;
+
+/// Custom indexed distance metric adapter for SedonaDB KNN queries.
+/// This adapter provides efficient distance calculations for cached geometries
+/// with support for both Euclidean and Haversine distance metrics.
+struct SedonaKnnAdapter<'a> {
+    geometries: &'a [Geometry<f64>],
+    distance_metric: Box<dyn DistanceMetric<f32> + 'a>,
+}
+
+impl<'a> SedonaKnnAdapter<'a> {
+    /// Create a new adapter with the specified distance metric
+    fn new(geometries: &'a [Geometry<f64>], use_spheroid: bool) -> Self {
+        let distance_metric: Box<dyn DistanceMetric<f32> + 'a> = if use_spheroid {
+            // For spheroid (geodesic) distance, we use the Haversine formula as an approximation.
+            Box::new(HaversineDistance::default())
+        } else {
+            Box::new(EuclideanDistance)
+        };
+
+        Self {
+            geometries,
+            distance_metric,
+        }
+    }
+}
+
+impl<'a> IndexedDistanceMetric<f32> for SedonaKnnAdapter<'a> {
+    fn indexed_distance(
+        &self,
+        _query_index: i32,
+        item_index: usize,
+        query_geometry: Option<&Geometry<f64>>,
+        _item_bbox: (f32, f32, f32, f32),
+    ) -> f32 {
+        if let Some(query) = query_geometry {
+            if item_index < self.geometries.len() {
+                // Calculate distance using the configured metric
+                self.distance_metric
+                    .geometry_to_geometry_distance(query, &self.geometries[item_index])
+            } else {
+                f32::MAX
+            }
+        } else {
+            f32::MAX
+        }
+    }
+
+    fn distance_to_bbox(
+        &self,
+        x: f32,
+        y: f32,
+        min_x: f32,
+        min_y: f32,
+        max_x: f32,
+        max_y: f32,
+    ) -> f32 {
+        self.distance_metric
+            .distance_to_bbox(x, y, min_x, min_y, max_x, max_y)
+    }
+
+    fn max_distance(&self) -> f32 {
+        f32::MAX
+    }
+}
 
 #[cfg(test)]
 mod tests {
