@@ -14,8 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use std::cell::RefCell;
-use std::collections::HashMap;
+use once_cell::sync::OnceCell;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -248,6 +247,7 @@ impl SpatialIndexBuilder {
                 self.options,
                 AtomicUsize::new(self.probe_threads_count),
                 self.reservation,
+                self.memory_pool.clone(),
             ));
         }
 
@@ -275,6 +275,10 @@ impl SpatialIndexBuilder {
             ConcurrentReservation::try_new(REFINER_RESERVATION_PREALLOC_SIZE, refiner_reservation)
                 .unwrap();
 
+        let cache_size = batch_pos_vec.len();
+        let knn_components =
+            KnnComponents::new(cache_size, &self.indexed_batches, self.memory_pool.clone())?;
+
         Ok(SpatialIndex {
             schema,
             evaluator,
@@ -286,6 +290,7 @@ impl SpatialIndexBuilder {
             geom_idx_vec,
             visited_left_side,
             probe_threads_counter: AtomicUsize::new(self.probe_threads_count),
+            knn_components,
             reservation: self.reservation,
         })
     }
@@ -330,6 +335,9 @@ pub(crate) struct SpatialIndex {
     /// The last finished probe thread will produce the extra output batches for unmatched
     /// build side when running left-outer joins. See also [`report_probe_completed`].
     probe_threads_counter: AtomicUsize,
+
+    /// Shared KNN components (distance metrics and geometry cache) for efficient KNN queries
+    knn_components: KnnComponents,
 
     /// Memory reservation for tracking the memory usage of the spatial index
     /// Cleared on `SpatialIndex` drop
@@ -378,6 +386,7 @@ impl SpatialIndex {
         options: SpatialJoinOptions,
         probe_threads_counter: AtomicUsize,
         mut reservation: MemoryReservation,
+        memory_pool: Arc<dyn MemoryPool>,
     ) -> Self {
         let evaluator = create_operand_evaluator(&spatial_predicate, options.clone());
         let refiner = create_refiner(
@@ -401,12 +410,29 @@ impl SpatialIndex {
             geom_idx_vec: Vec::new(),
             visited_left_side: None,
             probe_threads_counter,
+            knn_components: KnnComponents::new(0, &[], memory_pool.clone()).unwrap(), // Empty index has no cache
             reservation,
         }
     }
 
     pub(crate) fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+
+    /// Create a KNN adapter with the specified distance metric type
+    fn create_knn_adapter(&self, use_spheroid: bool) -> SedonaKnnAdapter {
+        let distance_metric: &dyn DistanceMetric<f32> = if use_spheroid {
+            &self.knn_components.haversine_metric
+        } else {
+            &self.knn_components.euclidean_metric
+        };
+
+        SedonaKnnAdapter::new(
+            &self.indexed_batches,
+            &self.data_id_to_batch_pos,
+            distance_metric,
+            &self.knn_components,
+        )
     }
 
     /// Get the batch at the given index.
@@ -511,12 +537,8 @@ impl SpatialIndex {
             }
         };
 
-        // Create an indexed distance metric adapter for KNN queries with on-demand WKB decoding
-        let indexed_metric = SedonaKnnAdapter::new(
-            &self.indexed_batches,
-            &self.data_id_to_batch_pos,
-            use_spheroid,
-        );
+        // Create an indexed distance metric adapter for KNN queries with cached distance metrics
+        let indexed_metric = self.create_knn_adapter(use_spheroid);
 
         // Use neighbors_geometry to find k nearest neighbors
         let initial_results = self.rtree.neighbors_geometry(
@@ -772,6 +794,7 @@ pub(crate) async fn build_index(
             options,
             AtomicUsize::new(probe_threads_count),
             reservation,
+            memory_pool,
         ));
     }
 
@@ -882,62 +905,106 @@ async fn collect_build_partition(
 /// Rough estimate for in-memory size of the rtree per rect in bytes
 const RTREE_MEMORY_ESTIMATE_PER_RECT: usize = 60;
 
+/// Shared KNN components that can be reused across queries
+struct KnnComponents {
+    euclidean_metric: EuclideanDistance,
+    haversine_metric: HaversineDistance,
+    /// Pre-allocated vector for geometry cache - lock-free access
+    /// Indexed by rtree data index for O(1) access
+    geometry_cache: Vec<OnceCell<Geometry<f64>>>,
+}
+
+impl KnnComponents {
+    fn new(
+        cache_size: usize,
+        indexed_batches: &[IndexedBatch],
+        memory_pool: Arc<dyn MemoryPool>,
+    ) -> datafusion_common::Result<Self> {
+        // Create memory consumer and reservation for geometry cache
+        let consumer = MemoryConsumer::new("SpatialJoinKnnGeometryCache");
+        let mut memory_reservation = consumer.register(&memory_pool);
+
+        // Estimate maximum possible memory usage based on WKB sizes
+        let estimated_memory = Self::estimate_max_memory_usage(indexed_batches);
+        memory_reservation.try_grow(estimated_memory)?;
+
+        // Pre-allocate OnceCell vector
+        let geometry_cache = (0..cache_size).map(|_| OnceCell::new()).collect();
+
+        Ok(Self {
+            euclidean_metric: EuclideanDistance,
+            haversine_metric: HaversineDistance::default(),
+            geometry_cache,
+        })
+    }
+
+    /// Estimate the maximum memory usage for decoded geometries based on WKB sizes
+    fn estimate_max_memory_usage(indexed_batches: &[IndexedBatch]) -> usize {
+        let mut total_wkb_size = 0;
+
+        for batch in indexed_batches {
+            for wkb in batch.geom_array.wkbs().iter().flatten() {
+                total_wkb_size += wkb.buf().len();
+            }
+        }
+        total_wkb_size
+    }
+}
+
 /// Enhanced indexed distance metric adapter for SedonaDB KNN queries.
 /// This adapter provides on-demand WKB decoding and geometry caching for efficient
 /// distance calculations with support for both Euclidean and Haversine distance metrics.
 struct SedonaKnnAdapter<'a> {
     indexed_batches: &'a [IndexedBatch],
     data_id_to_batch_pos: &'a [(i32, i32)],
-    distance_metric: Box<dyn DistanceMetric<f32> + 'a>,
-    // Cache for decoded geometries to avoid repeated WKB conversions
-    geometry_cache: RefCell<HashMap<usize, Geometry<f64>>>,
+    distance_metric: &'a dyn DistanceMetric<f32>,
+    // Reference to KNN components for cache and memory tracking
+    knn_components: &'a KnnComponents,
 }
 
 impl<'a> SedonaKnnAdapter<'a> {
-    /// Create a new adapter with on-demand WKB decoding and caching
+    /// Create a new adapter with a pre-configured distance metric
     fn new(
         indexed_batches: &'a [IndexedBatch],
         data_id_to_batch_pos: &'a [(i32, i32)],
-        use_spheroid: bool,
+        distance_metric: &'a dyn DistanceMetric<f32>,
+        knn_components: &'a KnnComponents,
     ) -> Self {
-        let distance_metric: Box<dyn DistanceMetric<f32> + 'a> = if use_spheroid {
-            // For spheroid (geodesic) distance, we use the Haversine formula as an approximation.
-            Box::new(HaversineDistance::default())
-        } else {
-            Box::new(EuclideanDistance)
-        };
-
         Self {
             indexed_batches,
             data_id_to_batch_pos,
             distance_metric,
-            geometry_cache: RefCell::new(HashMap::new()),
+            knn_components,
         }
     }
 
-    /// Get geometry for the given data index with caching
+    /// Get geometry for the given data index with lock-free caching
     fn get_geometry(&self, data_index: usize) -> Option<Geometry<f64>> {
-        // Check cache first
-        if let Some(cached_geom) = self.geometry_cache.borrow().get(&data_index) {
-            return Some(cached_geom.clone());
+        let geometry_cache = &self.knn_components.geometry_cache;
+
+        // Bounds check
+        if data_index >= geometry_cache.len() || data_index >= self.data_id_to_batch_pos.len() {
+            return None;
         }
 
-        // Cache miss - decode from WKB on-demand
-        if data_index < self.data_id_to_batch_pos.len() {
-            let (batch_idx, row_idx) = self.data_id_to_batch_pos[data_index];
-            let indexed_batch = &self.indexed_batches[batch_idx as usize];
+        // Try to get from cache first
+        if let Some(geom) = geometry_cache[data_index].get() {
+            return Some(geom.clone());
+        }
 
-            if let Some(wkb) = indexed_batch.wkb(row_idx as usize) {
-                if let Ok(geom) = item_to_geometry(wkb) {
-                    // Store in cache for future use
-                    self.geometry_cache
-                        .borrow_mut()
-                        .insert(data_index, geom.clone());
-                    return Some(geom);
-                }
+        // Cache miss - decode from WKB
+        let (batch_idx, row_idx) = self.data_id_to_batch_pos[data_index];
+        let indexed_batch = &self.indexed_batches[batch_idx as usize];
+
+        if let Some(wkb) = indexed_batch.wkb(row_idx as usize) {
+            if let Ok(geom) = item_to_geometry(wkb) {
+                // Try to store in cache - if another thread got there first, we just use theirs
+                let _ = geometry_cache[data_index].set(geom.clone());
+                return Some(geom);
             }
         }
 
+        // Failed to decode - don't cache invalid results
         None
     }
 }
