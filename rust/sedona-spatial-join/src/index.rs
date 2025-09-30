@@ -32,7 +32,7 @@ use datafusion_expr::{ColumnarValue, JoinType};
 use datafusion_physical_plan::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use futures::StreamExt;
 use geo_index::rtree::distance::{
-    DistanceMetric, EuclideanDistance, HaversineDistance, IndexedDistanceMetric,
+    DistanceMetric, EuclideanDistance, GeometryAccessor, HaversineDistance,
 };
 use geo_index::rtree::{sort::HilbertSort, RTree, RTreeBuilder, RTreeIndex};
 use geo_index::IndexableNum;
@@ -419,18 +419,11 @@ impl SpatialIndex {
         self.schema.clone()
     }
 
-    /// Create a KNN adapter with the specified distance metric type
-    fn create_knn_adapter(&self, use_spheroid: bool) -> SedonaKnnAdapter {
-        let distance_metric: &dyn DistanceMetric<f32> = if use_spheroid {
-            &self.knn_components.haversine_metric
-        } else {
-            &self.knn_components.euclidean_metric
-        };
-
+    /// Create a KNN geometry accessor for accessing geometries with caching
+    fn create_knn_accessor(&self) -> SedonaKnnAdapter {
         SedonaKnnAdapter::new(
             &self.indexed_batches,
             &self.data_id_to_batch_pos,
-            distance_metric,
             &self.knn_components,
         )
     }
@@ -537,15 +530,23 @@ impl SpatialIndex {
             }
         };
 
-        // Create an indexed distance metric adapter for KNN queries with cached distance metrics
-        let indexed_metric = self.create_knn_adapter(use_spheroid);
+        // Select the appropriate distance metric
+        let distance_metric: &dyn DistanceMetric<f32> = if use_spheroid {
+            &self.knn_components.haversine_metric
+        } else {
+            &self.knn_components.euclidean_metric
+        };
+
+        // Create geometry accessor for on-demand WKB decoding and caching
+        let geometry_accessor = self.create_knn_accessor();
 
         // Use neighbors_geometry to find k nearest neighbors
         let initial_results = self.rtree.neighbors_geometry(
             &probe_geom,
             Some(k as usize),
             None, // no max_distance filter
-            &indexed_metric,
+            distance_metric,
+            &geometry_accessor,
         );
 
         if initial_results.is_empty() {
@@ -565,14 +566,12 @@ impl SpatialIndex {
 
             for &result_idx in &final_results {
                 if (result_idx as usize) < self.data_id_to_batch_pos.len() {
-                    let distance = indexed_metric.indexed_distance(
-                        -1,
-                        result_idx as usize,
-                        Some(&probe_geom),
-                        (0.0, 0.0, 0.0, 0.0), // bbox not used for distance calculation
-                    );
-                    if let Some(distance_f64) = distance.to_f64() {
-                        distances_with_indices.push((distance_f64, result_idx));
+                    if let Some(item_geom) = geometry_accessor.get_geometry(result_idx as usize) {
+                        let distance =
+                            distance_metric.distance_to_geometry(&probe_geom, &item_geom);
+                        if let Some(distance_f64) = distance.to_f64() {
+                            distances_with_indices.push((distance_f64, result_idx));
+                        }
                     }
                 }
             }
@@ -620,14 +619,13 @@ impl SpatialIndex {
 
                 for &result_idx in &expanded_results {
                     if (result_idx as usize) < self.data_id_to_batch_pos.len() {
-                        let distance = indexed_metric.indexed_distance(
-                            -1,
-                            result_idx as usize,
-                            Some(&probe_geom),
-                            (0.0, 0.0, 0.0, 0.0), // bbox not used for distance calculation
-                        );
-                        if let Some(distance_f64) = distance.to_f64() {
-                            all_distances_with_indices.push((distance_f64, result_idx));
+                        if let Some(item_geom) = geometry_accessor.get_geometry(result_idx as usize)
+                        {
+                            let distance =
+                                distance_metric.distance_to_geometry(&probe_geom, &item_geom);
+                            if let Some(distance_f64) = distance.to_f64() {
+                                all_distances_with_indices.push((distance_f64, result_idx));
+                            }
                         }
                     }
                 }
@@ -951,101 +949,60 @@ impl KnnComponents {
     }
 }
 
-/// Enhanced indexed distance metric adapter for SedonaDB KNN queries.
-/// This adapter provides on-demand WKB decoding and geometry caching for efficient
-/// distance calculations with support for both Euclidean and Haversine distance metrics.
+/// Geometry accessor for SedonaDB KNN queries.
+/// This accessor provides on-demand WKB decoding and geometry caching for efficient
+/// KNN queries with support for both Euclidean and Haversine distance metrics.
 struct SedonaKnnAdapter<'a> {
     indexed_batches: &'a [IndexedBatch],
     data_id_to_batch_pos: &'a [(i32, i32)],
-    distance_metric: &'a dyn DistanceMetric<f32>,
     // Reference to KNN components for cache and memory tracking
     knn_components: &'a KnnComponents,
 }
 
 impl<'a> SedonaKnnAdapter<'a> {
-    /// Create a new adapter with a pre-configured distance metric
+    /// Create a new adapter
     fn new(
         indexed_batches: &'a [IndexedBatch],
         data_id_to_batch_pos: &'a [(i32, i32)],
-        distance_metric: &'a dyn DistanceMetric<f32>,
         knn_components: &'a KnnComponents,
     ) -> Self {
         Self {
             indexed_batches,
             data_id_to_batch_pos,
-            distance_metric,
             knn_components,
         }
     }
+}
 
-    /// Get geometry for the given data index with lock-free caching
-    fn get_geometry(&self, data_index: usize) -> Option<Geometry<f64>> {
+impl<'a> GeometryAccessor for SedonaKnnAdapter<'a> {
+    /// Get geometry for the given item index with lock-free caching
+    fn get_geometry(&self, item_index: usize) -> Option<Geometry<f64>> {
         let geometry_cache = &self.knn_components.geometry_cache;
 
         // Bounds check
-        if data_index >= geometry_cache.len() || data_index >= self.data_id_to_batch_pos.len() {
+        if item_index >= geometry_cache.len() || item_index >= self.data_id_to_batch_pos.len() {
             return None;
         }
 
         // Try to get from cache first
-        if let Some(geom) = geometry_cache[data_index].get() {
+        if let Some(geom) = geometry_cache[item_index].get() {
             return Some(geom.clone());
         }
 
         // Cache miss - decode from WKB
-        let (batch_idx, row_idx) = self.data_id_to_batch_pos[data_index];
+        let (batch_idx, row_idx) = self.data_id_to_batch_pos[item_index];
         let indexed_batch = &self.indexed_batches[batch_idx as usize];
 
         if let Some(wkb) = indexed_batch.wkb(row_idx as usize) {
             if let Ok(geom) = item_to_geometry(wkb) {
                 // Try to store in cache - if another thread got there first, we just use theirs
-                let _ = geometry_cache[data_index].set(geom.clone());
+                let _ = geometry_cache[item_index].set(geom.clone());
                 return Some(geom);
             }
         }
 
         // Failed to decode - don't cache invalid results
         None
-    }
-}
-
-impl<'a> IndexedDistanceMetric<f32> for SedonaKnnAdapter<'a> {
-    fn indexed_distance(
-        &self,
-        _query_index: i32,
-        item_index: usize,
-        query_geometry: Option<&Geometry<f64>>,
-        _item_bbox: (f32, f32, f32, f32),
-    ) -> f32 {
-        if let Some(query) = query_geometry {
-            // Get geometry with on-demand decoding and caching
-            if let Some(item_geom) = self.get_geometry(item_index) {
-                // Calculate distance using the configured metric
-                self.distance_metric
-                    .geometry_to_geometry_distance(query, &item_geom)
-            } else {
-                f32::MAX
-            }
-        } else {
-            f32::MAX
-        }
-    }
-
-    fn distance_to_bbox(
-        &self,
-        x: f32,
-        y: f32,
-        min_x: f32,
-        min_y: f32,
-        max_x: f32,
-        max_y: f32,
-    ) -> f32 {
-        self.distance_metric
-            .distance_to_bbox(x, y, min_x, min_y, max_x, max_y)
-    }
-
-    fn max_distance(&self) -> f32 {
-        f32::MAX
     }
 }
 
