@@ -18,6 +18,29 @@
 members = [
     "c/sedona-geoarrow-c",
     "c/sedona-geos",
+    "c/sedona-libgpuspatial",
+    "c/sedona-proj",
+    "c/sedona-s2geography",
+    "c/sedona-tg",
+    "r/sedonadb/src/rust",
+    "rust/sedona-adbc",
+    "rust/sedona-expr",
+    "rust/sedona-functions",
+    "rust/sedona-geo",
+    "rust/sedona-geometry",
+    "rust/sedona-geoparquet",
+    "rust/sedona-schema",
+    "rust/sedona-spatial-join",
+    "rust/sedona-spatial-join-gpu",
+    "rust/sedona-testing",
+    "rust/sedona",
+    "python/sedonadb",
+    "sedona-cli",
+]
+resolver = "2"
+default-members = [
+    "c/sedona-geoarrow-c",
+    "c/sedona-geos",
     "c/sedona-proj",
     "c/sedona-s2geography",
     "c/sedona-tg",
@@ -32,10 +55,8 @@ members = [
     "rust/sedona-spatial-join",
     "rust/sedona-testing",
     "rust/sedona",
-    "python/sedonadb",
     "sedona-cli",
 ]
-resolver = "2"
 
 [workspace.package]
 version = "0.2.0"
@@ -114,6 +135,9 @@ tempfile = { version = "3"}
 thiserror = { version = "2" }
 tokio = { version = "1.44" }
 url = "2.5.4"
+
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(gpu_available)'] }
 
 [patch.crates-io]
 # For R package build on Windows (can be removed when we upgrade to DataFusion main/51.0.0)

@@ -1,0 +1,110 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+name: rust-gpu
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'c/sedona-libgpuspatial/**'
+      - 'rust/sedona-spatial-join-gpu/**'
+      - '.github/workflows/rust-gpu.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'c/sedona-libgpuspatial/**'
+      - 'rust/sedona-spatial-join-gpu/**'
+      - '.github/workflows/rust-gpu.yml'
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.ref }}-${{ github.workflow }}-rust-gpu
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash -l -eo pipefail {0}
+
+jobs:
+  rust-gpu:
+    name: "GPU Build & Test"
+    # Use self-hosted runner with CUDA support
+    # Adjust the labels based on your runner configuration
+    runs-on: [self-hosted, gpu, linux, cuda]
+
+    env:
+      CARGO_INCREMENTAL: 0
+      # Reduce debug info to save disk space
+      CARGO_PROFILE_DEV_DEBUG: 1
+      CARGO_PROFILE_TEST_DEBUG: 1
+      # Limit parallel compilation to reduce memory pressure
+      CARGO_BUILD_JOBS: 4
+      # CUDA configuration
+      CUDA_HOME: /usr/local/cuda
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: Verify CUDA installation
+        run: |
+          which nvcc
+          nvcc --version
+          echo "CUDA_HOME=$CUDA_HOME"
+
+      - name: Use stable Rust
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "rust-gpu-v1"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential
+
+      - name: Build GPU crates
+        run: |
+          cargo build --package sedona-libgpuspatial --features gpu
+          cargo build --package sedona-spatial-join-gpu --features gpu
+
+      - name: Test GPU crates
+        run: |
+          cargo test --package sedona-libgpuspatial --features gpu
+          cargo test --package sedona-spatial-join-gpu --features gpu
+
+      - name: Check GPU functionality
+        run: |
+          # Verify that GPU code was actually compiled
+          cargo build --package sedona-libgpuspatial --features gpu -vv 2>&1 | tee build.log
+          if grep -q "GPU feature not enabled" build.log; then
+            echo "ERROR: GPU feature was not enabled!"
+            exit 1
+          fi
+          if grep -q "CUDA not found" build.log; then
+            echo "ERROR: CUDA was not detected during build!"
+            exit 1
+          fi
+          echo "GPU build successful with CUDA support"

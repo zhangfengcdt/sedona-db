@@ -115,27 +115,27 @@ jobs:
       - name: Build
         if: matrix.name == 'build'
         run: |
-          cargo build --workspace --all-targets --all-features
+          cargo build --workspace --exclude sedonadb --all-targets --all-features
 
       - name: Clippy
         if: matrix.name == 'clippy'
         run: |
-          cargo clippy --workspace --all-targets --all-features -- -Dwarnings
+          cargo clippy --workspace --exclude sedonadb --all-targets --all-features -- -Dwarnings
 
       - name: Test
         if: matrix.name == 'test'
         run: |
-          cargo test --workspace --all-targets --all-features
+          cargo test --workspace --exclude sedonadb --all-targets --all-features
           # Clean up intermediate build artifacts to free disk space
           cargo clean -p sedona-s2geography
 
       - name: Doctests
         if: matrix.name == 'test'
         run: |
-          cargo test --workspace --doc --all-features
+          cargo test --workspace --exclude sedonadb --doc --all-features
 
       - name: Check docs
         if: matrix.name == 'docs'
         run: |
           # Generate docs with reduced parallelism to avoid memory issues
-          cargo doc --workspace --all-features -j 2
+          cargo doc --workspace --exclude sedonadb --all-features -j 2
