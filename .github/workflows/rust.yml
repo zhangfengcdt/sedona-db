@@ -97,6 +97,10 @@ jobs:
         if: steps.cache-vcpkg.outputs.cache-hit != 'true'
         run: |
           ./vcpkg/vcpkg install abseil openssl
+          # Clean up vcpkg buildtrees and downloads to save space
+          rm -rf vcpkg/buildtrees
+          rm -rf vcpkg/downloads
+          df -h
 
       - name: Use stable Rust
         id: rust
@@ -116,11 +120,17 @@ jobs:
         if: matrix.name == 'build'
         run: |
           cargo build --workspace --all-targets --all-features
+          # Clean up build artifacts
+          rm -rf target/debug/deps
+          df -h
 
       - name: Clippy
         if: matrix.name == 'clippy'
         run: |
           cargo clippy --workspace --all-targets --all-features -- -Dwarnings
+          # Clean up clippy artifacts
+          rm -rf target/debug/deps
+          df -h
 
       - name: Test
         if: matrix.name == 'test'
@@ -128,11 +138,17 @@ jobs:
           cargo test --workspace --all-targets --all-features
           # Clean up intermediate build artifacts to free disk space
           cargo clean -p sedona-s2geography
+          # Remove target/debug/deps to free more space
+          rm -rf target/debug/deps
+          df -h
 
       - name: Doctests
         if: matrix.name == 'test'
         run: |
           cargo test --workspace --doc --all-features
+          # Clean up after doctests
+          cargo clean
+          df -h
 
       - name: Check docs
         if: matrix.name == 'docs'
