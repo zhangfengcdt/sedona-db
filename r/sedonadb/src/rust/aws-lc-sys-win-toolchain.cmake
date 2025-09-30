@@ -15,26 +15,5 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-name = "sedonadbr"
-version = { workspace = true }
-edition = "2021"
-
-[lib]
-crate-type = ["staticlib", "lib"]
-
-[dependencies]
-arrow-schema = { workspace = true }
-arrow-array = { workspace = true }
-datafusion = { workspace = true }
-datafusion-common = { workspace = true }
-savvy = "*"
-savvy-ffi = "*"
-sedona = { path = "../../../../rust/sedona" }
-sedona-adbc = { path = "../../../../rust/sedona-adbc" }
-sedona-expr = { path = "../../../../rust/sedona-expr" }
-sedona-geoparquet = { path = "../../../../rust/sedona-geoparquet" }
-sedona-proj = { path = "../../../../c/sedona-proj", default-features = false }
-sedona-schema = { path = "../../../../rust/sedona-schema" }
-thiserror = { workspace = true }
-tokio = { workspace = true }
+# Set the maximum object path length
+set(CMAKE_OBJECT_PATH_MAX 1024)
