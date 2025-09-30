@@ -10,14 +10,13 @@ fn main() {
     let gpu_feature_enabled = env::var("CARGO_FEATURE_GPU").is_ok();
 
     if !gpu_feature_enabled {
-        println!("cargo:warning=GPU feature not enabled. Use --features gpu to enable GPU support.");
+        println!(
+            "cargo:warning=GPU feature not enabled. Use --features gpu to enable GPU support."
+        );
         // Create empty bindings file so the build doesn't fail
         let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
-        std::fs::write(
-            out_path.join("bindings.rs"),
-            "// GPU feature not enabled\n",
-        )
-        .expect("Couldn't write empty bindings!");
+        std::fs::write(out_path.join("bindings.rs"), "// GPU feature not enabled\n")
+            .expect("Couldn't write empty bindings!");
         return;
     }
 
