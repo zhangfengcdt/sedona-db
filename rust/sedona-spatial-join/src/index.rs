@@ -420,7 +420,7 @@ impl SpatialIndex {
     }
 
     /// Create a KNN geometry accessor for accessing geometries with caching
-    fn create_knn_accessor(&self) -> SedonaKnnAdapter {
+    fn create_knn_accessor(&self) -> SedonaKnnAdapter<'_> {
         SedonaKnnAdapter::new(
             &self.indexed_batches,
             &self.data_id_to_batch_pos,
