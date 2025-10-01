@@ -132,6 +132,20 @@ jobs:
           sudo apt-add-repository 'deb https://apt.kitware.com/ubuntu/ jammy main'
           sudo apt-get update
 
+          # Install GCC 10 (CUDA 11.5 doesn't support GCC 11)
+          echo "Installing GCC 10 for CUDA compatibility..."
+          sudo apt-get install -y gcc-10 g++-10
+
+          # Set GCC 10 as default
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-10 100
+          sudo update-alternatives --install /usr/bin/cc cc /usr/bin/gcc-10 100
+          sudo update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++-10 100
+
+          # Verify compiler versions
+          gcc --version
+          g++ --version
+
           # Install build tools
           sudo apt-get install -y build-essential pkg-config cmake flex bison
 
