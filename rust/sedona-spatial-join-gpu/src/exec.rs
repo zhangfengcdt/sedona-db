@@ -12,7 +12,7 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
 };
 
-use crate::gpu_spatial_join::config::GpuSpatialJoinConfig;
+use crate::config::GpuSpatialJoinConfig;
 
 /// GPU-accelerated spatial join execution plan
 ///
