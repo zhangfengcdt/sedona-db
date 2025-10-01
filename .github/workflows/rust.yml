@@ -161,15 +161,15 @@ jobs:
           # Increment version suffix to force rebuild
           key: vcpkg-installed-${{ runner.os }}-${{ runner.arch }}-1
 
-      # Install vcpkg dependencies if not cached
-      # vcpkg will read from c/sedona-libgpuspatial/libgpuspatial/vcpkg.json
+      # Install vcpkg dependencies from vcpkg.json manifest
       - name: Install vcpkg dependencies
         if: steps.cache-vcpkg.outputs.cache-hit != 'true'
-        working-directory: c/sedona-libgpuspatial/libgpuspatial
         run: |
           echo "Installing vcpkg dependencies from vcpkg.json..."
+          echo "Manifest: c/sedona-libgpuspatial/libgpuspatial/vcpkg.json"
           echo "Dependencies: nlohmann-json, gflags, gtest, zstd, arrow[s3]"
-          ${{ github.workspace }}/vcpkg/vcpkg install
+          # Use --x-manifest-root to specify the directory with vcpkg.json
+          ./vcpkg/vcpkg install --x-manifest-root=c/sedona-libgpuspatial/libgpuspatial
 
       - name: Setup Rust toolchain
         run: |
