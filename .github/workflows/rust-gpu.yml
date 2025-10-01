@@ -14,6 +14,13 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+#
+# This workflow builds GPU packages on GitHub-hosted runners (ubuntu-latest)
+# to verify Linux compatibility WITHOUT requiring GPU hardware.
+#
+# GPU tests are commented out and will be enabled once a self-hosted
+# GPU runner is available. See docs/setup-gpu-ci-runner.md for setup.
+#
 name: rust-gpu
 
 on:
@@ -44,12 +51,13 @@ defaults:
     shell: bash -l -eo pipefail {0}
 
 jobs:
-  rust-gpu:
-    name: "GPU Build & Test"
-    # Use self-hosted runner with CUDA support
-    # Recommended: AWS EC2 instance with "Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 24.04)"
-    # Example: g5.xlarge or g5.2xlarge instance type
-    runs-on: [self-hosted, gpu, linux, cuda]
+  rust-gpu-build:
+    name: "GPU Build (Linux compatibility, no GPU required)"
+    # Using GitHub-hosted runner to verify Linux build without GPU
+    # TODO: Once GPU runner is ready, create separate job with:
+    #   runs-on: [self-hosted, gpu, linux, cuda]
+    # Recommended GPU runner: AWS EC2 g5.xlarge with Deep Learning AMI
+    runs-on: ubuntu-latest
 
     env:
       CARGO_INCREMENTAL: 0
@@ -59,7 +67,7 @@ jobs:
       # Limit parallel compilation to reduce memory pressure (GPU compilation is intensive)
       # Adjust based on instance size: 4 for g5.xlarge, 8 for g5.2xlarge
       CARGO_BUILD_JOBS: 4
-      # CUDA configuration
+      # CUDA configuration (not available on ubuntu-latest, but set for consistency)
       CUDA_HOME: /usr/local/cuda
       # vcpkg for C++ dependencies
       VCPKG_ROOT: /opt/vcpkg
@@ -70,12 +78,13 @@ jobs:
         with:
           submodules: 'recursive'
 
-      - name: Verify GPU availability
-        run: |
-          nvidia-smi
-          which nvcc
-          nvcc --version
-          echo "CUDA_HOME=$CUDA_HOME"
+      # TODO: Uncomment when GPU runner is available
+      # - name: Verify GPU availability
+      #   run: |
+      #     nvidia-smi
+      #     which nvcc
+      #     nvcc --version
+      #     echo "CUDA_HOME=$CUDA_HOME"
 
       - name: Setup vcpkg (if not cached)
         run: |
@@ -97,17 +106,14 @@ jobs:
           sudo apt-get install -y cmake libzstd-dev
           # GEOS for spatial operations
           sudo apt-get install -y libgeos-dev
-          # CUDA toolkit (if not pre-installed)
-          if ! command -v nvcc &> /dev/null; then
-            sudo apt-get install -y nvidia-cuda-toolkit
-          fi
+          # TODO: Uncomment when GPU runner is available
+          # # CUDA toolkit (if not pre-installed)
+          # if ! command -v nvcc &> /dev/null; then
+          #   sudo apt-get install -y nvidia-cuda-toolkit
+          # fi
 
       - name: Setup Rust toolchain
         run: |
-          if ! command -v cargo &> /dev/null; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-            source "$HOME/.cargo/env"
-          fi
           rustup toolchain install stable --no-self-update
           rustup default stable
           cargo --version
@@ -116,49 +122,73 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: "rust-gpu-v2"
-          # Cache key includes CUDA version
-          key: "${{ runner.os }}-cuda-${{ hashFiles('c/sedona-libgpuspatial/**') }}"
+          # Cache key includes GPU packages
+          key: "${{ runner.os }}-${{ hashFiles('c/sedona-libgpuspatial/**') }}"
 
-      - name: Build libgpuspatial (CUDA compilation - ~20-25 minutes)
+      # Build WITHOUT GPU feature to verify Linux compatibility
+      - name: Build libgpuspatial (without GPU, structure only)
         run: |
-          echo "Starting libgpuspatial build with CUDA support..."
-          echo "Note: This step takes approximately 20-25 minutes on g5.xlarge instances"
-          cargo build --package sedona-libgpuspatial --features gpu --verbose
-          echo "libgpuspatial build complete"
+          echo "Building libgpuspatial WITHOUT GPU feature (Linux compatibility check)..."
+          echo "This verifies the code compiles on Linux without CUDA"
+          cargo build --package sedona-libgpuspatial --verbose
+          echo "libgpuspatial build complete (no GPU)"
 
-      - name: Build GPU spatial join
+      - name: Build GPU spatial join (without GPU)
         run: |
-          cargo build --package sedona-spatial-join-gpu --features gpu
+          echo "Building GPU spatial join package WITHOUT GPU feature..."
+          cargo build --package sedona-spatial-join-gpu
 
-      - name: Test libgpuspatial
-        run: |
-          echo "Running libgpuspatial tests with GPU..."
-          cargo test --package sedona-libgpuspatial --features gpu -- --nocapture
+      # TODO: Uncomment when GPU runner is available
+      # - name: Build libgpuspatial (CUDA compilation - ~20-25 minutes)
+      #   run: |
+      #     echo "Starting libgpuspatial build with CUDA support..."
+      #     echo "Note: This step takes approximately 20-25 minutes on g5.xlarge instances"
+      #     cargo build --package sedona-libgpuspatial --features gpu --verbose
+      #     echo "libgpuspatial build complete"
 
-      - name: Test GPU spatial join (structure tests)
-        run: |
-          echo "Running structure tests (don't require GPU execution)..."
-          cargo test --package sedona-spatial-join-gpu --features gpu
+      # - name: Build GPU spatial join (with GPU)
+      #   run: |
+      #     cargo build --package sedona-spatial-join-gpu --features gpu
 
-      - name: Test GPU functional tests (require GPU)
-        run: |
-          echo "Running GPU functional tests (require actual GPU)..."
-          cargo test --package sedona-spatial-join-gpu --features gpu -- --ignored --nocapture
+      # - name: Test libgpuspatial
+      #   run: |
+      #     echo "Running libgpuspatial tests with GPU..."
+      #     cargo test --package sedona-libgpuspatial --features gpu -- --nocapture
 
-      - name: Verify GPU compilation
-        run: |
-          # Verify that GPU code was actually compiled with CUDA
-          echo "Verifying CUDA was used in compilation..."
-          if cargo build --package sedona-libgpuspatial --features gpu -vv 2>&1 | grep -q "GPU feature not enabled"; then
-            echo "ERROR: GPU feature was not enabled!"
-            exit 1
-          fi
-          echo "✓ GPU build successful with CUDA support"
+      # - name: Test GPU spatial join (structure tests)
+      #   run: |
+      #     echo "Running structure tests (don't require GPU execution)..."
+      #     cargo test --package sedona-spatial-join-gpu --features gpu
+
+      # - name: Test GPU functional tests (require GPU)
+      #   run: |
+      #     echo "Running GPU functional tests (require actual GPU)..."
+      #     cargo test --package sedona-spatial-join-gpu --features gpu -- --ignored --nocapture
+
+      # - name: Verify GPU compilation
+      #   run: |
+      #     # Verify that GPU code was actually compiled with CUDA
+      #     echo "Verifying CUDA was used in compilation..."
+      #     if cargo build --package sedona-libgpuspatial --features gpu -vv 2>&1 | grep -q "GPU feature not enabled"; then
+      #       echo "ERROR: GPU feature was not enabled!"
+      #       exit 1
+      #     fi
+      #     echo "✓ GPU build successful with CUDA support"
 
       - name: Build summary
         run: |
-          echo "=== GPU CI Build Summary ==="
-          echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader)"
-          echo "CUDA Version: $(nvcc --version | grep release)"
+          echo "=== GPU Package Build Summary ==="
+          echo "Runner: GitHub-hosted (ubuntu-latest)"
+          echo "Status: Building WITHOUT GPU feature (Linux compatibility check)"
+          echo "Platform: $(uname -a)"
           echo "Rust Version: $(rustc --version)"
           echo "Build completed successfully"
+          echo ""
+          echo "✓ GPU packages compile on Linux without CUDA"
+          echo "✓ Ready for self-hosted GPU runner setup"
+          echo ""
+          echo "Next steps to enable GPU testing:"
+          echo "  1. Set up self-hosted runner with GPU (see docs/setup-gpu-ci-runner.md)"
+          echo "  2. Create new job or update runs-on to: [self-hosted, gpu, linux, cuda]"
+          echo "  3. Uncomment GPU test steps in this workflow"
+          echo "  4. Run actual GPU tests with --features gpu"
