@@ -55,12 +55,25 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CARGO_INCREMENTAL: 0
-      # Reduce debug info to save disk space
-      CARGO_PROFILE_DEV_DEBUG: 1
-      CARGO_PROFILE_TEST_DEBUG: 1
+      # Disable debug info completely to save disk space
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
       # Limit parallel compilation to reduce memory pressure
       CARGO_BUILD_JOBS: 2
+      # Strip symbols to reduce binary size
+      CARGO_PROFILE_DEV_STRIP: symbols
+      CARGO_PROFILE_TEST_STRIP: symbols
     steps:
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+          root-reserve-mb: 10240
+
       - uses: actions/checkout@v4
         with:
           submodules: 'true'
@@ -114,32 +127,43 @@ jobs:
 
       - name: Install dependencies
         shell: bash
-        run: sudo apt-get update && sudo apt-get install -y libgeos-dev
+        run: |
+          sudo apt-get update && sudo apt-get install -y libgeos-dev
+          echo "Disk space after dependencies:"
+          df -h
 
       - name: Build
         if: matrix.name == 'build'
         run: |
           cargo build --workspace --all-targets --all-features
-          # Clean up build artifacts
+          # Clean up build artifacts aggressively
           rm -rf target/debug/deps
+          rm -rf target/debug/incremental
+          rm -rf target/debug/build
           df -h
 
       - name: Clippy
         if: matrix.name == 'clippy'
         run: |
           cargo clippy --workspace --all-targets --all-features -- -Dwarnings
-          # Clean up clippy artifacts
+          # Clean up clippy artifacts aggressively
           rm -rf target/debug/deps
+          rm -rf target/debug/incremental
+          rm -rf target/debug/build
           df -h
 
       - name: Test
         if: matrix.name == 'test'
         run: |
           cargo test --workspace --all-targets --all-features
-          # Clean up intermediate build artifacts to free disk space
+          # Clean up intermediate build artifacts to free disk space aggressively
           cargo clean -p sedona-s2geography
-          # Remove target/debug/deps to free more space
           rm -rf target/debug/deps
+          rm -rf target/debug/incremental
+          rm -rf target/debug/build
+          # Also clean target/.rustc_info.json and other cache files
+          find target/debug -name "*.rlib" -delete
+          find target/debug -name "*.rmeta" -delete
           df -h
 
       - name: Doctests
