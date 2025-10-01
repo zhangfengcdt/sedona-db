@@ -37,6 +37,3 @@ CMakeUserPresets.json
 *.app
 
 .DS_Store
-
-# benchmark logs
-*.json
