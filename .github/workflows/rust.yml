@@ -16,15 +16,17 @@
 # under the License.
 #
 # This workflow builds GPU packages on GitHub-hosted runners (ubuntu-latest)
-# to verify Linux compatibility WITHOUT requiring GPU hardware.
+# to verify CUDA compilation works on Linux.
 #
-# GPU tests are commented out and will be enabled once a self-hosted
-# GPU runner is available. See docs/setup-gpu-ci-runner.md for setup.
+# GPU tests are commented out (no GPU hardware on GitHub runners).
+# Once a self-hosted GPU runner is available, uncomment test steps.
+# See docs/setup-gpu-ci-runner.md for GPU runner setup.
 #
 name: rust-gpu
 
 on:
   push:
+  pull_request:
 
 concurrency:
   group: ${{ github.repository }}-${{ github.ref }}-${{ github.workflow }}-rust-gpu
@@ -39,10 +41,11 @@ defaults:
 
 jobs:
   rust-gpu-build:
-    name: "GPU Build (Linux compatibility, no GPU required)"
-    # Using GitHub-hosted runner to verify Linux build without GPU
-    # TODO: Once GPU runner is ready, create separate job with:
-    #   runs-on: [self-hosted, gpu, linux, cuda]
+    name: "GPU Build with CUDA (tests disabled, no GPU hardware)"
+    # Using GitHub-hosted runner to verify CUDA compilation
+    # TODO: Once GPU runner is ready, either:
+    #   1. Update this job: runs-on: [self-hosted, gpu, linux, cuda]
+    #   2. Or create separate GPU test job with GPU runner
     # Recommended GPU runner: AWS EC2 g5.xlarge with Deep Learning AMI
     runs-on: ubuntu-latest
 
@@ -54,50 +57,82 @@ jobs:
       # Limit parallel compilation to reduce memory pressure (GPU compilation is intensive)
       # Adjust based on instance size: 4 for g5.xlarge, 8 for g5.2xlarge
       CARGO_BUILD_JOBS: 4
-      # CUDA configuration (not available on ubuntu-latest, but set for consistency)
+      # CUDA configuration
       CUDA_HOME: /usr/local/cuda
-      # vcpkg for C++ dependencies
-      VCPKG_ROOT: /opt/vcpkg
-      CMAKE_TOOLCHAIN_FILE: /opt/vcpkg/scripts/buildsystems/vcpkg.cmake
+      # vcpkg for C++ dependencies (version-pinned for reproducibility)
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      CMAKE_TOOLCHAIN_FILE: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
 
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: 'recursive'
 
-      # TODO: Uncomment when GPU runner is available
-      # - name: Verify GPU availability
-      #   run: |
-      #     nvidia-smi
-      #     which nvcc
-      #     nvcc --version
-      #     echo "CUDA_HOME=$CUDA_HOME"
+      # Clone vcpkg with specific version for reproducibility
+      # Based on libgpuspatial CI best practices
+      - name: Clone vcpkg
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/vcpkg
+          ref: "2025.06.13"
+          path: vcpkg
+          fetch-depth: 0
 
-      - name: Setup vcpkg (if not cached)
+      # Set up environment variables for vcpkg and CUDA
+      - name: Bootstrap vcpkg and set environment
         run: |
-          if [ ! -d "$VCPKG_ROOT" ]; then
-            sudo mkdir -p /opt
-            sudo git clone https://github.com/Microsoft/vcpkg.git $VCPKG_ROOT
-            sudo $VCPKG_ROOT/bootstrap-vcpkg.sh
-            sudo $VCPKG_ROOT/vcpkg install abseil openssl
-          else
-            echo "vcpkg already installed at $VCPKG_ROOT"
-          fi
+          cd vcpkg
+          ./bootstrap-vcpkg.sh
+          cd ..
 
+          echo "VCPKG_ROOT=$VCPKG_ROOT" >> $GITHUB_ENV
+          echo "PATH=$VCPKG_ROOT:$PATH" >> $GITHUB_ENV
+          echo "CMAKE_TOOLCHAIN_FILE=$CMAKE_TOOLCHAIN_FILE" >> $GITHUB_ENV
+          echo "/usr/local/cuda/bin" >> $GITHUB_PATH
+
+      # Install system dependencies including CUDA toolkit
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          # Core build tools
-          sudo apt-get install -y build-essential pkg-config
-          # CMake (upgrade if needed for CUDA support)
-          sudo apt-get install -y cmake libzstd-dev
-          # GEOS for spatial operations
-          sudo apt-get install -y libgeos-dev
-          # TODO: Uncomment when GPU runner is available
-          # # CUDA toolkit (if not pre-installed)
-          # if ! command -v nvcc &> /dev/null; then
-          #   sudo apt-get install -y nvidia-cuda-toolkit
-          # fi
+
+          # Install transport tools for Kitware CMake repository
+          sudo apt-get install -y apt-transport-https ca-certificates gnupg software-properties-common wget
+
+          # Add Kitware repository for latest CMake (required for CUDA support)
+          wget -qO - https://apt.kitware.com/keys/kitware-archive-latest.asc | sudo apt-key add -
+          sudo apt-add-repository 'deb https://apt.kitware.com/ubuntu/ jammy main'
+          sudo apt-get update
+
+          # Install build tools
+          sudo apt-get install -y build-essential pkg-config cmake flex bison
+
+          # Install GEOS for spatial operations
+          sudo apt-get install -y libgeos-dev libzstd-dev
+
+          # Install CUDA toolkit
+          # Note: GitHub runners may have CUDA pre-installed, check first
+          if ! command -v nvcc &> /dev/null; then
+            echo "Installing CUDA toolkit..."
+            sudo apt-get install -y nvidia-cuda-toolkit
+          else
+            echo "CUDA toolkit already installed: $(nvcc --version)"
+          fi
+
+      # Cache vcpkg installed packages (expensive to rebuild)
+      - name: Cache vcpkg binaries
+        id: cache-vcpkg
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg_installed
+          # Increment version suffix to force rebuild
+          key: vcpkg-installed-${{ runner.os }}-${{ runner.arch }}-1
+
+      # Install vcpkg dependencies if not cached
+      - name: Install vcpkg dependencies
+        if: steps.cache-vcpkg.outputs.cache-hit != 'true'
+        run: |
+          echo "Installing vcpkg dependencies (abseil, openssl)..."
+          ./vcpkg/vcpkg install abseil openssl
 
       - name: Setup Rust toolchain
         run: |
@@ -108,34 +143,30 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: "rust-gpu-v2"
-          # Cache key includes GPU packages
-          key: "${{ runner.os }}-${{ hashFiles('c/sedona-libgpuspatial/**') }}"
+          prefix-key: "rust-gpu-v3"
+          # Cache key includes GPU packages and vcpkg config
+          key: "${{ runner.os }}-${{ hashFiles('c/sedona-libgpuspatial/**', 'vcpkg.json') }}"
 
-      # Build WITHOUT GPU feature to verify Linux compatibility
-      - name: Build libgpuspatial (without GPU, structure only)
+      # Build WITH GPU feature to verify CUDA compilation
+      - name: Build libgpuspatial (with GPU/CUDA support)
         run: |
-          echo "Building libgpuspatial WITHOUT GPU feature (Linux compatibility check)..."
-          echo "This verifies the code compiles on Linux without CUDA"
-          cargo build --package sedona-libgpuspatial --verbose
-          echo "libgpuspatial build complete (no GPU)"
+          echo "=== Building libgpuspatial WITH GPU feature ==="
+          echo "This compiles CUDA code and verifies CUDA compilation works"
+          echo "Note: First build with CUDA takes approximately 20-25 minutes"
+          echo ""
+          cargo build --package sedona-libgpuspatial --features gpu --verbose
+          echo ""
+          echo "✓ libgpuspatial build complete with CUDA support"
 
-      - name: Build GPU spatial join (without GPU)
+      - name: Build GPU spatial join (with GPU feature)
         run: |
-          echo "Building GPU spatial join package WITHOUT GPU feature..."
-          cargo build --package sedona-spatial-join-gpu
+          echo "=== Building GPU spatial join package WITH GPU feature ==="
+          cargo build --package sedona-spatial-join-gpu --features gpu --verbose
+          echo ""
+          echo "✓ GPU spatial join build complete"
 
-      # TODO: Uncomment when GPU runner is available
-      # - name: Build libgpuspatial (CUDA compilation - ~20-25 minutes)
-      #   run: |
-      #     echo "Starting libgpuspatial build with CUDA support..."
-      #     echo "Note: This step takes approximately 20-25 minutes on g5.xlarge instances"
-      #     cargo build --package sedona-libgpuspatial --features gpu --verbose
-      #     echo "libgpuspatial build complete"
-
-      # - name: Build GPU spatial join (with GPU)
-      #   run: |
-      #     cargo build --package sedona-spatial-join-gpu --features gpu
+      # GPU tests commented out - no GPU hardware on GitHub runners
+      # Uncomment these when running on self-hosted GPU runner
 
       # - name: Test libgpuspatial
       #   run: |
@@ -152,30 +183,24 @@ jobs:
       #     echo "Running GPU functional tests (require actual GPU)..."
       #     cargo test --package sedona-spatial-join-gpu --features gpu -- --ignored --nocapture
 
-      # - name: Verify GPU compilation
-      #   run: |
-      #     # Verify that GPU code was actually compiled with CUDA
-      #     echo "Verifying CUDA was used in compilation..."
-      #     if cargo build --package sedona-libgpuspatial --features gpu -vv 2>&1 | grep -q "GPU feature not enabled"; then
-      #       echo "ERROR: GPU feature was not enabled!"
-      #       exit 1
-      #     fi
-      #     echo "✓ GPU build successful with CUDA support"
-
       - name: Build summary
         run: |
           echo "=== GPU Package Build Summary ==="
           echo "Runner: GitHub-hosted (ubuntu-latest)"
-          echo "Status: Building WITHOUT GPU feature (Linux compatibility check)"
+          echo "Build Mode: WITH GPU feature (--features gpu)"
+          echo "CUDA Compilation: ✓ Verified"
           echo "Platform: $(uname -a)"
           echo "Rust Version: $(rustc --version)"
-          echo "Build completed successfully"
+          if command -v nvcc &> /dev/null; then
+            echo "CUDA Version: $(nvcc --version | grep release)"
+          fi
           echo ""
-          echo "✓ GPU packages compile on Linux without CUDA"
-          echo "✓ Ready for self-hosted GPU runner setup"
+          echo "✓ GPU packages built successfully with CUDA support"
+          echo "✓ CUDA compilation verified on Linux"
+          echo "⚠ GPU tests skipped (no GPU hardware on GitHub runners)"
           echo ""
           echo "Next steps to enable GPU testing:"
           echo "  1. Set up self-hosted runner with GPU (see docs/setup-gpu-ci-runner.md)"
-          echo "  2. Create new job or update runs-on to: [self-hosted, gpu, linux, cuda]"
+          echo "  2. Update runs-on to: [self-hosted, gpu, linux, cuda]"
           echo "  3. Uncomment GPU test steps in this workflow"
-          echo "  4. Run actual GPU tests with --features gpu"
+          echo "  4. Verify tests pass with actual GPU hardware"
