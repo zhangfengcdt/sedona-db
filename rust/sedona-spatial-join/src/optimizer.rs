@@ -1083,12 +1083,9 @@ fn is_spatial_predicate_supported(
 #[cfg(feature = "gpu")]
 mod gpu_optimizer {
     use super::*;
-    use datafusion_catalog::memory::DataSourceExec;
     use datafusion_common::DataFusionError;
-    use datafusion_physical_plan::projection::ProjectionExec;
     use sedona_spatial_join_gpu::{
         GeometryColumnInfo, GpuSpatialJoinConfig, GpuSpatialJoinExec, GpuSpatialPredicate,
-        ParquetFileInfo,
     };
 
     /// Attempt to create a GPU-accelerated spatial join.
@@ -1113,36 +1110,17 @@ mod gpu_optimizer {
             return Ok(None);
         }
 
-        // Extract Parquet scan information from both sides
-        let left_scan = extract_parquet_scan(&spatial_join.left)?;
-        let right_scan = extract_parquet_scan(&spatial_join.right)?;
+        // Get child plans
+        let left = spatial_join.left.clone();
+        let right = spatial_join.right.clone();
 
-        let (left_files, left_schema, left_geom_col) = match left_scan {
-            Some(scan) => scan,
-            None => {
-                log::debug!("Left input is not a Parquet scan");
-                return Ok(None);
-            }
-        };
+        // Get schemas from child plans
+        let left_schema = left.schema();
+        let right_schema = right.schema();
 
-        let (right_files, right_schema, right_geom_col) = match right_scan {
-            Some(scan) => scan,
-            None => {
-                log::debug!("Right input is not a Parquet scan");
-                return Ok(None);
-            }
-        };
-
-        // Estimate total rows and check threshold
-        let estimated_rows = estimate_total_rows(&left_files, &right_files);
-        if estimated_rows < sedona_options.spatial_join.gpu.min_rows_threshold {
-            log::debug!(
-                "Estimated rows ({}) below GPU threshold ({})",
-                estimated_rows,
-                sedona_options.spatial_join.gpu.min_rows_threshold
-            );
-            return Ok(None);
-        }
+        // Find geometry columns in schemas
+        let left_geom_col = find_geometry_column(&left_schema)?;
+        let right_geom_col = find_geometry_column(&right_schema)?;
 
         // Convert spatial predicate to GPU predicate
         let gpu_predicate = convert_to_gpu_predicate(&spatial_join.on)?;
@@ -1150,8 +1128,6 @@ mod gpu_optimizer {
         // Create GPU spatial join configuration
         let gpu_config = GpuSpatialJoinConfig {
             join_type: *spatial_join.join_type(),
-            left_parquet_files: left_files,
-            right_parquet_files: right_files,
             left_geom_column: left_geom_col,
             right_geom_column: right_geom_col,
             predicate: gpu_predicate,
@@ -1167,15 +1143,15 @@ mod gpu_optimizer {
         };
 
         log::info!(
-            "Creating GPU spatial join: {} left files, {} right files, predicate: {:?}",
-            gpu_config.left_parquet_files.len(),
-            gpu_config.right_parquet_files.len(),
-            gpu_config.predicate
+            "Creating GPU spatial join: predicate: {:?}, left geom: {}, right geom: {}",
+            gpu_config.predicate,
+            gpu_config.left_geom_column.name,
+            gpu_config.right_geom_column.name,
         );
 
         Ok(Some(Arc::new(GpuSpatialJoinExec::new(
-            left_schema,
-            right_schema,
+            left,
+            right,
             gpu_config,
         )?)))
     }
@@ -1201,41 +1177,6 @@ mod gpu_optimizer {
             // KNN not yet supported on GPU
             SpatialPredicate::KNearestNeighbors(_) => false,
         }
-    }
-
-    /// Extract Parquet scan information from execution plan.
-    /// Returns (files, schema, geometry_column) if this is a Parquet/Data scan.
-    fn extract_parquet_scan(
-        plan: &Arc<dyn ExecutionPlan>,
-    ) -> Result<Option<(Vec<ParquetFileInfo>, SchemaRef, GeometryColumnInfo)>> {
-        // Direct DataSourceExec
-        if let Some(datasource_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
-            let files = extract_parquet_files_from_datasource(datasource_exec)?;
-            let schema = datasource_exec.schema();
-            let geom_col = find_geometry_column(&schema)?;
-            return Ok(Some((files, schema, geom_col)));
-        }
-
-        // ProjectionExec on top of DataSourceExec
-        if let Some(projection) = plan.as_any().downcast_ref::<ProjectionExec>() {
-            if let Some(datasource_exec) = projection.input().as_any().downcast_ref::<DataSourceExec>() {
-                let files = extract_parquet_files_from_datasource(datasource_exec)?;
-                let schema = projection.schema();
-                let geom_col = find_geometry_column(&schema)?;
-                return Ok(Some((files, schema, geom_col)));
-            }
-        }
-
-        // Other plan types not supported for GPU
-        Ok(None)
-    }
-
-    /// Extract file information from DataSourceExec
-    fn extract_parquet_files_from_datasource(_datasource_exec: &DataSourceExec) -> Result<Vec<ParquetFileInfo>> {
-        // TODO: Implement proper file extraction from DataSourceExec
-        // This requires navigating the new DataSource API which differs from old ParquetExec
-        log::warn!("Parquet file extraction from DataSourceExec not yet implemented");
-        Ok(vec![])
     }
 
     /// Find geometry column in schema
@@ -1282,17 +1223,6 @@ mod gpu_optimizer {
         Err(DataFusionError::Plan(
             "No geometry column found in schema".into(),
         ))
-    }
-
-    /// Estimate total rows from file sizes (rough heuristic)
-    fn estimate_total_rows(left_files: &[ParquetFileInfo], right_files: &[ParquetFileInfo]) -> usize {
-        // Rough estimate: 1KB per row average
-        const BYTES_PER_ROW: usize = 1024;
-
-        let left_bytes: usize = left_files.iter().map(|f| f.size).sum();
-        let right_bytes: usize = right_files.iter().map(|f| f.size).sum();
-
-        (left_bytes + right_bytes) / BYTES_PER_ROW
     }
 
     /// Convert SpatialPredicate to GPU predicate

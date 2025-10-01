@@ -1,18 +1,10 @@
 use datafusion::logical_expr::JoinType;
 use datafusion_physical_plan::joins::utils::JoinFilter;
-use object_store::path::Path;
-use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct GpuSpatialJoinConfig {
     /// Join type (Inner, Left, Right, Full)
     pub join_type: JoinType,
-
-    /// Left side Parquet files
-    pub left_parquet_files: Vec<ParquetFileInfo>,
-
-    /// Right side Parquet files
-    pub right_parquet_files: Vec<ParquetFileInfo>,
 
     /// Left geometry column information
     pub left_geom_column: GeometryColumnInfo,
@@ -40,15 +32,6 @@ pub struct GpuSpatialJoinConfig {
 }
 
 #[derive(Debug, Clone)]
-pub struct ParquetFileInfo {
-    /// Path to the Parquet file
-    pub path: Path,
-
-    /// File size in bytes
-    pub size: usize,
-}
-
-#[derive(Debug, Clone)]
 pub struct GeometryColumnInfo {
     /// Column name
     pub name: String,
@@ -68,8 +51,6 @@ impl Default for GpuSpatialJoinConfig {
     fn default() -> Self {
         Self {
             join_type: JoinType::Inner,
-            left_parquet_files: Vec::new(),
-            right_parquet_files: Vec::new(),
             left_geom_column: GeometryColumnInfo {
                 name: "geometry".to_string(),
                 index: 0,

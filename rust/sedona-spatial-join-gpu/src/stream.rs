@@ -24,10 +24,8 @@ use arrow::datatypes::SchemaRef;
 use arrow_array::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::TaskContext;
-use datafusion::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
+use datafusion::physical_plan::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
 use futures::stream::Stream;
-use object_store::ObjectStore;
-use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 
 use crate::config::GpuSpatialJoinConfig;
 use crate::gpu_backend::GpuBackend;
@@ -36,18 +34,24 @@ use crate::gpu_backend::GpuBackend;
 ///
 /// This stream manages the entire GPU spatial join lifecycle:
 /// 1. Initialize GPU context
-/// 2. Read left Parquet files
-/// 3. Read right Parquet files
+/// 2. Read data from left child stream
+/// 3. Read data from right child stream
 /// 4. Execute GPU spatial join
 /// 5. Emit result batches
 pub struct GpuSpatialJoinStream {
+    /// Left child execution plan
+    left: Arc<dyn ExecutionPlan>,
+
+    /// Right child execution plan
+    right: Arc<dyn ExecutionPlan>,
+
     /// Output schema
     schema: SchemaRef,
 
     /// Join configuration
     config: GpuSpatialJoinConfig,
 
-    /// Task context for accessing object store
+    /// Task context
     context: Arc<TaskContext>,
 
     /// GPU backend for spatial operations
@@ -65,9 +69,11 @@ pub struct GpuSpatialJoinStream {
     /// Right side batches (accumulated before GPU transfer)
     right_batches: Vec<RecordBatch>,
 
-    /// Current file index being processed
-    current_left_file_idx: usize,
-    current_right_file_idx: usize,
+    /// Left child stream
+    left_stream: Option<SendableRecordBatchStream>,
+
+    /// Right child stream
+    right_stream: Option<SendableRecordBatchStream>,
 }
 
 /// State machine for GPU spatial join execution
@@ -76,11 +82,17 @@ enum GpuJoinState {
     /// Initialize GPU context
     Init,
 
-    /// Reading left Parquet files
-    ReadLeftFiles,
+    /// Initialize left child stream
+    InitLeftStream,
 
-    /// Reading right Parquet files
-    ReadRightFiles,
+    /// Reading batches from left stream
+    ReadLeftStream,
+
+    /// Initialize right child stream
+    InitRightStream,
+
+    /// Reading batches from right stream
+    ReadRightStream,
 
     /// Execute GPU spatial join
     ExecuteGpuJoin,
@@ -98,11 +110,15 @@ enum GpuJoinState {
 impl GpuSpatialJoinStream {
     /// Create a new GPU spatial join stream
     pub fn new(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
         config: GpuSpatialJoinConfig,
         context: Arc<TaskContext>,
     ) -> Result<Self> {
         Ok(Self {
+            left,
+            right,
             schema,
             config,
             context,
@@ -111,8 +127,8 @@ impl GpuSpatialJoinStream {
             result_batches: VecDeque::new(),
             left_batches: Vec::new(),
             right_batches: Vec::new(),
-            current_left_file_idx: 0,
-            current_right_file_idx: 0,
+            left_stream: None,
+            right_stream: None,
         })
     }
 
@@ -125,7 +141,7 @@ impl GpuSpatialJoinStream {
                     match self.initialize_gpu() {
                         Ok(()) => {
                             log::debug!("GPU backend initialized successfully");
-                            self.state = GpuJoinState::ReadLeftFiles;
+                            self.state = GpuJoinState::InitLeftStream;
                         }
                         Err(e) => {
                             if self.config.fallback_to_cpu {
@@ -144,49 +160,103 @@ impl GpuSpatialJoinStream {
                     }
                 }
 
-                GpuJoinState::ReadLeftFiles => {
-                    log::info!(
-                        "Reading left Parquet files ({} files)",
-                        self.config.left_parquet_files.len()
-                    );
-
-                    match self.read_all_left_files() {
-                        Ok(()) => {
-                            log::debug!(
-                                "Read {} left batches with total {} rows",
-                                self.left_batches.len(),
-                                self.left_batches.iter().map(|b| b.num_rows()).sum::<usize>()
-                            );
-                            self.state = GpuJoinState::ReadRightFiles;
+                GpuJoinState::InitLeftStream => {
+                    log::debug!("Initializing left child stream");
+                    match self.left.execute(0, self.context.clone()) {
+                        Ok(stream) => {
+                            self.left_stream = Some(stream);
+                            self.state = GpuJoinState::ReadLeftStream;
                         }
                         Err(e) => {
-                            log::error!("Failed to read left Parquet files: {}", e);
+                            log::error!("Failed to execute left child: {}", e);
                             self.state = GpuJoinState::Failed(e.to_string());
                             return Poll::Ready(Some(Err(e)));
                         }
                     }
                 }
 
-                GpuJoinState::ReadRightFiles => {
-                    log::info!(
-                        "Reading right Parquet files ({} files)",
-                        self.config.right_parquet_files.len()
-                    );
+                GpuJoinState::ReadLeftStream => {
+                    if let Some(stream) = &mut self.left_stream {
+                        match Pin::new(stream).poll_next(_cx) {
+                            Poll::Ready(Some(Ok(batch))) => {
+                                log::debug!("Received left batch with {} rows", batch.num_rows());
+                                self.left_batches.push(batch);
+                                // Continue reading more batches
+                                continue;
+                            }
+                            Poll::Ready(Some(Err(e))) => {
+                                log::error!("Error reading left stream: {}", e);
+                                self.state = GpuJoinState::Failed(e.to_string());
+                                return Poll::Ready(Some(Err(e)));
+                            }
+                            Poll::Ready(None) => {
+                                // Left stream complete
+                                log::debug!(
+                                    "Read {} left batches with total {} rows",
+                                    self.left_batches.len(),
+                                    self.left_batches.iter().map(|b| b.num_rows()).sum::<usize>()
+                                );
+                                self.state = GpuJoinState::InitRightStream;
+                            }
+                            Poll::Pending => {
+                                return Poll::Pending;
+                            }
+                        }
+                    } else {
+                        self.state = GpuJoinState::Failed("Left stream not initialized".into());
+                        return Poll::Ready(Some(Err(DataFusionError::Execution(
+                            "Left stream not initialized".into(),
+                        ))));
+                    }
+                }
 
-                    match self.read_all_right_files() {
-                        Ok(()) => {
-                            log::debug!(
-                                "Read {} right batches with total {} rows",
-                                self.right_batches.len(),
-                                self.right_batches.iter().map(|b| b.num_rows()).sum::<usize>()
-                            );
-                            self.state = GpuJoinState::ExecuteGpuJoin;
+                GpuJoinState::InitRightStream => {
+                    log::debug!("Initializing right child stream");
+                    match self.right.execute(0, self.context.clone()) {
+                        Ok(stream) => {
+                            self.right_stream = Some(stream);
+                            self.state = GpuJoinState::ReadRightStream;
                         }
                         Err(e) => {
-                            log::error!("Failed to read right Parquet files: {}", e);
+                            log::error!("Failed to execute right child: {}", e);
                             self.state = GpuJoinState::Failed(e.to_string());
                             return Poll::Ready(Some(Err(e)));
                         }
+                    }
+                }
+
+                GpuJoinState::ReadRightStream => {
+                    if let Some(stream) = &mut self.right_stream {
+                        match Pin::new(stream).poll_next(_cx) {
+                            Poll::Ready(Some(Ok(batch))) => {
+                                log::debug!("Received right batch with {} rows", batch.num_rows());
+                                self.right_batches.push(batch);
+                                // Continue reading more batches
+                                continue;
+                            }
+                            Poll::Ready(Some(Err(e))) => {
+                                log::error!("Error reading right stream: {}", e);
+                                self.state = GpuJoinState::Failed(e.to_string());
+                                return Poll::Ready(Some(Err(e)));
+                            }
+                            Poll::Ready(None) => {
+                                // Right stream complete
+                                log::debug!(
+                                    "Read {} right batches with total {} rows",
+                                    self.right_batches.len(),
+                                    self.right_batches.iter().map(|b| b.num_rows()).sum::<usize>()
+                                );
+                                self.state = GpuJoinState::ExecuteGpuJoin;
+                            }
+                            Poll::Pending => {
+                                return Poll::Pending;
+                            }
+                        }
+                    } else {
+                        self.state = GpuJoinState::Failed("Right stream not initialized".into());
+                        return Poll::Ready(Some(Err(DataFusionError::Execution(
+                            "Right stream not initialized".into(),
+                        ))));
                     }
                 }
 
@@ -242,37 +312,6 @@ impl GpuSpatialJoinStream {
         Ok(())
     }
 
-    /// Read all left Parquet files
-    fn read_all_left_files(&mut self) -> Result<()> {
-        // TODO: Implement async Parquet reading
-        // For now, this is a placeholder that will be implemented with actual async I/O
-        log::warn!("Parquet file reading not yet fully implemented");
-
-        // Placeholder: Create empty batch if no files
-        if self.config.left_parquet_files.is_empty() {
-            return Err(DataFusionError::Execution(
-                "No left Parquet files specified".into(),
-            ));
-        }
-
-        Ok(())
-    }
-
-    /// Read all right Parquet files
-    fn read_all_right_files(&mut self) -> Result<()> {
-        // TODO: Implement async Parquet reading
-        // For now, this is a placeholder that will be implemented with actual async I/O
-        log::warn!("Parquet file reading not yet fully implemented");
-
-        // Placeholder: Create empty batch if no files
-        if self.config.right_parquet_files.is_empty() {
-            return Err(DataFusionError::Execution(
-                "No right Parquet files specified".into(),
-            ));
-        }
-
-        Ok(())
-    }
 
     /// Execute GPU spatial join
     fn execute_gpu_join(&mut self) -> Result<()> {

@@ -16,17 +16,17 @@ use crate::config::GpuSpatialJoinConfig;
 
 /// GPU-accelerated spatial join execution plan
 ///
-/// This execution plan handles the entire pipeline:
-/// 1. Direct Parquet file reading
+/// This execution plan accepts two child inputs (e.g., ParquetExec) and performs:
+/// 1. Reading data from child streams
 /// 2. Data transfer to GPU memory
 /// 3. GPU spatial join execution
 /// 4. Result materialization
 pub struct GpuSpatialJoinExec {
-    /// Left input schema
-    left_schema: SchemaRef,
+    /// Left child execution plan
+    left: Arc<dyn ExecutionPlan>,
 
-    /// Right input schema
-    right_schema: SchemaRef,
+    /// Right child execution plan
+    right: Arc<dyn ExecutionPlan>,
 
     /// Join configuration
     config: GpuSpatialJoinConfig,
@@ -40,11 +40,13 @@ pub struct GpuSpatialJoinExec {
 
 impl GpuSpatialJoinExec {
     pub fn new(
-        left_schema: SchemaRef,
-        right_schema: SchemaRef,
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
         config: GpuSpatialJoinConfig,
     ) -> Result<Self> {
         // Combine schemas for output
+        let left_schema = left.schema();
+        let right_schema = right.schema();
         let mut fields = left_schema.fields().to_vec();
         fields.extend_from_slice(right_schema.fields());
         let schema = Arc::new(arrow::datatypes::Schema::new(fields));
@@ -60,8 +62,8 @@ impl GpuSpatialJoinExec {
         );
 
         Ok(Self {
-            left_schema,
-            right_schema,
+            left,
+            right,
             config,
             schema,
             properties,
@@ -71,17 +73,23 @@ impl GpuSpatialJoinExec {
     pub fn config(&self) -> &GpuSpatialJoinConfig {
         &self.config
     }
+
+    pub fn left(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.left
+    }
+
+    pub fn right(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.right
+    }
 }
 
 impl Debug for GpuSpatialJoinExec {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "GpuSpatialJoinExec: join_type={:?}, predicate={:?}, left_files={}, right_files={}",
+            "GpuSpatialJoinExec: join_type={:?}, predicate={:?}",
             self.config.join_type,
             self.config.predicate,
-            self.config.left_parquet_files.len(),
-            self.config.right_parquet_files.len()
         )
     }
 }
@@ -114,20 +122,24 @@ impl ExecutionPlan for GpuSpatialJoinExec {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        // GPU join is a leaf node - it directly reads from Parquet files
-        vec![]
+        vec![&self.left, &self.right]
     }
 
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if !children.is_empty() {
+        if children.len() != 2 {
             return Err(datafusion::error::DataFusionError::Internal(
-                "GpuSpatialJoinExec should have no children".into(),
+                "GpuSpatialJoinExec requires exactly 2 children".into(),
             ));
         }
-        Ok(self)
+
+        Ok(Arc::new(GpuSpatialJoinExec::new(
+            children[0].clone(),
+            children[1].clone(),
+            self.config.clone(),
+        )?))
     }
 
     fn execute(
@@ -142,13 +154,14 @@ impl ExecutionPlan for GpuSpatialJoinExec {
         }
 
         log::info!(
-            "Executing GPU spatial join with {} left files and {} right files",
-            self.config.left_parquet_files.len(),
-            self.config.right_parquet_files.len()
+            "Executing GPU spatial join: {:?}",
+            self.config.predicate
         );
 
         // Create GPU spatial join stream
         let stream = crate::stream::GpuSpatialJoinStream::new(
+            self.left.clone(),
+            self.right.clone(),
             self.schema.clone(),
             self.config.clone(),
             context,
