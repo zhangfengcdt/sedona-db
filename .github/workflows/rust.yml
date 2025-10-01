@@ -15,13 +15,15 @@
 # specific language governing permissions and limitations
 # under the License.
 #
-# This workflow compiles CUDA code on GitHub-hosted runners (ubuntu-latest).
+# This workflow compiles CUDA code on GitHub-hosted runners (ubuntu-22.04).
 # CUDA compilation (nvcc) works WITHOUT GPU hardware - only needs CUDA toolkit.
 # GPU runtime execution requires actual GPU, so tests are commented out.
 #
+# Environment: ubuntu-22.04 (matches libgpuspatial CI for consistency)
+#
 # What this workflow tests:
 #   ✓ CUDA code compilation (nvcc)
-#   ✓ C++/CUDA CMake build
+#   ✓ C++/CUDA CMake build (with CMAKE_POLICY_VERSION_MINIMUM=3.5)
 #   ✓ Rust/C++ FFI bindings
 #   ✓ Linux compatibility
 #
@@ -68,10 +70,11 @@ jobs:
     # Using GitHub-hosted runner to compile CUDA code
     # CUDA compilation works without GPU hardware (only needs CUDA toolkit)
     # GPU tests are skipped (no GPU hardware for runtime execution)
+    # Using ubuntu-22.04 to match libgpuspatial CI environment
     # TODO: Once GPU runner is ready, enable GPU tests with:
     #   runs-on: [self-hosted, gpu, linux, cuda]
     # Recommended GPU runner: AWS EC2 g5.xlarge with Deep Learning AMI
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 90  # CUDA compilation is slow (~45-60 min first time)
 
     env:
