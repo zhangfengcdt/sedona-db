@@ -24,7 +24,6 @@
 name: rust-gpu
 
 on:
-  pull_request:
   push:
 
 concurrency:
