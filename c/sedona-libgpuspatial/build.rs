@@ -47,6 +47,7 @@ fn main() {
         // Otherwise, it calls JIT compilation which has a startup overhead
         let dst = cmake::Config::new("./libgpuspatial")
             .define("CMAKE_CUDA_ARCHITECTURES", "86")
+            .define("CMAKE_POLICY_VERSION_MINIMUM", "3.5")  // Allow older CMake versions
             .build();
         let include_path = dst.join("include");
         println!(

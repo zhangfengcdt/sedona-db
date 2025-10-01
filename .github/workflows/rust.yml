@@ -15,12 +15,24 @@
 # specific language governing permissions and limitations
 # under the License.
 #
-# This workflow builds GPU packages on GitHub-hosted runners (ubuntu-latest)
-# to verify CUDA compilation works on Linux.
+# This workflow compiles CUDA code on GitHub-hosted runners (ubuntu-latest).
+# CUDA compilation (nvcc) works WITHOUT GPU hardware - only needs CUDA toolkit.
+# GPU runtime execution requires actual GPU, so tests are commented out.
 #
-# GPU tests are commented out (no GPU hardware on GitHub runners).
-# Once a self-hosted GPU runner is available, uncomment test steps.
-# See docs/setup-gpu-ci-runner.md for GPU runner setup.
+# What this workflow tests:
+#   ✓ CUDA code compilation (nvcc)
+#   ✓ C++/CUDA CMake build
+#   ✓ Rust/C++ FFI bindings
+#   ✓ Linux compatibility
+#
+# What this workflow does NOT test:
+#   ✗ GPU kernel execution (requires GPU hardware)
+#   ✗ GPU memory operations (requires GPU drivers)
+#   ✗ Spatial join correctness on GPU
+#
+# Build time: ~45-60 minutes first time, ~10-15 minutes with cache
+#
+# See docs/setup-gpu-ci-runner.md for self-hosted GPU runner setup.
 #
 name: rust-gpu
 
@@ -38,10 +50,10 @@ concurrency:
   group: ${{ github.repository }}-${{ github.ref }}-${{ github.workflow }}-rust-gpu
   cancel-in-progress: true
 
-# Set workflow timeout to 60 minutes (default is 360 minutes/6 hours)
-# GPU build takes ~30-40 minutes first time, ~5-8 minutes cached
+# Set workflow timeout to 90 minutes for CUDA compilation
+# Expected: ~45-60 minutes first time, ~10-15 minutes cached
 env:
-  WORKFLOW_TIMEOUT_MINUTES: 60
+  WORKFLOW_TIMEOUT_MINUTES: 90
 
 permissions:
   contents: read
@@ -52,14 +64,15 @@ defaults:
 
 jobs:
   rust-gpu-build:
-    name: "GPU Build with CUDA (tests disabled, no GPU hardware)"
-    # Using GitHub-hosted runner to verify CUDA compilation
-    # TODO: Once GPU runner is ready, either:
-    #   1. Update this job: runs-on: [self-hosted, gpu, linux, cuda]
-    #   2. Or create separate GPU test job with GPU runner
+    name: "GPU CUDA Compilation (no GPU runtime/tests)"
+    # Using GitHub-hosted runner to compile CUDA code
+    # CUDA compilation works without GPU hardware (only needs CUDA toolkit)
+    # GPU tests are skipped (no GPU hardware for runtime execution)
+    # TODO: Once GPU runner is ready, enable GPU tests with:
+    #   runs-on: [self-hosted, gpu, linux, cuda]
     # Recommended GPU runner: AWS EC2 g5.xlarge with Deep Learning AMI
     runs-on: ubuntu-latest
-    timeout-minutes: 60  # Prevent runaway builds (first build ~40min, cached ~8min)
+    timeout-minutes: 90  # CUDA compilation is slow (~45-60 min first time)
 
     env:
       CARGO_INCREMENTAL: 0
@@ -102,15 +115,16 @@ jobs:
           echo "CMAKE_TOOLCHAIN_FILE=$CMAKE_TOOLCHAIN_FILE" >> $GITHUB_ENV
           echo "/usr/local/cuda/bin" >> $GITHUB_PATH
 
-      # Install system dependencies including CUDA toolkit
+      # Install system dependencies including CUDA toolkit for compilation
+      # Following libgpuspatial CI pattern
       - name: Install system dependencies
         run: |
           sudo apt-get update
 
-          # Install transport tools for Kitware CMake repository
+          # Install transport tools for Kitware CMake (needed for newer CMake)
           sudo apt-get install -y apt-transport-https ca-certificates gnupg software-properties-common wget
 
-          # Add Kitware repository for latest CMake (required for CUDA support)
+          # Add Kitware repository for CMake
           wget -qO - https://apt.kitware.com/keys/kitware-archive-latest.asc | sudo apt-key add -
           sudo apt-add-repository 'deb https://apt.kitware.com/ubuntu/ jammy main'
           sudo apt-get update
@@ -118,14 +132,19 @@ jobs:
           # Install build tools
           sudo apt-get install -y build-essential pkg-config cmake flex bison
 
+          # Verify CMake version
+          cmake --version
+
           # Install GEOS for spatial operations
           sudo apt-get install -y libgeos-dev libzstd-dev
 
-          # Install CUDA toolkit
-          # Note: GitHub runners may have CUDA pre-installed, check first
+          # Install CUDA toolkit for compilation (nvcc)
+          # Note: CUDA compilation works without GPU hardware
+          # GPU runtime tests still require actual GPU
           if ! command -v nvcc &> /dev/null; then
-            echo "Installing CUDA toolkit..."
+            echo "Installing CUDA toolkit for compilation..."
             sudo apt-get install -y nvidia-cuda-toolkit
+            nvcc --version
           else
             echo "CUDA toolkit already installed: $(nvcc --version)"
           fi
@@ -159,23 +178,28 @@ jobs:
           # Cache key includes GPU packages and vcpkg config
           key: "${{ runner.os }}-${{ hashFiles('c/sedona-libgpuspatial/**', 'vcpkg.json') }}"
 
-      # Build WITH GPU feature to verify CUDA compilation
-      - name: Build libgpuspatial (with GPU/CUDA support)
+      # Build WITH GPU feature to compile CUDA code
+      # CUDA compilation (nvcc) works without GPU hardware
+      # Only GPU runtime execution requires actual GPU
+      - name: Build libgpuspatial (with CUDA compilation)
         run: |
           echo "=== Building libgpuspatial WITH GPU feature ==="
-          echo "This compiles CUDA code and verifies CUDA compilation works"
-          echo "Note: First build with CUDA takes approximately 20-25 minutes"
+          echo "Compiling CUDA code using nvcc (no GPU hardware needed for compilation)"
+          echo "Note: First build with CUDA takes 45-60 minutes (CMake + CUDA compilation)"
+          echo "Subsequent builds: 10-15 minutes (cached)"
           echo ""
-          # Use --locked to ensure Cargo.lock is up to date
-          # Use --all-targets to build lib + tests (but don't run tests)
+          echo "Build started at: $(date)"
+          # Build with --features gpu to trigger CUDA compilation
           cargo build --locked --package sedona-libgpuspatial --all-targets --features gpu --verbose
           echo ""
-          echo "✓ libgpuspatial build complete with CUDA support"
+          echo "Build completed at: $(date)"
+          echo "✓ libgpuspatial CUDA compilation complete"
 
       - name: Build GPU spatial join (with GPU feature)
         run: |
           echo "=== Building GPU spatial join package WITH GPU feature ==="
-          # Build only GPU packages, not entire workspace (saves time)
+          echo "Building Rust GPU spatial join (depends on libgpuspatial)"
+          echo ""
           cargo build --locked --package sedona-spatial-join-gpu --all-targets --features gpu --verbose
           echo ""
           echo "✓ GPU spatial join build complete"
@@ -203,19 +227,34 @@ jobs:
           echo "=== GPU Package Build Summary ==="
           echo "Runner: GitHub-hosted (ubuntu-latest)"
           echo "Build Mode: WITH GPU feature (--features gpu)"
-          echo "CUDA Compilation: ✓ Verified"
+          echo "CUDA Compilation: ✓ Completed"
           echo "Platform: $(uname -a)"
           echo "Rust Version: $(rustc --version)"
           if command -v nvcc &> /dev/null; then
             echo "CUDA Version: $(nvcc --version | grep release)"
           fi
           echo ""
-          echo "✓ GPU packages built successfully with CUDA support"
-          echo "✓ CUDA compilation verified on Linux"
-          echo "⚠ GPU tests skipped (no GPU hardware on GitHub runners)"
+          echo "✓ CUDA code compiled successfully (nvcc)"
+          echo "✓ libgpuspatial C++/CUDA build complete"
+          echo "✓ GPU spatial join package built"
+          echo "✓ All dependencies resolved"
+          echo "⚠ GPU runtime tests NOT run (no GPU hardware)"
           echo ""
-          echo "Next steps to enable GPU testing:"
+          echo "What was tested:"
+          echo "  • CUDA code compilation (nvcc)"
+          echo "  • C++/CUDA CMake build"
+          echo "  • Rust/C++ FFI bindings"
+          echo "  • Conditional compilation (#[cfg(feature = \"gpu\")])"
+          echo "  • Linux compatibility"
+          echo ""
+          echo "What was NOT tested:"
+          echo "  • GPU kernel execution (requires GPU hardware)"
+          echo "  • GPU memory operations (requires GPU drivers)"
+          echo "  • Spatial join correctness on GPU"
+          echo "  • Performance characteristics"
+          echo ""
+          echo "Next steps to enable GPU runtime tests:"
           echo "  1. Set up self-hosted runner with GPU (see docs/setup-gpu-ci-runner.md)"
           echo "  2. Update runs-on to: [self-hosted, gpu, linux, cuda]"
           echo "  3. Uncomment GPU test steps in this workflow"
-          echo "  4. Verify tests pass with actual GPU hardware"
+          echo "  4. Run tests with actual GPU hardware"
