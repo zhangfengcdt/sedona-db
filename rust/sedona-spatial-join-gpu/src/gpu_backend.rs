@@ -1,7 +1,7 @@
 use crate::Result;
 use arrow::compute::take;
 use arrow_array::{ArrayRef, RecordBatch, UInt32Array};
-use arrow_schema::{Field, Schema};
+use arrow_schema::Schema;
 use sedona_libgpuspatial::{GpuSpatialContext, SpatialPredicate};
 use std::sync::Arc;
 
@@ -137,28 +137,9 @@ impl GpuBackend {
         left_schema: &Schema,
         right_schema: &Schema,
     ) -> Result<Schema> {
-        let mut fields = Vec::new();
-
-        // Add left schema fields with "left_" prefix
-        for field in left_schema.fields() {
-            let new_field = Field::new(
-                format!("left_{}", field.name()),
-                field.data_type().clone(),
-                field.is_nullable(),
-            );
-            fields.push(new_field);
-        }
-
-        // Add right schema fields with "right_" prefix
-        for field in right_schema.fields() {
-            let new_field = Field::new(
-                format!("right_{}", field.name()),
-                field.data_type().clone(),
-                field.is_nullable(),
-            );
-            fields.push(new_field);
-        }
-
+        // Combine schemas directly without prefixes to match exec.rs schema creation
+        let mut fields = left_schema.fields().to_vec();
+        fields.extend_from_slice(right_schema.fields());
         Ok(Schema::new(fields))
     }
 }

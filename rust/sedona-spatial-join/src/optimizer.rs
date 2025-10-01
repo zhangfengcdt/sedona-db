@@ -1157,7 +1157,7 @@ mod gpu_optimizer {
     }
 
     /// Check if spatial predicate is supported on GPU
-    fn is_gpu_supported_predicate(predicate: &SpatialPredicate) -> bool {
+    pub(crate) fn is_gpu_supported_predicate(predicate: &SpatialPredicate) -> bool {
         match predicate {
             SpatialPredicate::Relation(rel) => {
                 use crate::spatial_predicate::SpatialRelationType;
@@ -1180,7 +1180,7 @@ mod gpu_optimizer {
     }
 
     /// Find geometry column in schema
-    fn find_geometry_column(schema: &SchemaRef) -> Result<GeometryColumnInfo> {
+    pub(crate) fn find_geometry_column(schema: &SchemaRef) -> Result<GeometryColumnInfo> {
         use arrow_schema::DataType;
 
         for (idx, field) in schema.fields().iter().enumerate() {
@@ -1226,7 +1226,7 @@ mod gpu_optimizer {
     }
 
     /// Convert SpatialPredicate to GPU predicate
-    fn convert_to_gpu_predicate(predicate: &SpatialPredicate) -> Result<GpuSpatialPredicate> {
+    pub(crate) fn convert_to_gpu_predicate(predicate: &SpatialPredicate) -> Result<GpuSpatialPredicate> {
         use crate::spatial_predicate::SpatialRelationType;
         use sedona_libgpuspatial::SpatialPredicate as LibGpuPred;
 
@@ -1267,6 +1267,62 @@ fn try_create_gpu_spatial_join(
     _config: &ConfigOptions,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     Ok(None)
+}
+
+#[cfg(all(test, feature = "gpu"))]
+mod gpu_tests {
+    use super::*;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::prelude::SessionConfig;
+    use sedona_common::option::add_sedona_option_extension;
+    use sedona_schema::datatypes::WKB_GEOMETRY;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_find_geometry_column() {
+        use gpu_optimizer::find_geometry_column;
+
+        // Schema with geometry column
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            WKB_GEOMETRY.to_storage_field("geom", false).unwrap(),
+        ]));
+
+        let result = find_geometry_column(&schema);
+        assert!(result.is_ok());
+        let geom_col = result.unwrap();
+        assert_eq!(geom_col.name, "geom");
+        assert_eq!(geom_col.index, 1);
+    }
+
+    #[test]
+    fn test_find_geometry_column_no_geom() {
+        use gpu_optimizer::find_geometry_column;
+
+        // Schema without geometry column
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+        ]));
+
+        let result = find_geometry_column(&schema);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_gpu_disabled_by_default() {
+        // Create default config
+        let config = SessionConfig::new();
+        let config = add_sedona_option_extension(config);
+        let options = config.options();
+
+        // GPU should be disabled by default
+        let sedona_options = options
+            .extensions
+            .get::<sedona_common::option::SedonaOptions>()
+            .unwrap();
+        assert!(!sedona_options.spatial_join.gpu.enable);
+    }
 }
 
 #[cfg(test)]
