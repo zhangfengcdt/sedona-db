@@ -30,9 +30,16 @@ Unlike the CPU-based spatial join, the GPU implementation accepts child Executio
 
 ### Prerequisites
 
+**For GPU Acceleration:**
 - CUDA Toolkit (11.0 or later)
-- CUDA-capable GPU
+- CUDA-capable GPU (compute capability 6.0+)
+- Linux or Windows OS (macOS does not support CUDA)
 - Build with `--features gpu` flag
+
+**For Development Without GPU:**
+- The package compiles and tests pass without GPU hardware
+- Tests verify integration logic and API surface
+- Actual GPU computation requires hardware (see Testing section below)
 
 ### Building
 
@@ -74,13 +81,94 @@ let ctx = SessionContext::new_with_config(config);
 
 ## Testing
 
+### Test Coverage
+
+The test suite is divided into two categories:
+
+#### 1. Structure and Integration Tests (No GPU Required)
+
+These tests validate the API, integration with DataFusion, and error handling:
+
 ```bash
-# Run unit tests
+# Run unit tests (tests structure, not GPU functionality)
 cargo test --package sedona-spatial-join-gpu
 
-# Run integration tests
+# Run integration tests (tests DataFusion integration)
 cargo test --package sedona-spatial-join-gpu --test integration_test
-
-# Run with GPU feature
-cargo test --package sedona-spatial-join-gpu --features gpu
 ```
+
+**What these tests verify:**
+- ✅ Execution plan creation and structure
+- ✅ Schema combination logic
+- ✅ Configuration parsing and defaults
+- ✅ Stream state machine structure
+- ✅ Error handling and fallback paths
+- ✅ Geometry column detection
+- ✅ Integration with DataFusion's ExecutionPlan trait
+
+**What these tests DO NOT verify:**
+- ❌ Actual GPU computation (CUDA kernels)
+- ❌ GPU memory transfers
+- ❌ Spatial predicate evaluation correctness on GPU
+- ❌ Performance characteristics
+- ❌ Multi-GPU coordination
+
+#### 2. GPU Functional Tests (GPU Hardware Required)
+
+These tests require an actual CUDA-capable GPU and can only run on Linux/Windows with CUDA toolkit installed:
+
+```bash
+# Run GPU functional tests (requires GPU hardware)
+cargo test --package sedona-spatial-join-gpu --features gpu gpu_functional_tests
+
+# Run on CI with GPU runner
+cargo test --package sedona-spatial-join-gpu --features gpu -- --ignored
+```
+
+**Prerequisites for GPU tests:**
+- CUDA-capable GPU (compute capability 6.0+)
+- CUDA Toolkit 11.0 or later installed
+- Linux or Windows OS (macOS not supported)
+- GPU drivers properly configured
+
+**What GPU tests verify:**
+- ✅ Actual CUDA kernel execution
+- ✅ Correctness of spatial join results
+- ✅ GPU memory management
+- ✅ Performance vs CPU baseline
+- ✅ Multi-batch processing
+
+### Running Tests Without GPU
+
+On development machines without GPU (e.g., macOS), the standard tests will:
+1. Compile successfully (libgpuspatial compiles without CUDA code)
+2. Test the API surface and integration logic
+3. Verify graceful degradation when GPU is unavailable
+4. Pass without executing actual GPU code paths
+
+This allows development and testing of the integration layer without GPU hardware.
+
+### CI/CD Integration
+
+GPU tests are automatically run via GitHub Actions on self-hosted runners with GPU support.
+
+**Workflow**: `.github/workflows/rust-gpu.yml`
+
+**Runner Requirements:**
+- Self-hosted runner with CUDA-capable GPU
+- Recommended: AWS EC2 g5.xlarge instance with Deep Learning AMI
+- Labels: `[self-hosted, gpu, linux, cuda]`
+
+**Setup Guide**: See [`docs/setup-gpu-ci-runner.md`](../../../docs/setup-gpu-ci-runner.md) for complete instructions on:
+- Setting up AWS EC2 instance with GPU
+- Installing CUDA toolkit and dependencies
+- Configuring GitHub Actions runner
+- Cost optimization tips
+- Troubleshooting common issues
+
+**Build Times** (g5.xlarge):
+- libgpuspatial (CUDA): ~20-25 minutes (first build)
+- GPU spatial join: ~2-3 minutes
+- With caching: ~90% faster on subsequent builds
+
+**Note:** GitHub-hosted runners do not provide GPU access. A self-hosted runner is required for actual GPU testing.
