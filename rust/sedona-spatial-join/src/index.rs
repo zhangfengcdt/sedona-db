@@ -530,28 +530,24 @@ impl SpatialIndex {
             }
         };
 
+        // Select the appropriate distance metric
+        let distance_metric: &dyn DistanceMetric<f32> = if use_spheroid {
+            &self.knn_components.haversine_metric
+        } else {
+            &self.knn_components.euclidean_metric
+        };
+
         // Create geometry accessor for on-demand WKB decoding and caching
         let geometry_accessor = self.create_knn_accessor();
 
         // Use neighbors_geometry to find k nearest neighbors
-        // We need to dispatch based on distance metric type since DistanceMetric is not dyn compatible
-        let initial_results = if use_spheroid {
-            self.rtree.neighbors_geometry(
-                &probe_geom,
-                Some(k as usize),
-                None, // no max_distance filter
-                &self.knn_components.haversine_metric,
-                &geometry_accessor,
-            )
-        } else {
-            self.rtree.neighbors_geometry(
-                &probe_geom,
-                Some(k as usize),
-                None, // no max_distance filter
-                &self.knn_components.euclidean_metric,
-                &geometry_accessor,
-            )
-        };
+        let initial_results = self.rtree.neighbors_geometry(
+            &probe_geom,
+            Some(k as usize),
+            None, // no max_distance filter
+            distance_metric,
+            &geometry_accessor,
+        );
 
         if initial_results.is_empty() {
             return Ok(JoinResultMetrics {
@@ -565,26 +561,14 @@ impl SpatialIndex {
 
         // Handle tie-breakers if enabled
         if include_tie_breakers && !final_results.is_empty() && k > 0 {
-            // Helper closure to calculate distance between geometries
-            let calc_distance = |geom1: &Geometry<f64>, geom2: &Geometry<f64>| -> f32 {
-                if use_spheroid {
-                    self.knn_components
-                        .haversine_metric
-                        .distance_to_geometry(geom1, geom2)
-                } else {
-                    self.knn_components
-                        .euclidean_metric
-                        .distance_to_geometry(geom1, geom2)
-                }
-            };
-
             // Calculate distances for the initial k results to find the k-th distance
             let mut distances_with_indices: Vec<(f64, u32)> = Vec::new();
 
             for &result_idx in &final_results {
                 if (result_idx as usize) < self.data_id_to_batch_pos.len() {
                     if let Some(item_geom) = geometry_accessor.get_geometry(result_idx as usize) {
-                        let distance = calc_distance(&probe_geom, &item_geom);
+                        let distance =
+                            distance_metric.distance_to_geometry(&probe_geom, &item_geom);
                         if let Some(distance_f64) = distance.to_f64() {
                             distances_with_indices.push((distance_f64, result_idx));
                         }
@@ -637,7 +621,8 @@ impl SpatialIndex {
                     if (result_idx as usize) < self.data_id_to_batch_pos.len() {
                         if let Some(item_geom) = geometry_accessor.get_geometry(result_idx as usize)
                         {
-                            let distance = calc_distance(&probe_geom, &item_geom);
+                            let distance =
+                                distance_metric.distance_to_geometry(&probe_geom, &item_geom);
                             if let Some(distance_f64) = distance.to_f64() {
                                 all_distances_with_indices.push((distance_f64, result_idx));
                             }
@@ -990,10 +975,8 @@ impl<'a> SedonaKnnAdapter<'a> {
 }
 
 impl<'a> GeometryAccessor for SedonaKnnAdapter<'a> {
-    type Geometry = Geometry<f64>;
-
     /// Get geometry for the given item index with lock-free caching
-    fn get_geometry(&self, item_index: usize) -> Option<Self::Geometry> {
+    fn get_geometry(&self, item_index: usize) -> Option<Geometry<f64>> {
         let geometry_cache = &self.knn_components.geometry_cache;
 
         // Bounds check

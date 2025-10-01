@@ -131,7 +131,7 @@ datafusion-physical-plan = { git = "https://github.com/paleolimbot/datafusion.gi
 geo-types = { git = "https://github.com/wherobots/geo.git", branch = "generic-alg", package = "geo-types" }
 geo-traits = { git = "https://github.com/wherobots/geo.git", branch = "generic-alg", package = "geo-traits" }
 geo-traits-ext = { git = "https://github.com/wherobots/geo.git", branch = "generic-alg", package = "geo-traits-ext" }
-#geo-index = { git = "https://github.com/wherobots/geo-index.git", branch = "feature/rtree.nn.refactor" }
-geo-index = { path = "../geo-index" }
+geo-index = { git = "https://github.com/wherobots/geo-index.git", branch = "feature/rtree.nn.refactor" }
+#geo-index = { path = "../geo-index" }
 wkb = { git = "https://github.com/wherobots/wkb.git", branch = "generic-alg" }
 wkt = { git = "https://github.com/wherobots/wkt.git", branch = "generic-alg" }
