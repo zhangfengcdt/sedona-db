@@ -26,11 +26,22 @@ name: rust-gpu
 
 on:
   push:
-  pull_request:
+    branches:
+      - main
+      - feature/**
+    paths:
+      - 'c/sedona-libgpuspatial/**'
+      - 'rust/sedona-spatial-join-gpu/**'
+      - '.github/workflows/rust.yml'
 
 concurrency:
   group: ${{ github.repository }}-${{ github.ref }}-${{ github.workflow }}-rust-gpu
   cancel-in-progress: true
+
+# Set workflow timeout to 60 minutes (default is 360 minutes/6 hours)
+# GPU build takes ~30-40 minutes first time, ~5-8 minutes cached
+env:
+  WORKFLOW_TIMEOUT_MINUTES: 60
 
 permissions:
   contents: read
@@ -48,6 +59,7 @@ jobs:
     #   2. Or create separate GPU test job with GPU runner
     # Recommended GPU runner: AWS EC2 g5.xlarge with Deep Learning AMI
     runs-on: ubuntu-latest
+    timeout-minutes: 60  # Prevent runaway builds (first build ~40min, cached ~8min)
 
     env:
       CARGO_INCREMENTAL: 0
@@ -154,14 +166,17 @@ jobs:
           echo "This compiles CUDA code and verifies CUDA compilation works"
           echo "Note: First build with CUDA takes approximately 20-25 minutes"
           echo ""
-          cargo build --package sedona-libgpuspatial --features gpu --verbose
+          # Use --locked to ensure Cargo.lock is up to date
+          # Use --all-targets to build lib + tests (but don't run tests)
+          cargo build --locked --package sedona-libgpuspatial --all-targets --features gpu --verbose
           echo ""
           echo "✓ libgpuspatial build complete with CUDA support"
 
       - name: Build GPU spatial join (with GPU feature)
         run: |
           echo "=== Building GPU spatial join package WITH GPU feature ==="
-          cargo build --package sedona-spatial-join-gpu --features gpu --verbose
+          # Build only GPU packages, not entire workspace (saves time)
+          cargo build --locked --package sedona-spatial-join-gpu --all-targets --features gpu --verbose
           echo ""
           echo "✓ GPU spatial join build complete"
 
