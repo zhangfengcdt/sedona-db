@@ -141,15 +141,19 @@ impl ExecutionPlan for GpuSpatialJoinExec {
             ));
         }
 
-        // TODO: Implement GpuSpatialJoinStream
         log::info!(
             "Executing GPU spatial join with {} left files and {} right files",
             self.config.left_parquet_files.len(),
             self.config.right_parquet_files.len()
         );
 
-        Err(datafusion::error::DataFusionError::NotImplemented(
-            "GPU spatial join stream not yet implemented".into(),
-        ))
+        // Create GPU spatial join stream
+        let stream = crate::stream::GpuSpatialJoinStream::new(
+            self.schema.clone(),
+            self.config.clone(),
+            context,
+        )?;
+
+        Ok(Box::pin(stream))
     }
 }

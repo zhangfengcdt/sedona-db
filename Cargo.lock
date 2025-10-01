@@ -5083,6 +5083,7 @@ dependencies = [
  "arrow-schema",
  "criterion",
  "datafusion",
+ "datafusion-catalog",
  "datafusion-common",
  "datafusion-common-runtime",
  "datafusion-execution",
