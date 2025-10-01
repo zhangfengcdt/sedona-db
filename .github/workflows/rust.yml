@@ -25,19 +25,7 @@ name: rust-gpu
 
 on:
   pull_request:
-    branches:
-      - main
-    paths:
-      - 'c/sedona-libgpuspatial/**'
-      - 'rust/sedona-spatial-join-gpu/**'
-      - 'rust.yml'
   push:
-    branches:
-      - main
-    paths:
-      - 'c/sedona-libgpuspatial/**'
-      - 'rust/sedona-spatial-join-gpu/**'
-      - 'rust.yml'
 
 concurrency:
   group: ${{ github.repository }}-${{ github.ref }}-${{ github.workflow }}-rust-gpu
