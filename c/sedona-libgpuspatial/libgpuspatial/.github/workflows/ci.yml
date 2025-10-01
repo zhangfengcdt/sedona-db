@@ -1,0 +1,86 @@
+name: C++ CI
+
+on: [ push, pull_request ]
+
+jobs:
+  build:
+    runs-on: depot-ubuntu-22.04-16-gpu
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+
+      - name: Clone vcpkg
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/vcpkg
+          ref: "2025.06.13"
+          path: vcpkg
+          fetch-depth: 0
+
+      - name: Set up environment variables and bootstrap vcpkg
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+          CMAKE_TOOLCHAIN_FILE: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+        run: |
+          cd vcpkg
+          ./bootstrap-vcpkg.sh
+          cd ..
+
+          echo "VCPKG_ROOT=$VCPKG_ROOT" >> $GITHUB_ENV
+          echo "PATH=$VCPKG_ROOT:$PATH" >> $GITHUB_ENV
+          echo "CMAKE_TOOLCHAIN_FILE=$CMAKE_TOOLCHAIN_FILE" >> $GITHUB_ENV
+          echo "/usr/local/cuda/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt install apt-transport-https ca-certificates gnupg software-properties-common wget
+          wget -qO - https://apt.kitware.com/keys/kitware-archive-latest.asc | sudo apt-key add -
+          # Add the repository for your specific Ubuntu version (e.g., jammy for 22.04)
+          sudo apt-add-repository 'deb https://apt.kitware.com/ubuntu/ jammy main'
+          sudo apt update
+          sudo apt install cmake flex bison -y
+          # Downgrade CUDA to 12.4 because the driver is 550.163.01 and does not support CUDA 13
+          sudo apt purge cuda-toolkit* -y
+          sudo apt-get install -y cuda-toolkit-12-4
+          #sudo update-alternatives --set cuda /usr/local/cuda-12.4
+
+      - name: Cache vcpkg binaries
+        id: cache-vcpkg
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg_installed
+          # Bump the number at the end of this line to force a new dependency build
+          key: vcpkg-installed-${{ runner.os }}-${{ runner.arch }}-7
+
+      - name: Install vcpkg dependencies
+        if: steps.cache-vcpkg.outputs.cache-hit != 'true'
+        run: |
+          ./vcpkg/vcpkg install
+
+      - name: Build Debug
+        run: |
+          mkdir debug
+          cd debug
+          cmake .. -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DGPUSPATIAL_BUILD_TESTS=ON -DGPUSPATIAL_BUILD_BENCHMARK=ON -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/debug_install
+          make -j8
+
+
+      - name: Test Debug
+        run: |
+          cd debug
+          ${{ github.workspace }}/.github/workflows/test_all.sh
+
+      - name: Build Release
+        run: |
+          mkdir release
+          cd release
+          cmake .. -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DGPUSPATIAL_BUILD_TESTS=ON -DGPUSPATIAL_BUILD_BENCHMARK=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/release_install
+          make -j8
+
+      - name: Test Release
+        run: |
+          cd release
+          ${{ github.workspace }}/.github/workflows/test_all.sh

@@ -26,6 +26,3 @@
 [submodule "submodules/sedona-testing"]
 	path = submodules/sedona-testing
 	url = https://github.com/apache/sedona-testing.git
-[submodule "c/sedona-libgpuspatial/libgpuspatial"]
-	path = c/sedona-libgpuspatial/libgpuspatial
-	url = https://github.com/wherobots/libgpuspatial.git
