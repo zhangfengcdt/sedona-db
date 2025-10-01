@@ -15,17 +15,23 @@ use datafusion::physical_plan::{
 use crate::gpu_spatial_join::config::GpuSpatialJoinConfig;
 
 /// GPU-accelerated spatial join execution plan
+///
+/// This execution plan handles the entire pipeline:
+/// 1. Direct Parquet file reading
+/// 2. Data transfer to GPU memory
+/// 3. GPU spatial join execution
+/// 4. Result materialization
 pub struct GpuSpatialJoinExec {
-    /// Left side input
-    left: Arc<dyn ExecutionPlan>,
+    /// Left input schema
+    left_schema: SchemaRef,
 
-    /// Right side input
-    right: Arc<dyn ExecutionPlan>,
+    /// Right input schema
+    right_schema: SchemaRef,
 
     /// Join configuration
     config: GpuSpatialJoinConfig,
 
-    /// Output schema
+    /// Combined output schema
     schema: SchemaRef,
 
     /// Execution properties
@@ -34,13 +40,10 @@ pub struct GpuSpatialJoinExec {
 
 impl GpuSpatialJoinExec {
     pub fn new(
-        left: Arc<dyn ExecutionPlan>,
-        right: Arc<dyn ExecutionPlan>,
+        left_schema: SchemaRef,
+        right_schema: SchemaRef,
         config: GpuSpatialJoinConfig,
     ) -> Result<Self> {
-        let left_schema = left.schema();
-        let right_schema = right.schema();
-
         // Combine schemas for output
         let mut fields = left_schema.fields().to_vec();
         fields.extend_from_slice(right_schema.fields());
@@ -52,23 +55,34 @@ impl GpuSpatialJoinExec {
         let properties = PlanProperties::new(
             eq_props,
             partitioning,
-            EmissionType::Incremental,
+            EmissionType::Final, // GPU join produces all results at once
             Boundedness::Bounded,
         );
 
         Ok(Self {
-            left,
-            right,
+            left_schema,
+            right_schema,
             config,
             schema,
             properties,
         })
     }
+
+    pub fn config(&self) -> &GpuSpatialJoinConfig {
+        &self.config
+    }
 }
 
 impl Debug for GpuSpatialJoinExec {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "GpuSpatialJoinExec")
+        write!(
+            f,
+            "GpuSpatialJoinExec: join_type={:?}, predicate={:?}, left_files={}, right_files={}",
+            self.config.join_type,
+            self.config.predicate,
+            self.config.left_parquet_files.len(),
+            self.config.right_parquet_files.len()
+        )
     }
 }
 
@@ -76,8 +90,8 @@ impl DisplayAs for GpuSpatialJoinExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         write!(
             f,
-            "GpuSpatialJoinExec: join_type={:?}",
-            self.config.join_type
+            "GpuSpatialJoinExec: join_type={:?}, predicate={:?}",
+            self.config.join_type, self.config.predicate
         )
     }
 }
@@ -100,26 +114,42 @@ impl ExecutionPlan for GpuSpatialJoinExec {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![&self.left, &self.right]
+        // GPU join is a leaf node - it directly reads from Parquet files
+        vec![]
     }
 
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(GpuSpatialJoinExec::new(
-            children[0].clone(),
-            children[1].clone(),
-            self.config.clone(),
-        )?))
+        if !children.is_empty() {
+            return Err(datafusion::error::DataFusionError::Internal(
+                "GpuSpatialJoinExec should have no children".into(),
+            ));
+        }
+        Ok(self)
     }
 
     fn execute(
         &self,
-        _partition: usize,
-        _context: Arc<TaskContext>,
+        partition: usize,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        // This will be implemented with actual GPU spatial join logic
-        todo!("GPU spatial join execution not yet implemented")
+        if partition != 0 {
+            return Err(datafusion::error::DataFusionError::Execution(
+                "GpuSpatialJoinExec only supports partition 0".into(),
+            ));
+        }
+
+        // TODO: Implement GpuSpatialJoinStream
+        log::info!(
+            "Executing GPU spatial join with {} left files and {} right files",
+            self.config.left_parquet_files.len(),
+            self.config.right_parquet_files.len()
+        );
+
+        Err(datafusion::error::DataFusionError::NotImplemented(
+            "GPU spatial join stream not yet implemented".into(),
+        ))
     }
 }

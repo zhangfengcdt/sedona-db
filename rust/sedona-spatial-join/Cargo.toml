@@ -28,7 +28,9 @@ rust-version.workspace = true
 result_large_err = "allow"
 
 [features]
+default = []
 backtrace = ["datafusion-common/backtrace"]
+gpu = ["sedona-spatial-join-gpu"]
 
 [dependencies]
 arrow = { workspace = true }
@@ -58,6 +60,9 @@ wkb = { workspace = true }
 geo-index = { workspace = true }
 geos = { workspace = true }
 float_next_after = { workspace = true }
+
+# GPU spatial join (optional)
+sedona-spatial-join-gpu = { path = "../sedona-spatial-join-gpu", optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

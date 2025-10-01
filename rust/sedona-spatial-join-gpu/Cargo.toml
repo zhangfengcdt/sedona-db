@@ -47,12 +47,17 @@ datafusion-execution = { workspace = true }
 futures = { workspace = true }
 thiserror = { workspace = true }
 log = "0.4"
+parking_lot = { workspace = true }
+
+# Parquet and object store for direct file reading
+parquet = { workspace = true }
+object_store = { workspace = true }
 
 # GPU dependencies
 sedona-libgpuspatial = { path = "../../c/sedona-libgpuspatial" }
 
 # Sedona dependencies
-sedona-spatial-join = { path = "../sedona-spatial-join" }
+sedona-common = { path = "../sedona-common" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
