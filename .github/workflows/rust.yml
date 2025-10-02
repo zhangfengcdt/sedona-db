@@ -217,6 +217,16 @@ jobs:
           # Build library only (skip tests - they require CUDA driver)
           cargo build --locked --package sedona-spatial-join-gpu --lib --features gpu --verbose
 
+      - name: Build entire workspace with GPU features
+        run: |
+          echo "=== Building entire SedonaDB workspace WITH GPU features ==="
+          echo "Verifying GPU packages integrate with rest of codebase"
+          echo ""
+          # Build entire workspace with GPU features enabled
+          # Exclude sedonadb Python extension (requires maturin)
+          # Build libs only (skip tests - they require CUDA driver)
+          cargo build --workspace --exclude sedonadb --lib --features gpu --verbose
+
       # GPU tests commented out - no GPU hardware on GitHub runners
       # Uncomment these when running on self-hosted GPU runner
 
