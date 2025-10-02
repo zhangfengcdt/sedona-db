@@ -56,9 +56,8 @@ jobs:
     # Using ubuntu-22.04 to match libgpuspatial CI environment
     # TODO: Once GPU runner is ready, enable GPU tests with:
     #   runs-on: [self-hosted, gpu, linux, cuda]
-    # Recommended GPU runner: AWS EC2 g5.xlarge with Deep Learning AMI
     runs-on: ubuntu-22.04
-    timeout-minutes: 90  # CUDA compilation is slow (~45-60 min first time)
+    timeout-minutes: 60
 
     env:
       CARGO_INCREMENTAL: 0
@@ -209,9 +208,6 @@ jobs:
           # Build library only (skip tests - they require CUDA driver which isn't available)
           # --lib builds only the library, not test binaries
           cargo build --locked --package sedona-libgpuspatial --lib --features gpu --verbose
-          echo ""
-          echo "Build completed at: $(date)"
-          echo "✓ libgpuspatial CUDA compilation complete"
 
       - name: Build GPU spatial join (with GPU feature)
         run: |
@@ -220,8 +216,6 @@ jobs:
           echo ""
           # Build library only (skip tests - they require CUDA driver)
           cargo build --locked --package sedona-spatial-join-gpu --lib --features gpu --verbose
-          echo ""
-          echo "✓ GPU spatial join build complete"
 
       # GPU tests commented out - no GPU hardware on GitHub runners
       # Uncomment these when running on self-hosted GPU runner
