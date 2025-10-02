@@ -223,9 +223,10 @@ jobs:
           echo "Verifying GPU packages integrate with rest of codebase"
           echo ""
           # Build entire workspace with GPU features enabled
-          # Exclude sedonadb Python extension (requires maturin)
+          # Exclude sedonadb (Python extension, requires maturin)
+          # Exclude sedona-s2geography (has GCC 11 compatibility issues, unrelated to GPU)
           # Build libs only (skip tests - they require CUDA driver)
-          cargo build --workspace --exclude sedonadb --lib --features gpu --verbose
+          cargo build --workspace --exclude sedonadb --exclude sedona-s2geography --lib --features gpu --verbose
 
       # GPU tests commented out - no GPU hardware on GitHub runners
       # Uncomment these when running on self-hosted GPU runner
