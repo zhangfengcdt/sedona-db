@@ -233,8 +233,9 @@ jobs:
           echo "Subsequent builds: 10-15 minutes (cached)"
           echo ""
           echo "Build started at: $(date)"
-          # Build with --features gpu to trigger CUDA compilation
-          cargo build --locked --package sedona-libgpuspatial --all-targets --features gpu --verbose
+          # Build library only (skip tests - they require CUDA driver which isn't available)
+          # --lib builds only the library, not test binaries
+          cargo build --locked --package sedona-libgpuspatial --lib --features gpu --verbose
           echo ""
           echo "Build completed at: $(date)"
           echo "✓ libgpuspatial CUDA compilation complete"
@@ -244,7 +245,8 @@ jobs:
           echo "=== Building GPU spatial join package WITH GPU feature ==="
           echo "Building Rust GPU spatial join (depends on libgpuspatial)"
           echo ""
-          cargo build --locked --package sedona-spatial-join-gpu --all-targets --features gpu --verbose
+          # Build library only (skip tests - they require CUDA driver)
+          cargo build --locked --package sedona-spatial-join-gpu --lib --features gpu --verbose
           echo ""
           echo "✓ GPU spatial join build complete"
 
