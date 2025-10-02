@@ -14,6 +14,13 @@ pub use libgpuspatial::{GpuSpatialJoinerWrapper, GpuSpatialPredicateWrapper};
 #[cfg(gpu_available)]
 pub use libgpuspatial_glue_bindgen::GpuSpatialJoinerContext;
 
+// Mark GpuSpatialJoinerContext as Send
+// SAFETY: The GPU context is designed to be used from multiple threads.
+// Each thread gets its own context, and the underlying GPU library handles thread safety.
+// The raw pointers inside are managed by the C++ library which ensures proper synchronization.
+#[cfg(gpu_available)]
+unsafe impl Send for GpuSpatialJoinerContext {}
+
 // Error type for non-GPU builds
 #[cfg(not(gpu_available))]
 #[derive(Debug, thiserror::Error)]

@@ -19,23 +19,6 @@
 # CUDA compilation (nvcc) works WITHOUT GPU hardware - only needs CUDA toolkit.
 # GPU runtime execution requires actual GPU, so tests are commented out.
 #
-# Environment: ubuntu-22.04 (matches libgpuspatial CI for consistency)
-#
-# What this workflow tests:
-#   ✓ CUDA code compilation (nvcc)
-#   ✓ C++/CUDA CMake build (with CMAKE_POLICY_VERSION_MINIMUM=3.5)
-#   ✓ Rust/C++ FFI bindings
-#   ✓ Linux compatibility
-#
-# What this workflow does NOT test:
-#   ✗ GPU kernel execution (requires GPU hardware)
-#   ✗ GPU memory operations (requires GPU drivers)
-#   ✗ Spatial join correctness on GPU
-#
-# Build time: ~45-60 minutes first time, ~10-15 minutes with cache
-#
-# See docs/setup-gpu-ci-runner.md for self-hosted GPU runner setup.
-#
 name: rust-gpu
 
 on:
@@ -79,15 +62,14 @@ jobs:
 
     env:
       CARGO_INCREMENTAL: 0
-      # Reduce debug info to save disk space
-      CARGO_PROFILE_DEV_DEBUG: 1
-      CARGO_PROFILE_TEST_DEBUG: 1
+      # Disable debug info completely to save disk space
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
       # Limit parallel compilation to reduce memory pressure (GPU compilation is intensive)
-      # Adjust based on instance size: 4 for g5.xlarge, 8 for g5.2xlarge
       CARGO_BUILD_JOBS: 4
       # CUDA configuration (CUDA 12.4 installs to /usr/local/cuda-12.4)
       CUDA_HOME: /usr/local/cuda-12.4
-      # vcpkg for C++ dependencies (version-pinned for reproducibility)
+      # vcpkg for C++ dependencies)
       VCPKG_ROOT: ${{ github.workspace }}/vcpkg
       CMAKE_TOOLCHAIN_FILE: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
 
@@ -96,8 +78,7 @@ jobs:
         with:
           submodules: 'recursive'
 
-      # Clone vcpkg with specific version for reproducibility
-      # Based on libgpuspatial CI best practices
+      # Clone vcpkg with specific version
       - name: Clone vcpkg
         uses: actions/checkout@v4
         with:
@@ -118,12 +99,9 @@ jobs:
           echo "CMAKE_TOOLCHAIN_FILE=$CMAKE_TOOLCHAIN_FILE" >> $GITHUB_ENV
           echo "/usr/local/cuda/bin" >> $GITHUB_PATH
 
-      # Free up disk space before build (GitHub runners have limited space)
+      # Free up disk space before build
       - name: Free disk space
         run: |
-          echo "Disk space before cleanup:"
-          df -h
-
           # Remove unnecessary packages to free up ~10GB
           sudo apt-get remove -y '^dotnet-.*' '^llvm-.*' 'php.*' '^mongodb-.*' '^mysql-.*' azure-cli google-chrome-stable firefox powershell mono-devel libgl1-mesa-dri || true
           sudo apt-get autoremove -y
@@ -132,11 +110,7 @@ jobs:
           # Remove large directories
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
 
-          echo "Disk space after cleanup:"
-          df -h
-
       # Install system dependencies including CUDA toolkit for compilation
-      # Following libgpuspatial CI pattern
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -166,7 +140,6 @@ jobs:
           # Install CUDA toolkit for compilation (nvcc)
           # Note: CUDA compilation works without GPU hardware
           # GPU runtime tests still require actual GPU
-          # Use CUDA 12.4 to match libgpuspatial CI environment
           # CUDA 12.4 supports GCC 11 (default on Ubuntu 22.04)
           if ! command -v nvcc &> /dev/null; then
             echo "Installing CUDA 12.4 toolkit for compilation..."
@@ -267,40 +240,3 @@ jobs:
       #   run: |
       #     echo "Running GPU functional tests (require actual GPU)..."
       #     cargo test --package sedona-spatial-join-gpu --features gpu -- --ignored --nocapture
-
-      - name: Build summary
-        run: |
-          echo "=== GPU Package Build Summary ==="
-          echo "Runner: GitHub-hosted (ubuntu-latest)"
-          echo "Build Mode: WITH GPU feature (--features gpu)"
-          echo "CUDA Compilation: ✓ Completed"
-          echo "Platform: $(uname -a)"
-          echo "Rust Version: $(rustc --version)"
-          if command -v nvcc &> /dev/null; then
-            echo "CUDA Version: $(nvcc --version | grep release)"
-          fi
-          echo ""
-          echo "✓ CUDA code compiled successfully (nvcc)"
-          echo "✓ libgpuspatial C++/CUDA build complete"
-          echo "✓ GPU spatial join package built"
-          echo "✓ All dependencies resolved"
-          echo "⚠ GPU runtime tests NOT run (no GPU hardware)"
-          echo ""
-          echo "What was tested:"
-          echo "  • CUDA code compilation (nvcc)"
-          echo "  • C++/CUDA CMake build"
-          echo "  • Rust/C++ FFI bindings"
-          echo "  • Conditional compilation (#[cfg(feature = \"gpu\")])"
-          echo "  • Linux compatibility"
-          echo ""
-          echo "What was NOT tested:"
-          echo "  • GPU kernel execution (requires GPU hardware)"
-          echo "  • GPU memory operations (requires GPU drivers)"
-          echo "  • Spatial join correctness on GPU"
-          echo "  • Performance characteristics"
-          echo ""
-          echo "Next steps to enable GPU runtime tests:"
-          echo "  1. Set up self-hosted runner with GPU (see docs/setup-gpu-ci-runner.md)"
-          echo "  2. Update runs-on to: [self-hosted, gpu, linux, cuda]"
-          echo "  3. Uncomment GPU test steps in this workflow"
-          echo "  4. Run tests with actual GPU hardware"
