@@ -85,8 +85,8 @@ jobs:
       # Limit parallel compilation to reduce memory pressure (GPU compilation is intensive)
       # Adjust based on instance size: 4 for g5.xlarge, 8 for g5.2xlarge
       CARGO_BUILD_JOBS: 4
-      # CUDA configuration
-      CUDA_HOME: /usr/local/cuda
+      # CUDA configuration (CUDA 12.4 installs to /usr/local/cuda-12.4)
+      CUDA_HOME: /usr/local/cuda-12.4
       # vcpkg for C++ dependencies (version-pinned for reproducibility)
       VCPKG_ROOT: ${{ github.workspace }}/vcpkg
       CMAKE_TOOLCHAIN_FILE: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake

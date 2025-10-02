@@ -58,8 +58,20 @@ fn main() {
 
         // Link to the static libraries and CUDA runtime
         println!("cargo:rustc-link-search=native={}/build", dst.display()); // gpuspatial_c defined in CMakeLists.txt
-        println!("cargo:rustc-link-search=native=/usr/local/cuda/lib64"); // CUDA runtime
-        println!("cargo:rustc-link-search=native=/usr/lib/x86_64-linux-gnu"); // CUDA Driver
+
+        // Detect CUDA library path from CUDA_HOME or default locations
+        let cuda_lib_path = if let Ok(cuda_home) = env::var("CUDA_HOME") {
+            format!("{}/lib64", cuda_home)
+        } else if std::path::Path::new("/usr/local/cuda-12.4/lib64").exists() {
+            "/usr/local/cuda-12.4/lib64".to_string()
+        } else if std::path::Path::new("/usr/local/cuda/lib64").exists() {
+            "/usr/local/cuda/lib64".to_string()
+        } else {
+            "/usr/local/cuda/lib64".to_string() // fallback
+        };
+
+        println!("cargo:rustc-link-search=native={}", cuda_lib_path); // CUDA runtime
+        println!("cargo:rustc-link-search=native=/usr/lib/x86_64-linux-gnu"); // CUDA Driver (alternative location)
 
         println!("cargo:rustc-link-lib=static=gpuspatial_c");
         println!("cargo:rustc-link-lib=static=gpuspatial");
