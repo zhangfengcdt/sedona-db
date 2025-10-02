@@ -48,6 +48,8 @@ fn main() {
         let dst = cmake::Config::new("./libgpuspatial")
             .define("CMAKE_CUDA_ARCHITECTURES", "86")
             .define("CMAKE_POLICY_VERSION_MINIMUM", "3.5")  // Allow older CMake versions
+            .define("CMAKE_C_COMPILER", "/usr/bin/gcc-10")  // Use GCC 10 for CUDA compatibility
+            .define("CMAKE_CXX_COMPILER", "/usr/bin/g++-10")  // Use G++ 10 for CUDA compatibility
             .build();
         let include_path = dst.join("include");
         println!(
