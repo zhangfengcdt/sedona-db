@@ -60,7 +60,9 @@ fn main() {
             config
                 .define("CMAKE_C_COMPILER", "/usr/bin/gcc-10")
                 .define("CMAKE_CXX_COMPILER", "/usr/bin/g++-10")
-                .define("CMAKE_CUDA_HOST_COMPILER", "/usr/bin/g++-10");
+                .define("CMAKE_CUDA_HOST_COMPILER", "/usr/bin/g++-10")
+                // Force CUDA to use GCC 10's includes, not GCC 11's
+                .define("CMAKE_CUDA_FLAGS", "-ccbin /usr/bin/g++-10");
 
             // Set environment variable for nvcc
             env::set_var("CUDAHOSTCXX", "/usr/bin/g++-10");
