@@ -46,31 +46,10 @@ fn main() {
         // You should adjust this based on your target GPUs
         // Otherwise, it calls JIT compilation which has a startup overhead
 
-        // Check if GCC 10 is available, otherwise use system default
-        let gcc_10_available = which::which("gcc-10").is_ok();
-
-        let mut config = cmake::Config::new("./libgpuspatial");
-        config
+        let dst = cmake::Config::new("./libgpuspatial")
             .define("CMAKE_CUDA_ARCHITECTURES", "86")
-            .define("CMAKE_POLICY_VERSION_MINIMUM", "3.5");  // Allow older CMake versions
-
-        // Use GCC 10 if available (for CUDA 11.5 compatibility)
-        if gcc_10_available {
-            println!("cargo:warning=Using GCC 10 for CUDA compilation");
-            config
-                .define("CMAKE_C_COMPILER", "/usr/bin/gcc-10")
-                .define("CMAKE_CXX_COMPILER", "/usr/bin/g++-10")
-                .define("CMAKE_CUDA_HOST_COMPILER", "/usr/bin/g++-10")
-                // Force CUDA to use GCC 10's includes, not GCC 11's
-                .define("CMAKE_CUDA_FLAGS", "-ccbin /usr/bin/g++-10");
-
-            // Set environment variable for nvcc
-            env::set_var("CUDAHOSTCXX", "/usr/bin/g++-10");
-        } else {
-            println!("cargo:warning=GCC 10 not found, using system default compiler");
-        }
-
-        let dst = config.build();
+            .define("CMAKE_POLICY_VERSION_MINIMUM", "3.5")  // Allow older CMake versions
+            .build();
         let include_path = dst.join("include");
         println!(
             "cargo:rustc-link-search=native={}",
