@@ -55,9 +55,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CARGO_INCREMENTAL: 0
-      # Disable debug info completely to save disk space
-      CARGO_PROFILE_DEV_DEBUG: 0
-      CARGO_PROFILE_TEST_DEBUG: 0
+      # Reduce debug info to save disk space
+      CARGO_PROFILE_DEV_DEBUG: 1
+      CARGO_PROFILE_TEST_DEBUG: 1
       # Limit parallel compilation to reduce memory pressure
       CARGO_BUILD_JOBS: 2
     steps:
@@ -109,7 +109,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           # Update this key to force a new cache
-          prefix-key: "rust-${{ matrix.name }}-v2"
+          prefix-key: "rust-${{ matrix.name }}-v3"
 
       - name: Install dependencies
         shell: bash
