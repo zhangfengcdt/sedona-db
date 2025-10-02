@@ -60,9 +60,6 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: 0
       # Limit parallel compilation to reduce memory pressure
       CARGO_BUILD_JOBS: 2
-      # Strip symbols to reduce binary size
-      CARGO_PROFILE_DEV_STRIP: symbols
-      CARGO_PROFILE_TEST_STRIP: symbols
     steps:
       - uses: actions/checkout@v4
         with:

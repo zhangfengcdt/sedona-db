@@ -910,6 +910,8 @@ struct KnnComponents {
     /// Pre-allocated vector for geometry cache - lock-free access
     /// Indexed by rtree data index for O(1) access
     geometry_cache: Vec<OnceCell<Geometry<f64>>>,
+    /// Memory reservation to track geometry cache memory usage
+    _reservation: MemoryReservation,
 }
 
 impl KnnComponents {
@@ -920,11 +922,11 @@ impl KnnComponents {
     ) -> datafusion_common::Result<Self> {
         // Create memory consumer and reservation for geometry cache
         let consumer = MemoryConsumer::new("SpatialJoinKnnGeometryCache");
-        let mut memory_reservation = consumer.register(&memory_pool);
+        let mut reservation = consumer.register(&memory_pool);
 
         // Estimate maximum possible memory usage based on WKB sizes
         let estimated_memory = Self::estimate_max_memory_usage(indexed_batches);
-        memory_reservation.try_grow(estimated_memory)?;
+        reservation.try_grow(estimated_memory)?;
 
         // Pre-allocate OnceCell vector
         let geometry_cache = (0..cache_size).map(|_| OnceCell::new()).collect();
@@ -933,6 +935,7 @@ impl KnnComponents {
             euclidean_metric: EuclideanDistance,
             haversine_metric: HaversineDistance::default(),
             geometry_cache,
+            _reservation: reservation,
         })
     }
 

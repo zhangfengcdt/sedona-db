@@ -2604,7 +2604,7 @@ dependencies = [
 [[package]]
 name = "geo-index"
 version = "0.3.1"
-source = "git+https://github.com/wherobots/geo-index.git?branch=feature/rtree.nn.refactor#66f597efbc1fa1beb147b4971fb0c02a7b1f47fc"
+source = "git+https://github.com/wherobots/geo-index.git?branch=main#70a24c8ff3a64f54d6111c8f4c7a6703dcbac224"
 dependencies = [
  "bytemuck",
  "float_next_after",
