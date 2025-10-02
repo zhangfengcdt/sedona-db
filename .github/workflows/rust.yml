@@ -152,6 +152,9 @@ jobs:
           # Install build tools
           sudo apt-get install -y build-essential pkg-config cmake flex bison
 
+          # Install libclang for bindgen (Rust FFI binding generator)
+          sudo apt-get install -y libclang-dev
+
           # Verify compiler and CMake versions
           gcc --version
           g++ --version
