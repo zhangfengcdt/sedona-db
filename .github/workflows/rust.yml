@@ -87,9 +87,13 @@ jobs:
       CARGO_BUILD_JOBS: 4
       # CUDA configuration
       CUDA_HOME: /usr/local/cuda
+      CUDAHOSTCXX: /usr/bin/g++-10  # Force nvcc to use G++ 10
       # vcpkg for C++ dependencies (version-pinned for reproducibility)
       VCPKG_ROOT: ${{ github.workspace }}/vcpkg
       CMAKE_TOOLCHAIN_FILE: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+      # Compiler configuration for CMake
+      CC: /usr/bin/gcc-10
+      CXX: /usr/bin/g++-10
 
     steps:
       - uses: actions/checkout@v4
