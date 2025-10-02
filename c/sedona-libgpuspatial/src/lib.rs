@@ -72,8 +72,10 @@ impl GpuSpatialContext {
 
             // Create context
             let mut ctx = GpuSpatialJoinerContext {
-                private_data: std::ptr::null_mut(),
                 last_error: std::ptr::null(),
+                private_data: std::ptr::null_mut(),
+                build_indices: std::ptr::null_mut(),
+                stream_indices: std::ptr::null_mut(),
             };
             joiner.create_context(&mut ctx);
 

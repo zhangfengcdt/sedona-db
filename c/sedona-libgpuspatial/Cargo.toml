@@ -37,7 +37,7 @@ cmake = "0.1"
 which = "6.0"
 
 [dependencies]
-arrow-array = { workspace = true }
+arrow-array = { workspace = true, features = ["ffi"] }
 arrow-schema = { workspace = true }
 thiserror = { workspace = true }
 sedona-schema = { path = "../../rust/sedona-schema" }
