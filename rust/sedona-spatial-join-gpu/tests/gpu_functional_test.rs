@@ -538,6 +538,7 @@ async fn test_gpu_spatial_join_correctness() {
                 gpu_result_pairs.push((left_id_col.value(i) as u32, right_id_col.value(i) as u32));
             }
         }
+        println!("  ✓ {} - GPU join: {} result rows", predicate_name, gpu_result_pairs.len());
 
     }
     
