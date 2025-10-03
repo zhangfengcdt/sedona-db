@@ -428,3 +428,153 @@ impl datafusion::physical_plan::ExecutionPlan for SingleBatchExec {
         }) as SendableRecordBatchStream)
     }
 }
+#[tokio::test]
+#[ignore] // Requires GPU hardware
+async fn test_gpu_spatial_join_correctness() {
+    use arrow_array::builder::BinaryBuilder;
+    use sedona_geos::register::scalar_kernels;
+    use sedona_schema::crs::lnglat;
+    use sedona_schema::datatypes::{Edges, SedonaType, WKB_GEOMETRY};
+    use sedona_testing::create::create_array_storage;
+    use sedona_testing::testers::ScalarUdfTester;
+    use sedona_expr::scalar_udf::SedonaScalarUDF;
+    
+    let _ = env_logger::builder().is_test(true).try_init();
+    
+    if !is_gpu_available() {
+        eprintln!("GPU not available, skipping test");
+        return;
+    }
+
+    // Use the same test data as the libgpuspatial reference test
+    let polygon_values = &[
+        Some("POLYGON ((30 10, 40 40, 20 40, 10 20, 30 10))"),
+        Some("POLYGON ((35 10, 45 45, 15 40, 10 20, 35 10), (20 30, 35 35, 30 20, 20 30))"),
+        Some("POLYGON ((0 0, 10 0, 10 10, 0 10, 0 0), (2 2, 3 2, 3 3, 2 3, 2 2), (6 6, 8 6, 8 8, 6 8, 6 6))"),
+        Some("POLYGON ((30 0, 60 20, 50 50, 10 50, 0 20, 30 0), (20 30, 25 40, 15 40, 20 30), (30 30, 35 40, 25 40, 30 30), (40 30, 45 40, 35 40, 40 30))"),
+        Some("POLYGON ((40 0, 50 30, 80 20, 90 70, 60 90, 30 80, 20 40, 40 0), (50 20, 65 30, 60 50, 45 40, 50 20), (30 60, 50 70, 45 80, 30 60))"),
+    ];
+    
+    let point_values = &[
+        Some("POINT (30 20)"), // poly0
+        Some("POINT (20 20)"), // poly1
+        Some("POINT (1 1)"),   // poly2
+        Some("POINT (70 70)"), // no match
+        Some("POINT (55 35)"), // poly4
+    ];
+
+    // Create Arrow arrays from WKT
+    let polygons = create_array_storage(polygon_values, &WKB_GEOMETRY);
+    let points = create_array_storage(point_values, &WKB_GEOMETRY);
+    
+    // Create RecordBatches
+    let polygon_schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("geometry", DataType::Binary, false),
+    ]));
+    
+    let point_schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("geometry", DataType::Binary, false),
+    ]));
+    
+    let polygon_ids = Int32Array::from(vec![0, 1, 2, 3, 4]);
+    let point_ids = Int32Array::from(vec![0, 1, 2, 3, 4]);
+    
+    let polygon_batch = RecordBatch::try_new(
+        polygon_schema.clone(),
+        vec![Arc::new(polygon_ids), polygons],
+    ).unwrap();
+    
+    let point_batch = RecordBatch::try_new(
+        point_schema.clone(),
+        vec![Arc::new(point_ids), points],
+    ).unwrap();
+    
+    // Create execution plans
+    let left_plan = Arc::new(SingleBatchExec::new(polygon_batch.clone())) as Arc<dyn ExecutionPlan>;
+    let right_plan = Arc::new(SingleBatchExec::new(point_batch.clone())) as Arc<dyn ExecutionPlan>;
+    
+    let config = GpuSpatialJoinConfig {
+        join_type: datafusion::logical_expr::JoinType::Inner,
+        left_geom_column: GeometryColumnInfo {
+            name: "geometry".to_string(),
+            index: 1,
+        },
+        right_geom_column: GeometryColumnInfo {
+            name: "geometry".to_string(),
+            index: 1,
+        },
+        predicate: GpuSpatialPredicate::Relation(SpatialPredicate::Intersects),
+        device_id: 0,
+        batch_size: 8192,
+        additional_filters: None,
+        max_memory: None,
+        fallback_to_cpu: false,
+    };
+
+    let gpu_join = Arc::new(GpuSpatialJoinExec::new(left_plan, right_plan, config).unwrap());
+    let task_context = Arc::new(TaskContext::default());
+    let mut stream = gpu_join.execute(0, task_context).unwrap();
+
+    // Collect GPU results
+    let mut gpu_result_pairs: Vec<(u32, u32)> = Vec::new();
+    while let Some(result) = stream.next().await {
+        let batch = result.expect("GPU join failed");
+        
+        // Extract the join indices from the result batch
+        // The result batch contains columns from both left and right tables
+        // We need to extract the polygon and point IDs
+        let left_id_col = batch.column(0).as_any().downcast_ref::<Int32Array>().unwrap();
+        let right_id_col = batch.column(2).as_any().downcast_ref::<Int32Array>().unwrap();
+        
+        for i in 0..batch.num_rows() {
+            gpu_result_pairs.push((left_id_col.value(i) as u32, right_id_col.value(i) as u32));
+        }
+    }
+
+    // Compute expected results using GEOS (CPU)
+    let kernels = scalar_kernels();
+    let st_intersects = kernels
+        .into_iter()
+        .find(|(name, _)| *name == "st_intersects")
+        .map(|(_, kernel_ref)| kernel_ref)
+        .unwrap();
+    
+    let sedona_type = SedonaType::Wkb(Edges::Planar, lnglat());
+    let udf = SedonaScalarUDF::from_kernel("st_intersects", st_intersects);
+    let tester = ScalarUdfTester::new(udf.into(), vec![sedona_type.clone(), sedona_type.clone()]);
+
+    let mut cpu_result_pairs: Vec<(u32, u32)> = Vec::new();
+    for (poly_index, poly) in polygon_values.iter().enumerate() {
+        for (point_index, point) in point_values.iter().enumerate() {
+            let result = tester
+                .invoke_scalar_scalar(poly.unwrap(), point.unwrap())
+                .unwrap();
+            if result == Some(true).unwrap().into() {
+                cpu_result_pairs.push((poly_index as u32, point_index as u32));
+            }
+        }
+    }
+
+    // Sort both result sets for comparison
+    gpu_result_pairs.sort();
+    cpu_result_pairs.sort();
+
+    println!("GPU results: {:?}", gpu_result_pairs);
+    println!("CPU (GEOS) results: {:?}", cpu_result_pairs);
+
+    // Verify GPU results match CPU results
+    assert_eq!(
+        gpu_result_pairs, cpu_result_pairs,
+        "GPU results do not match CPU GEOS results"
+    );
+    
+    // Verify we got the expected matches
+    assert!(
+        gpu_result_pairs.len() >= 3,
+        "Expected at least 3 intersecting polygon-point pairs"
+    );
+    
+    println!("GPU spatial join correctness test passed with {} matches", gpu_result_pairs.len());
+}
