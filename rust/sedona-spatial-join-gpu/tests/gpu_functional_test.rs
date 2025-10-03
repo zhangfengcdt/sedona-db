@@ -191,7 +191,6 @@ async fn test_gpu_spatial_join_basic_correctness() {
         return;
     }
 
-    let test_data_dir = "/home/ubuntu/libspatial/git/sedona-db/c/sedona-libgpuspatial/libgpuspatial/test_data";
     let test_data_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../c/sedona-libgpuspatial/libgpuspatial/test_data");
     let points_path = format!("{}/test_points.arrows", test_data_dir);
     let polygons_path = format!("{}/test_polygons.arrows", test_data_dir);
@@ -203,62 +202,88 @@ async fn test_gpu_spatial_join_basic_correctness() {
     
     let mut points_reader = StreamReader::try_new(points_file, None).unwrap();
     let mut polygons_reader = StreamReader::try_new(polygons_file, None).unwrap();
-    let points_batch = points_reader.next().unwrap().unwrap();
-    let polygons_batch = polygons_reader.next().unwrap().unwrap();
-    
-    println!("Points batch: {} rows", points_batch.num_rows());
-    println!("Polygons batch: {} rows", polygons_batch.num_rows());
-    
-    // Find geometry column index
-    let points_geom_idx = points_batch.schema().index_of("geometry").expect("geometry column not found");
-    let polygons_geom_idx = polygons_batch.schema().index_of("geometry").expect("geometry column not found");
-    
-    // Create execution plans from the batches
-    let left_plan = Arc::new(SingleBatchExec::new(polygons_batch.clone())) as Arc<dyn ExecutionPlan>;
-    let right_plan = Arc::new(SingleBatchExec::new(points_batch.clone())) as Arc<dyn ExecutionPlan>;
-    
-    let config = GpuSpatialJoinConfig {
-        join_type: datafusion::logical_expr::JoinType::Inner,
-        left_geom_column: GeometryColumnInfo {
-            name: "geometry".to_string(),
-            index: polygons_geom_idx,
-        },
-        right_geom_column: GeometryColumnInfo {
-            name: "geometry".to_string(),
-            index: points_geom_idx,
-        },
-        predicate: GpuSpatialPredicate::Relation(SpatialPredicate::Contains),
-        device_id: 0,
-        batch_size: 8192,
-        additional_filters: None,
-        max_memory: None,
-        fallback_to_cpu: false,
-    };
 
-    let gpu_join = Arc::new(GpuSpatialJoinExec::new(left_plan, right_plan, config).unwrap());
-
-    let task_context = Arc::new(TaskContext::default());
-    let mut stream = gpu_join.execute(0, task_context).unwrap();
-
+    // Process all batches like the CUDA test does
     let mut total_rows = 0;
-    while let Some(result) = stream.next().await {
-        match result {
-            Ok(batch) => {
-                total_rows += batch.num_rows();
-                println!("Got {} rows from GPU join", batch.num_rows());
-            }
-            Err(e) => {
-                panic!("GPU join failed: {}", e);
+    let mut iteration = 0;
+    
+    loop {
+        // Read next batch from each stream
+        let polygons_batch = match polygons_reader.next() {
+            Some(Ok(batch)) => batch,
+            Some(Err(e)) => panic!("Error reading polygons batch: {}", e),
+            None => break, // End of stream
+        };
+        
+        let points_batch = match points_reader.next() {
+            Some(Ok(batch)) => batch,
+            Some(Err(e)) => panic!("Error reading points batch: {}", e),
+            None => break, // End of stream
+        };
+        
+        if iteration == 0 {
+            println!("Batch {}: {} polygons, {} points", iteration, polygons_batch.num_rows(), points_batch.num_rows());
+        }
+        
+        // Find geometry column index
+        let points_geom_idx = points_batch.schema().index_of("geometry").expect("geometry column not found");
+        let polygons_geom_idx = polygons_batch.schema().index_of("geometry").expect("geometry column not found");
+        
+        // Create execution plans from the batches
+        let left_plan = Arc::new(SingleBatchExec::new(polygons_batch.clone())) as Arc<dyn ExecutionPlan>;
+        let right_plan = Arc::new(SingleBatchExec::new(points_batch.clone())) as Arc<dyn ExecutionPlan>;
+        
+        let config = GpuSpatialJoinConfig {
+            join_type: datafusion::logical_expr::JoinType::Inner,
+            left_geom_column: GeometryColumnInfo {
+                name: "geometry".to_string(),
+                index: polygons_geom_idx,
+            },
+            right_geom_column: GeometryColumnInfo {
+                name: "geometry".to_string(),
+                index: points_geom_idx,
+            },
+            predicate: GpuSpatialPredicate::Relation(SpatialPredicate::Intersects),
+            device_id: 0,
+            batch_size: 8192,
+            additional_filters: None,
+            max_memory: None,
+            fallback_to_cpu: false,
+        };
+
+        let gpu_join = Arc::new(GpuSpatialJoinExec::new(left_plan, right_plan, config).unwrap());
+        let task_context = Arc::new(TaskContext::default());
+        let mut stream = gpu_join.execute(0, task_context).unwrap();
+
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(batch) => {
+                    let batch_rows = batch.num_rows();
+                    total_rows += batch_rows;
+                    if batch_rows > 0 && iteration < 5 {
+                        println!("Iteration {}: Got {} rows from GPU join", iteration, batch_rows);
+                    }
+                }
+                Err(e) => {
+                    panic!("GPU join failed at iteration {}: {}", iteration, e);
+                }
             }
         }
+        
+        iteration += 1;
     }
 
-    println!("Total rows from GPU join: {}", total_rows);
-    // Test passes if GPU join completes without crashing
-    // The number of results depends on the test data and predicate used
+    println!("Total rows from GPU join across {} iterations: {}", iteration, total_rows);
+    // Test passes if GPU join completes without crashing and finds results
+    // The CUDA reference test loops through all batches to accumulate results
+    assert!(
+        total_rows > 0,
+        "Expected at least some results across {} iterations, got {}",
+        iteration,
+        total_rows
+    );
     println!("GPU spatial join completed successfully with {} result rows", total_rows);
 }
-
 #[tokio::test]
 #[ignore] // Requires GPU hardware
 async fn test_gpu_vs_cpu_consistency() {

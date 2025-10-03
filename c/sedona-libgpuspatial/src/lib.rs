@@ -194,6 +194,9 @@ impl GpuSpatialContext {
             // Get results
             let build_indices = joiner.get_build_indices_buffer(context).to_vec();
             let stream_indices = joiner.get_stream_indices_buffer(context).to_vec();
+            
+            log::info!("DEBUG: Retrieved {} build indices, {} stream indices",
+                build_indices.len(), stream_indices.len());
 
             Ok((build_indices, stream_indices))
         }
