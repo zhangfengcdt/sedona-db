@@ -270,9 +270,22 @@ impl GpuSpatialJoinerWrapper {
                     &mut build_indices_ptr as *mut *mut c_void,
                     &mut build_indices_len as *mut u32,
                 );
+                
+                // Check length first - empty vectors return empty slice
+                if build_indices_len == 0 {
+                    return &[];
+                }
+                
+                // Validate pointer (should not be null if length > 0)
+                if build_indices_ptr.is_null() {
+                    return &[];
+                }
+                
                 // Convert the raw pointer to a slice. This is safe to do because
-                // we've been guaranteed by the C function that the pointers are valid.
+                // we've validated the pointer is non-null and length is valid.
                 let typed_ptr = build_indices_ptr as *const u32;
+                
+                // Safety: We've checked ptr is non-null and len > 0
                 return std::slice::from_raw_parts(typed_ptr, build_indices_len as usize);
             }
         }
@@ -290,9 +303,22 @@ impl GpuSpatialJoinerWrapper {
                     &mut stream_indices_ptr as *mut *mut c_void,
                     &mut stream_indices_len as *mut u32,
                 );
+                
+                // Check length first - empty vectors return empty slice
+                if stream_indices_len == 0 {
+                    return &[];
+                }
+                
+                // Validate pointer (should not be null if length > 0)
+                if stream_indices_ptr.is_null() {
+                    return &[];
+                }
+                
                 // Convert the raw pointer to a slice. This is safe to do because
-                // we've been guaranteed by the C function that the pointers are valid.
+                // we've validated the pointer is non-null and length is valid.
                 let typed_ptr = stream_indices_ptr as *const u32;
+                
+                // Safety: We've checked ptr is non-null and len > 0
                 return std::slice::from_raw_parts(typed_ptr, stream_indices_len as usize);
             }
         }
