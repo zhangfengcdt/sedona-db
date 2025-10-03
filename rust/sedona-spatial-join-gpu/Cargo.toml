@@ -66,3 +66,15 @@ sedona-testing = { path = "../sedona-testing" }
 sedona-geos = { path = "../../c/sedona-geos" }
 sedona-schema = { path = "../sedona-schema" }
 sedona-expr = { path = "../sedona-expr" }
+
+[[bench]]
+name = "gpu_spatial_join"
+harness = false
+required-features = ["gpu"]
+
+[dev-dependencies.criterion]
+version = "0.5"
+features = ["async_tokio"]
+
+[dev-dependencies.rand]
+version = "0.8"
