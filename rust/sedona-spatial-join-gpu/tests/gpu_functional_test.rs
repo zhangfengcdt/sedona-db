@@ -284,42 +284,6 @@ async fn test_gpu_spatial_join_basic_correctness() {
     );
     println!("GPU spatial join completed successfully with {} result rows", total_rows);
 }
-#[tokio::test]
-#[ignore] // Requires GPU hardware
-async fn test_gpu_vs_cpu_consistency() {
-    if !is_gpu_available() {
-        eprintln!("GPU not available, skipping test");
-        return;
-    }
-
-    // TODO: Implement test that compares GPU results with CPU spatial join
-    // This would verify correctness by comparing against known-good CPU implementation
-
-    println!("GPU vs CPU consistency test not yet implemented");
-    println!("This test should:");
-    println!("  1. Run same query on GPU");
-    println!("  2. Run same query on CPU");
-    println!("  3. Compare results for equality");
-}
-
-#[tokio::test]
-#[ignore] // Requires GPU hardware
-async fn test_gpu_performance_baseline() {
-    if !is_gpu_available() {
-        eprintln!("GPU not available, skipping test");
-        return;
-    }
-
-    // TODO: Implement performance baseline test
-    // This would measure GPU performance on standard datasets
-
-    println!("GPU performance baseline test not yet implemented");
-    println!("This test should:");
-    println!("  1. Create dataset of known size (e.g., 100K points)");
-    println!("  2. Measure GPU join time");
-    println!("  3. Verify reasonable performance (e.g., < 1s for 100K)");
-}
-
 /// Helper execution plan that returns a single pre-loaded batch
 struct SingleBatchExec {
     schema: Arc<Schema>,
