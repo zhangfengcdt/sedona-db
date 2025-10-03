@@ -141,11 +141,6 @@ impl GpuSpatialContext {
                 .as_mut()
                 .ok_or_else(|| GpuSpatialError::Init("GPU joiner not available".into()))?;
 
-            let context = self
-                .context
-                .as_mut()
-                .ok_or_else(|| GpuSpatialError::Init("GPU context not available".into()))?;
-
             // Clear previous build data
             joiner.clear();
 
@@ -164,6 +159,16 @@ impl GpuSpatialContext {
             joiner.push_build(&left_geom, 0, left_geom.len() as i64)?;
             joiner.finish_building()?;
 
+            // Recreate context after building (required by libgpuspatial)
+            let mut new_context = libgpuspatial_glue_bindgen::GpuSpatialJoinerContext {
+                last_error: std::ptr::null(),
+                private_data: std::ptr::null_mut(),
+                build_indices: std::ptr::null_mut(),
+                stream_indices: std::ptr::null_mut(),
+            };
+            joiner.create_context(&mut new_context);
+            self.context = Some(new_context);
+            let context = self.context.as_mut().unwrap();
             // Push stream data (right side) and perform join
             log::info!("DEBUG: Pushing {} geometries to GPU (stream side)", right_geom.len());
             log::info!("DEBUG: Right array data type: {:?}", right_geom.data_type());

@@ -60,5 +60,6 @@ sedona-libgpuspatial = { path = "../../c/sedona-libgpuspatial" }
 sedona-common = { path = "../sedona-common" }
 
 [dev-dependencies]
+env_logger = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 sedona-testing = { path = "../sedona-testing" }

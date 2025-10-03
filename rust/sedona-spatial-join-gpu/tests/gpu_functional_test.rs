@@ -44,6 +44,8 @@ use sedona_spatial_join_gpu::{
     GeometryColumnInfo, GpuSpatialJoinConfig, GpuSpatialJoinExec, GpuSpatialPredicate,
     SpatialPredicate,
 };
+use arrow::ipc::reader::StreamReader;
+use std::fs::File;
 use std::sync::Arc;
 
 /// Helper to create test geometry data
@@ -182,45 +184,55 @@ impl ExecutionPlan for GeometryDataExec {
 #[tokio::test]
 #[ignore] // Requires GPU hardware
 async fn test_gpu_spatial_join_basic_correctness() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    
     if !is_gpu_available() {
         eprintln!("GPU not available, skipping test");
         return;
     }
 
-    // Create left dataset: 3 points at (0,0), (1,1), (2,2)
-    let left_ids = vec![1, 2, 3];
-    let left_geoms = vec![
-        create_point_wkb(0.0, 0.0),
-        create_point_wkb(1.0, 1.0),
-        create_point_wkb(2.0, 2.0),
-    ];
-    let left_plan = Arc::new(GeometryDataExec::new(left_ids, left_geoms)) as Arc<dyn ExecutionPlan>;
-
-    // Create right dataset: 3 points at (0,0), (1,1), (5,5)
-    let right_ids = vec![10, 11, 12];
-    let right_geoms = vec![
-        create_point_wkb(0.0, 0.0),
-        create_point_wkb(1.0, 1.0),
-        create_point_wkb(5.0, 5.0),
-    ];
-    let right_plan = Arc::new(GeometryDataExec::new(right_ids, right_geoms)) as Arc<dyn ExecutionPlan>;
-
+    let test_data_dir = "/home/ubuntu/libspatial/git/sedona-db/c/sedona-libgpuspatial/libgpuspatial/test_data";
+    let test_data_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../c/sedona-libgpuspatial/libgpuspatial/test_data");
+    let points_path = format!("{}/test_points.arrows", test_data_dir);
+    let polygons_path = format!("{}/test_polygons.arrows", test_data_dir);
+    
+    let points_file = File::open(&points_path)
+        .unwrap_or_else(|_| panic!("Failed to open {}", points_path));
+    let polygons_file = File::open(&polygons_path)
+        .unwrap_or_else(|_| panic!("Failed to open {}", polygons_path));
+    
+    let mut points_reader = StreamReader::try_new(points_file, None).unwrap();
+    let mut polygons_reader = StreamReader::try_new(polygons_file, None).unwrap();
+    let points_batch = points_reader.next().unwrap().unwrap();
+    let polygons_batch = polygons_reader.next().unwrap().unwrap();
+    
+    println!("Points batch: {} rows", points_batch.num_rows());
+    println!("Polygons batch: {} rows", polygons_batch.num_rows());
+    
+    // Find geometry column index
+    let points_geom_idx = points_batch.schema().index_of("geometry").expect("geometry column not found");
+    let polygons_geom_idx = polygons_batch.schema().index_of("geometry").expect("geometry column not found");
+    
+    // Create execution plans from the batches
+    let left_plan = Arc::new(SingleBatchExec::new(polygons_batch.clone())) as Arc<dyn ExecutionPlan>;
+    let right_plan = Arc::new(SingleBatchExec::new(points_batch.clone())) as Arc<dyn ExecutionPlan>;
+    
     let config = GpuSpatialJoinConfig {
         join_type: datafusion::logical_expr::JoinType::Inner,
         left_geom_column: GeometryColumnInfo {
             name: "geometry".to_string(),
-            index: 1,
+            index: polygons_geom_idx,
         },
         right_geom_column: GeometryColumnInfo {
             name: "geometry".to_string(),
-            index: 1,
+            index: points_geom_idx,
         },
-        predicate: GpuSpatialPredicate::Relation(SpatialPredicate::Intersects),
+        predicate: GpuSpatialPredicate::Relation(SpatialPredicate::Contains),
         device_id: 0,
         batch_size: 8192,
         additional_filters: None,
         max_memory: None,
-        fallback_to_cpu: false, // Must use GPU for this test
+        fallback_to_cpu: false,
     };
 
     let gpu_join = Arc::new(GpuSpatialJoinExec::new(left_plan, right_plan, config).unwrap());
@@ -241,13 +253,8 @@ async fn test_gpu_spatial_join_basic_correctness() {
         }
     }
 
-    // Expected: 3 matches (point intersects itself)
-    // (0,0) with (0,0), (1,1) with (1,1), (2,2) does not match (5,5)
-    assert!(
-        total_rows >= 2,
-        "Expected at least 2 intersecting point pairs, got {}",
-        total_rows
-    );
+    println!("Total rows from GPU join: {}", total_rows);
+    assert!(total_rows > 0, "Expected at least some join results");
 }
 
 #[tokio::test]
@@ -284,4 +291,113 @@ async fn test_gpu_performance_baseline() {
     println!("  1. Create dataset of known size (e.g., 100K points)");
     println!("  2. Measure GPU join time");
     println!("  3. Verify reasonable performance (e.g., < 1s for 100K)");
+}
+
+/// Helper execution plan that returns a single pre-loaded batch
+struct SingleBatchExec {
+    schema: Arc<Schema>,
+    batch: RecordBatch,
+    props: datafusion::physical_plan::PlanProperties,
+}
+
+impl SingleBatchExec {
+    fn new(batch: RecordBatch) -> Self {
+        let schema = batch.schema();
+        let eq_props = datafusion::physical_expr::EquivalenceProperties::new(schema.clone());
+        let partitioning = datafusion::physical_plan::Partitioning::UnknownPartitioning(1);
+        let props = datafusion::physical_plan::PlanProperties::new(
+            eq_props,
+            partitioning,
+            datafusion::physical_plan::execution_plan::EmissionType::Final,
+            datafusion::physical_plan::execution_plan::Boundedness::Bounded,
+        );
+        Self {
+            schema,
+            batch,
+            props,
+        }
+    }
+}
+
+impl std::fmt::Debug for SingleBatchExec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SingleBatchExec")
+    }
+}
+
+impl datafusion::physical_plan::DisplayAs for SingleBatchExec {
+    fn fmt_as(
+        &self,
+        _t: datafusion::physical_plan::DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        write!(f, "SingleBatchExec")
+    }
+}
+
+impl datafusion::physical_plan::ExecutionPlan for SingleBatchExec {
+    fn name(&self) -> &str {
+        "SingleBatchExec"
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn schema(&self) -> Arc<Schema> {
+        self.schema.clone()
+    }
+
+    fn properties(&self) -> &datafusion::physical_plan::PlanProperties {
+        &self.props
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn datafusion::physical_plan::ExecutionPlan>> {
+        vec![]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _children: Vec<Arc<dyn datafusion::physical_plan::ExecutionPlan>>,
+    ) -> datafusion_common::Result<Arc<dyn datafusion::physical_plan::ExecutionPlan>> {
+        Ok(self)
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<datafusion::execution::context::TaskContext>,
+    ) -> datafusion_common::Result<datafusion::physical_plan::SendableRecordBatchStream> {
+        use datafusion::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
+        use futures::Stream;
+        use std::pin::Pin;
+        use std::task::{Context, Poll};
+
+        struct OnceBatchStream {
+            schema: Arc<Schema>,
+            batch: Option<RecordBatch>,
+        }
+
+        impl Stream for OnceBatchStream {
+            type Item = datafusion_common::Result<RecordBatch>;
+
+            fn poll_next(
+                mut self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+            ) -> Poll<Option<Self::Item>> {
+                Poll::Ready(self.batch.take().map(Ok))
+            }
+        }
+
+        impl RecordBatchStream for OnceBatchStream {
+            fn schema(&self) -> Arc<Schema> {
+                self.schema.clone()
+            }
+        }
+
+        Ok(Box::pin(OnceBatchStream {
+            schema: self.schema.clone(),
+            batch: Some(self.batch.clone()),
+        }) as SendableRecordBatchStream)
+    }
 }

@@ -5132,6 +5132,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-physical-expr",
  "datafusion-physical-plan",
+ "env_logger",
  "futures",
  "log",
  "object_store",

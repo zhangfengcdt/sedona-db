@@ -132,8 +132,8 @@ impl GpuSpatialJoinerWrapper {
         // 1. Convert the single ArrayRef to its FFI representation
         let (ffi_array, _) = arrow_array::ffi::to_ffi(&array.to_data())?;
 
-        log::info!("DEBUG FFI: FFI conversion successful, n_buffers={}", ffi_array.n_buffers);
-        log::info!("DEBUG FFI: FFI array length={}, null_count={}", ffi_array.length, ffi_array.null_count);
+        log::info!("DEBUG FFI: FFI conversion successful");
+        log::info!("DEBUG FFI: FFI array null_count={}", ffi_array.null_count());
 
         // 2. Get the raw pointer to the FFI_ArrowArray struct
         // let arrow_ptr = &mut ffi_array as *mut FFI_ArrowArray as *mut ArrowArray;
@@ -218,15 +218,15 @@ impl GpuSpatialJoinerWrapper {
         predicate: GpuSpatialPredicateWrapper,
         array_index_offset: i32,
     ) -> Result<(), GpuSpatialError> {
-        log::info!("DEBUG FFI: push_stream called with offset={}, length={}, predicate={}",
+        log::info!("DEBUG FFI: push_stream called with offset={}, length={}, predicate={:?}",
             offset, length, predicate);
         log::info!("DEBUG FFI: Array length={}, null_count={}", array.len(), array.null_count());
 
         // 1. Convert the single ArrayRef to its FFI representation
         let (ffi_array, _) = arrow_array::ffi::to_ffi(&array.to_data())?;
 
-        log::info!("DEBUG FFI: FFI conversion successful, n_buffers={}", ffi_array.n_buffers);
-        log::info!("DEBUG FFI: FFI array length={}, null_count={}", ffi_array.length, ffi_array.null_count);
+        log::info!("DEBUG FFI: FFI conversion successful");
+        log::info!("DEBUG FFI: FFI array null_count={}", ffi_array.null_count());
 
         // 2. Get the raw pointer to the FFI_ArrowArray struct
         // let arrow_ptr = &mut ffi_array as *mut FFI_ArrowArray as *mut ArrowArray;
