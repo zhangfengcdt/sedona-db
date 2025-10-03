@@ -146,10 +146,32 @@ impl GpuSpatialContext {
             joiner.clear();
 
             // Push build data (left side)
+            log::info!("DEBUG: Pushing {} geometries to GPU (build side)", left_geom.len());
+            log::info!("DEBUG: Left array data type: {:?}", left_geom.data_type());
+            if let Some(binary_arr) = left_geom.as_any().downcast_ref::<arrow_array::BinaryArray>() {
+                log::info!("DEBUG: Left binary array has {} values", binary_arr.len());
+                if binary_arr.len() > 0 {
+                    let first_wkb = binary_arr.value(0);
+                    log::info!("DEBUG: First left WKB length: {}, first bytes: {:?}",
+                        first_wkb.len(), &first_wkb[..8.min(first_wkb.len())]);
+                }
+            }
+
             joiner.push_build(&left_geom, 0, left_geom.len() as i64)?;
             joiner.finish_building()?;
 
             // Push stream data (right side) and perform join
+            log::info!("DEBUG: Pushing {} geometries to GPU (stream side)", right_geom.len());
+            log::info!("DEBUG: Right array data type: {:?}", right_geom.data_type());
+            if let Some(binary_arr) = right_geom.as_any().downcast_ref::<arrow_array::BinaryArray>() {
+                log::info!("DEBUG: Right binary array has {} values", binary_arr.len());
+                if binary_arr.len() > 0 {
+                    let first_wkb = binary_arr.value(0);
+                    log::info!("DEBUG: First right WKB length: {}, first bytes: {:?}",
+                        first_wkb.len(), &first_wkb[..8.min(first_wkb.len())]);
+                }
+            }
+
             let gpu_predicate = predicate.into();
             joiner.push_stream(
                 context,

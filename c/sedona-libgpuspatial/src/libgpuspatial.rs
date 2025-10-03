@@ -126,8 +126,14 @@ impl GpuSpatialJoinerWrapper {
         offset: i64,
         length: i64,
     ) -> Result<(), GpuSpatialError> {
+        log::info!("DEBUG FFI: push_build called with offset={}, length={}", offset, length);
+        log::info!("DEBUG FFI: Array length={}, null_count={}", array.len(), array.null_count());
+
         // 1. Convert the single ArrayRef to its FFI representation
         let (ffi_array, _) = arrow_array::ffi::to_ffi(&array.to_data())?;
+
+        log::info!("DEBUG FFI: FFI conversion successful, n_buffers={}", ffi_array.n_buffers);
+        log::info!("DEBUG FFI: FFI array length={}, null_count={}", ffi_array.length, ffi_array.null_count);
 
         // 2. Get the raw pointer to the FFI_ArrowArray struct
         // let arrow_ptr = &mut ffi_array as *mut FFI_ArrowArray as *mut ArrowArray;
@@ -136,6 +142,7 @@ impl GpuSpatialJoinerWrapper {
             unsafe {
                 let ffi_array_ptr: *const ArrowArray =
                     transmute(&ffi_array as *const FFI_ArrowArray);
+                log::info!("DEBUG FFI: Calling C++ push_build function");
                 if push_build_fn(
                     &mut self.joiner as *mut _,
                     std::ptr::null_mut(), // schema is unused currently
@@ -147,8 +154,10 @@ impl GpuSpatialJoinerWrapper {
                     let error_message = self.joiner.last_error;
                     let c_str = std::ffi::CStr::from_ptr(error_message);
                     let error_string = c_str.to_string_lossy().into_owned();
+                    log::error!("DEBUG FFI: push_build failed: {}", error_string);
                     return Err(GpuSpatialError::PushBuild(error_string));
                 }
+                log::info!("DEBUG FFI: push_build C++ call succeeded");
             }
         }
         Ok(())
@@ -209,8 +218,15 @@ impl GpuSpatialJoinerWrapper {
         predicate: GpuSpatialPredicateWrapper,
         array_index_offset: i32,
     ) -> Result<(), GpuSpatialError> {
+        log::info!("DEBUG FFI: push_stream called with offset={}, length={}, predicate={}",
+            offset, length, predicate);
+        log::info!("DEBUG FFI: Array length={}, null_count={}", array.len(), array.null_count());
+
         // 1. Convert the single ArrayRef to its FFI representation
         let (ffi_array, _) = arrow_array::ffi::to_ffi(&array.to_data())?;
+
+        log::info!("DEBUG FFI: FFI conversion successful, n_buffers={}", ffi_array.n_buffers);
+        log::info!("DEBUG FFI: FFI array length={}, null_count={}", ffi_array.length, ffi_array.null_count);
 
         // 2. Get the raw pointer to the FFI_ArrowArray struct
         // let arrow_ptr = &mut ffi_array as *mut FFI_ArrowArray as *mut ArrowArray;
@@ -219,6 +235,7 @@ impl GpuSpatialJoinerWrapper {
             unsafe {
                 let ffi_array_ptr: *const ArrowArray =
                     transmute(&ffi_array as *const FFI_ArrowArray);
+                log::info!("DEBUG FFI: Calling C++ push_stream function");
                 if push_stream_fn(
                     &mut self.joiner as *mut _,
                     ctx as *mut _,
@@ -233,8 +250,10 @@ impl GpuSpatialJoinerWrapper {
                     let error_message = ctx.last_error;
                     let c_str = std::ffi::CStr::from_ptr(error_message);
                     let error_string = c_str.to_string_lossy().into_owned();
+                    log::error!("DEBUG FFI: push_stream failed: {}", error_string);
                     return Err(GpuSpatialError::PushStream(error_string));
                 }
+                log::info!("DEBUG FFI: push_stream C++ call succeeded");
             }
         }
         Ok(())
