@@ -6,6 +6,10 @@ mod libgpuspatial;
 #[cfg(gpu_available)]
 mod libgpuspatial_glue_bindgen;
 
+// Import Array trait for len() method (used in gpu_available code)
+#[cfg(gpu_available)]
+use arrow_array::Array;
+
 // Re-exports for GPU functionality
 #[cfg(gpu_available)]
 pub use error::GpuSpatialError;
