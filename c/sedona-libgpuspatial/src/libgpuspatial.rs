@@ -132,8 +132,8 @@ impl GpuSpatialJoinerWrapper {
         // 1. Convert the single ArrayRef to its FFI representation
         let (ffi_array, _) = arrow_array::ffi::to_ffi(&array.to_data())?;
 
-        log::info!("DEBUG FFI: FFI conversion successful, n_buffers={}", ffi_array.n_buffers);
-        log::info!("DEBUG FFI: FFI array length={}, null_count={}", ffi_array.length, ffi_array.null_count);
+        log::info!("DEBUG FFI: FFI conversion successful");
+        log::info!("DEBUG FFI: FFI array null_count={}", ffi_array.null_count());
 
         // 2. Get the raw pointer to the FFI_ArrowArray struct
         // let arrow_ptr = &mut ffi_array as *mut FFI_ArrowArray as *mut ArrowArray;
@@ -218,15 +218,15 @@ impl GpuSpatialJoinerWrapper {
         predicate: GpuSpatialPredicateWrapper,
         array_index_offset: i32,
     ) -> Result<(), GpuSpatialError> {
-        log::info!("DEBUG FFI: push_stream called with offset={}, length={}, predicate={}",
+        log::info!("DEBUG FFI: push_stream called with offset={}, length={}, predicate={:?}",
             offset, length, predicate);
         log::info!("DEBUG FFI: Array length={}, null_count={}", array.len(), array.null_count());
 
         // 1. Convert the single ArrayRef to its FFI representation
         let (ffi_array, _) = arrow_array::ffi::to_ffi(&array.to_data())?;
 
-        log::info!("DEBUG FFI: FFI conversion successful, n_buffers={}", ffi_array.n_buffers);
-        log::info!("DEBUG FFI: FFI array length={}, null_count={}", ffi_array.length, ffi_array.null_count);
+        log::info!("DEBUG FFI: FFI conversion successful");
+        log::info!("DEBUG FFI: FFI array null_count={}", ffi_array.null_count());
 
         // 2. Get the raw pointer to the FFI_ArrowArray struct
         // let arrow_ptr = &mut ffi_array as *mut FFI_ArrowArray as *mut ArrowArray;
@@ -270,9 +270,22 @@ impl GpuSpatialJoinerWrapper {
                     &mut build_indices_ptr as *mut *mut c_void,
                     &mut build_indices_len as *mut u32,
                 );
+                
+                // Check length first - empty vectors return empty slice
+                if build_indices_len == 0 {
+                    return &[];
+                }
+                
+                // Validate pointer (should not be null if length > 0)
+                if build_indices_ptr.is_null() {
+                    return &[];
+                }
+                
                 // Convert the raw pointer to a slice. This is safe to do because
-                // we've been guaranteed by the C function that the pointers are valid.
+                // we've validated the pointer is non-null and length is valid.
                 let typed_ptr = build_indices_ptr as *const u32;
+                
+                // Safety: We've checked ptr is non-null and len > 0
                 return std::slice::from_raw_parts(typed_ptr, build_indices_len as usize);
             }
         }
@@ -290,9 +303,22 @@ impl GpuSpatialJoinerWrapper {
                     &mut stream_indices_ptr as *mut *mut c_void,
                     &mut stream_indices_len as *mut u32,
                 );
+                
+                // Check length first - empty vectors return empty slice
+                if stream_indices_len == 0 {
+                    return &[];
+                }
+                
+                // Validate pointer (should not be null if length > 0)
+                if stream_indices_ptr.is_null() {
+                    return &[];
+                }
+                
                 // Convert the raw pointer to a slice. This is safe to do because
-                // we've been guaranteed by the C function that the pointers are valid.
+                // we've validated the pointer is non-null and length is valid.
                 let typed_ptr = stream_indices_ptr as *const u32;
+                
+                // Safety: We've checked ptr is non-null and len > 0
                 return std::slice::from_raw_parts(typed_ptr, stream_indices_len as usize);
             }
         }
