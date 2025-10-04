@@ -1021,7 +1021,7 @@ mod tests {
         // Verify that no SpatialJoinExec is present (geography join should not be optimized)
         let spatial_joins = collect_spatial_join_exec(&plan)?;
         assert!(
-            spatial_joins.is_empty(),
+            spatial_joins == 0,
             "Geography joins should not be optimized to SpatialJoinExec"
         );
 
@@ -1159,11 +1159,11 @@ mod tests {
         let df = ctx.sql(sql).await?;
         let actual_schema = df.schema().as_arrow().clone();
         let plan = df.clone().create_physical_plan().await?;
-        let spatial_join_execs = collect_spatial_join_exec(&plan)?;
+        let spatial_join_count = collect_spatial_join_exec(&plan)?;
         if is_optimized_spatial_join {
-            assert_eq!(spatial_join_execs.len(), 1);
+            assert_eq!(spatial_join_count, 1);
         } else {
-            assert!(spatial_join_execs.is_empty());
+            assert_eq!(spatial_join_count, 0);
         }
         let result_batches = df.collect().await?;
         let result_batch =
@@ -1171,15 +1171,19 @@ mod tests {
         Ok(result_batch)
     }
 
-    fn collect_spatial_join_exec(plan: &Arc<dyn ExecutionPlan>) -> Result<Vec<&SpatialJoinExec>> {
-        let mut spatial_join_execs = Vec::new();
+    fn collect_spatial_join_exec(plan: &Arc<dyn ExecutionPlan>) -> Result<usize> {
+        let mut count = 0;
         plan.apply(|node| {
-            if let Some(spatial_join_exec) = node.as_any().downcast_ref::<SpatialJoinExec>() {
-                spatial_join_execs.push(spatial_join_exec);
+            if node.as_any().downcast_ref::<SpatialJoinExec>().is_some() {
+                count += 1;
+            }
+            #[cfg(feature = "gpu")]
+            if node.as_any().downcast_ref::<sedona_spatial_join_gpu::GpuSpatialJoinExec>().is_some() {
+                count += 1;
             }
             Ok(TreeNodeRecursion::Continue)
         })?;
-        Ok(spatial_join_execs)
+        Ok(count)
     }
 
 
@@ -1251,7 +1255,7 @@ mod tests {
             point_partitions.clone(),
             Some(options.clone()),
             1024,
-            "SELECT polygons.id as poly_id, points.id as point_id FROM L AS polygons JOIN R AS points ON ST_Intersects(polygons.geometry, points.geometry)",
+            "SELECT * FROM L JOIN R ON ST_Intersects(L.geometry, R.geometry)",
         )
         .await?;
 
@@ -1267,7 +1271,7 @@ mod tests {
             point_partitions.clone(),
             Some(options),
             1024,
-            "SELECT polygons.id as poly_id, points.id as point_id FROM L AS polygons JOIN R AS points ON ST_Contains(polygons.geometry, points.geometry)",
+            "SELECT * FROM L JOIN R ON ST_Contains(L.geometry, R.geometry)",
         )
         .await?;
 

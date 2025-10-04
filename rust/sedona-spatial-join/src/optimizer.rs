@@ -86,7 +86,7 @@ impl PhysicalOptimizerRule for SpatialJoinOptimizer {
     /// Some of the optimization rules might change the nullable properties of the schema
     /// and should disable the schema check.
     fn schema_check(&self) -> bool {
-        true
+        false
     }
 }
 
