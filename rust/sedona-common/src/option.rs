@@ -75,7 +75,7 @@ config_namespace! {
 config_namespace! {
     /// Configuration options for GPU-accelerated spatial joins
     pub struct GpuOptions {
-        /// Enable GPU-accelerated spatial joins (requires CUDA and GPU feature flag)
+        /// Enable GPU-accelerated spatial joins
         pub enable: bool, default = false
 
         /// Minimum number of rows to consider GPU execution

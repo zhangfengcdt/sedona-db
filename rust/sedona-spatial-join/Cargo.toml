@@ -36,8 +36,7 @@ gpu = ["sedona-spatial-join-gpu/gpu", "sedona-libgpuspatial/gpu"]
 arrow = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-array = { workspace = true }
-datafusion = { workspace = true, features = ["parquet"] }
-datafusion-catalog = { workspace = true }
+datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-expr = { workspace = true }

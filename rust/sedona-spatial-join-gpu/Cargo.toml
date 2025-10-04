@@ -40,24 +40,13 @@ arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
-datafusion-expr = { workspace = true }
-datafusion-physical-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
-datafusion-execution = { workspace = true }
 futures = { workspace = true }
 thiserror = { workspace = true }
 log = "0.4"
-parking_lot = { workspace = true }
-
-# Parquet and object store for direct file reading
-parquet = { workspace = true }
-object_store = { workspace = true }
 
 # GPU dependencies
 sedona-libgpuspatial = { path = "../../c/sedona-libgpuspatial" }
-
-# Sedona dependencies
-sedona-common = { path = "../sedona-common" }
 
 [dev-dependencies]
 env_logger = { workspace = true }

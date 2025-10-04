@@ -255,16 +255,6 @@ impl SpatialJoinOptimizer {
         // Check if this is a HashJoinExec with spatial filter that we can convert to spatial join
         if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
             if let Some(spatial_join) = self.try_convert_hash_join_to_spatial(hash_join)? {
-                // Try GPU path first if feature is enabled
-                // Need to downcast to SpatialJoinExec for GPU optimizer
-                if let Some(spatial_join_exec) = spatial_join.as_any().downcast_ref::<SpatialJoinExec>() {
-                    if let Some(gpu_join) = try_create_gpu_spatial_join(spatial_join_exec, config)? {
-                        log::info!("Using GPU-accelerated spatial join for KNN");
-                        return Ok(Transformed::yes(gpu_join));
-                    }
-                }
-
-                // Fall back to CPU spatial join
                 return Ok(Transformed::yes(spatial_join));
             }
         }
