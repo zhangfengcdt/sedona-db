@@ -1269,7 +1269,26 @@ mod tests {
             ..Default::default()
         };
 
+        // Setup context for both queries
+        let ctx = setup_context(Some(options.clone()), 1024)?;
+        ctx.register_table("L", Arc::new(MemTable::try_new(
+            polygon_schema.clone(),
+            polygon_partitions.clone(),
+        )?))?;
+        ctx.register_table("R", Arc::new(MemTable::try_new(
+            point_schema.clone(),
+            point_partitions.clone(),
+        )?))?;
+        
         // Test ST_Intersects - should return 4 rows (4 points inside polygons)
+        
+        // First, run EXPLAIN to show the physical plan
+        let explain_df = ctx.sql("EXPLAIN SELECT * FROM L JOIN R ON ST_Intersects(L.geometry, R.geometry)").await?;
+        let explain_batches = explain_df.collect().await?;
+        println!("=== ST_Intersects Physical Plan ===");
+        arrow::util::pretty::print_batches(&explain_batches)?;
+        
+        // Now run the actual query
         let result = run_spatial_join_query(
             &polygon_schema,
             &point_schema,
@@ -1285,6 +1304,14 @@ mod tests {
         println!("ST_Intersects returned {} rows (expected 4)", result.num_rows());
 
         // Test ST_Contains - should also return 4 rows
+        
+        // First, run EXPLAIN to show the physical plan
+        let explain_df = ctx.sql("EXPLAIN SELECT * FROM L JOIN R ON ST_Contains(L.geometry, R.geometry)").await?;
+        let explain_batches = explain_df.collect().await?;
+        println!("\n=== ST_Contains Physical Plan ===");
+        arrow::util::pretty::print_batches(&explain_batches)?;
+        
+        // Now run the actual query
         let result = run_spatial_join_query(
             &polygon_schema,
             &point_schema,
