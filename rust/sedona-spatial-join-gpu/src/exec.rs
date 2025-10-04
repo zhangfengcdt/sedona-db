@@ -9,7 +9,8 @@ use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::Partitioning;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
+    joins::utils::build_join_schema, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    SendableRecordBatchStream,
 };
 
 use crate::config::GpuSpatialJoinConfig;
@@ -44,12 +45,12 @@ impl GpuSpatialJoinExec {
         right: Arc<dyn ExecutionPlan>,
         config: GpuSpatialJoinConfig,
     ) -> Result<Self> {
-        // Combine schemas for output
+        // Build join schema using DataFusion's utility to handle duplicate column names
         let left_schema = left.schema();
         let right_schema = right.schema();
-        let mut fields = left_schema.fields().to_vec();
-        fields.extend_from_slice(right_schema.fields());
-        let schema = Arc::new(arrow::datatypes::Schema::new(fields));
+        let (join_schema, _column_indices) =
+            build_join_schema(&left_schema, &right_schema, &config.join_type);
+        let schema = Arc::new(join_schema);
 
         // Create execution properties
         let eq_props = EquivalenceProperties::new(schema.clone());

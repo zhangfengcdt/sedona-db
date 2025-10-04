@@ -1149,11 +1149,34 @@ mod gpu_optimizer {
             gpu_config.right_geom_column.name,
         );
 
-        Ok(Some(Arc::new(GpuSpatialJoinExec::new(
-            left,
-            right,
-            gpu_config,
-        )?)))
+        let gpu_join = Arc::new(GpuSpatialJoinExec::new(left, right, gpu_config)?);
+
+        // If the original SpatialJoinExec had a projection, wrap the GPU join with a ProjectionExec
+        if spatial_join.contains_projection() {
+            use datafusion_physical_expr::expressions::Column;
+            use datafusion_physical_plan::projection::ProjectionExec;
+
+            // Get the projection indices from the SpatialJoinExec
+            let projection_indices = spatial_join
+                .projection()
+                .expect("contains_projection() was true but projection() returned None");
+
+            // Create projection expressions that map from GPU join output to desired output
+            let mut projection_exprs = Vec::new();
+            let gpu_schema = gpu_join.schema();
+
+            for &idx in projection_indices {
+                let field = gpu_schema.field(idx);
+                let col_expr = Arc::new(Column::new(field.name(), idx))
+                    as Arc<dyn datafusion_physical_expr::PhysicalExpr>;
+                projection_exprs.push((col_expr, field.name().clone()));
+            }
+
+            let projection_exec = ProjectionExec::try_new(projection_exprs, gpu_join)?;
+            Ok(Some(Arc::new(projection_exec)))
+        } else {
+            Ok(Some(gpu_join))
+        }
     }
 
     /// Check if spatial predicate is supported on GPU
