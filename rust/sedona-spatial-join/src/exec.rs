@@ -1181,4 +1181,117 @@ mod tests {
         })?;
         Ok(spatial_join_execs)
     }
+
+    #[cfg(feature = "gpu")]
+    #[tokio::test]
+    #[ignore] // Requires GPU hardware
+    async fn test_gpu_spatial_join_sql() -> Result<()> {
+        use sedona_common::option::ExecutionMode;
+        use sedona_testing::create::create_array_storage;
+
+        // Check if GPU is available
+        use sedona_libgpuspatial::GpuSpatialContext;
+        let mut gpu_ctx = match GpuSpatialContext::new() {
+            Ok(ctx) => ctx,
+            Err(_) => {
+                eprintln!("GPU not available, skipping test");
+                return Ok(());
+            }
+        };
+        if gpu_ctx.init().is_err() {
+            eprintln!("GPU init failed, skipping test");
+            return Ok(());
+        }
+
+        // Create test geometries: 5 polygons and 5 points
+        let polygon_wkts = vec![
+            Some("POLYGON ((0 0, 10 0, 10 10, 0 10, 0 0))"),
+            Some("POLYGON ((20 20, 30 20, 30 30, 20 30, 20 20))"),
+            Some("POLYGON ((40 40, 50 40, 50 50, 40 50, 40 40))"),
+            Some("POLYGON ((60 60, 70 60, 70 70, 60 70, 60 60))"),
+            Some("POLYGON ((80 80, 90 80, 90 90, 80 90, 80 80))"),
+        ];
+
+        let point_wkts = vec![
+            Some("POINT (5 5)"),    // inside poly 0
+            Some("POINT (25 25)"),  // inside poly 1
+            Some("POINT (15 15)"),  // outside all
+            Some("POINT (45 45)"),  // inside poly 2
+            Some("POINT (100 100)"), // outside all
+        ];
+
+        let polygon_geoms = create_array_storage(&polygon_wkts, &WKB_GEOMETRY);
+        let point_geoms = create_array_storage(&point_wkts, &WKB_GEOMETRY);
+
+        let polygon_ids = arrow_array::Int32Array::from(vec![0, 1, 2, 3, 4]);
+        let point_ids = arrow_array::Int32Array::from(vec![0, 1, 2, 3, 4]);
+
+        let polygon_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("geometry", DataType::Binary, false),
+        ]));
+
+        let point_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("geometry", DataType::Binary, false),
+        ]));
+
+        let polygon_batch = RecordBatch::try_new(
+            polygon_schema.clone(),
+            vec![Arc::new(polygon_ids), polygon_geoms],
+        )?;
+
+        let point_batch = RecordBatch::try_new(
+            point_schema.clone(),
+            vec![Arc::new(point_ids), point_geoms],
+        )?;
+
+        // Test with GPU enabled
+        let options = SpatialJoinOptions {
+            execution_mode: ExecutionMode::PrepareNone,
+            gpu: sedona_common::option::GpuOptions {
+                enable: true,
+                batch_size: 1024,
+                fallback_to_cpu: false,
+                max_memory_mb: 8192,
+                min_rows_threshold: 1000,
+                device_id: 0,
+            },
+            ..Default::default()
+        };
+
+        // Test ST_Intersects
+        let result = run_spatial_join_query(
+            &polygon_schema,
+            &point_schema,
+            vec![vec![polygon_batch.clone()]],
+            vec![vec![point_batch.clone()]],
+            Some(options.clone()),
+            1024,
+            "SELECT polygons.id as poly_id, points.id as point_id FROM L AS polygons JOIN R AS points ON ST_Intersects(polygons.geometry, points.geometry) ORDER BY poly_id, point_id",
+        )
+        .await?;
+
+        // Verify we got results (3 points inside polygons: 0, 1, 3)
+        assert!(result.num_rows() > 0, "Expected join results for ST_Intersects");
+        println!("ST_Intersects returned {} rows", result.num_rows());
+
+        // Test ST_Contains
+        let result = run_spatial_join_query(
+            &polygon_schema,
+            &point_schema,
+            vec![vec![polygon_batch.clone()]],
+            vec![vec![point_batch.clone()]],
+            Some(options),
+            1024,
+            "SELECT polygons.id as poly_id, points.id as point_id FROM L AS polygons JOIN R AS points ON ST_Contains(polygons.geometry, points.geometry) ORDER BY poly_id, point_id",
+        )
+        .await?;
+
+        // Verify we got results
+        assert!(result.num_rows() > 0, "Expected join results for ST_Contains");
+        println!("ST_Contains returned {} rows", result.num_rows());
+
+        Ok(())
+    }
 }
