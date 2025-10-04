@@ -30,7 +30,7 @@ result_large_err = "allow"
 [features]
 default = []
 backtrace = ["datafusion-common/backtrace"]
-gpu = ["sedona-spatial-join-gpu", "sedona-libgpuspatial"]
+gpu = ["sedona-spatial-join-gpu/gpu", "sedona-libgpuspatial/gpu"]
 
 [dependencies]
 arrow = { workspace = true }

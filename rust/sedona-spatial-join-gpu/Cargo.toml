@@ -60,5 +60,21 @@ sedona-libgpuspatial = { path = "../../c/sedona-libgpuspatial" }
 sedona-common = { path = "../sedona-common" }
 
 [dev-dependencies]
+env_logger = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 sedona-testing = { path = "../sedona-testing" }
+sedona-geos = { path = "../../c/sedona-geos" }
+sedona-schema = { path = "../sedona-schema" }
+sedona-expr = { path = "../sedona-expr" }
+
+[[bench]]
+name = "gpu_spatial_join"
+harness = false
+required-features = ["gpu"]
+
+[dev-dependencies.criterion]
+version = "0.5"
+features = ["async_tokio"]
+
+[dev-dependencies.rand]
+version = "0.8"
