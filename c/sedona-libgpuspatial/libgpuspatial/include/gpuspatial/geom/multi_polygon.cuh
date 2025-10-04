@@ -1,0 +1,129 @@
+#ifndef GPUSPATIAL_GEOM_MULTI_POLYGON_CUH
+#define GPUSPATIAL_GEOM_MULTI_POLYGON_CUH
+#include "gpuspatial/geom/polygon.cuh"
+
+namespace gpuspatial {
+template <typename POINT_T, typename INDEX_T>
+class MultiPolygon {
+ public:
+  using point_t = POINT_T;
+  using line_segments_view_t = LineString<point_t>;
+  using box_t = Box<POINT_T>;
+
+  MultiPolygon() = default;
+
+  DEV_HOST MultiPolygon(const ArrayView<INDEX_T>& prefix_sum_parts,
+                        const ArrayView<INDEX_T>& prefix_sum_rings,
+                        const ArrayView<point_t>& vertices, const box_t& mbr)
+      : prefix_sum_parts_(prefix_sum_parts),
+        prefix_sum_rings_(prefix_sum_rings),
+        vertices_(vertices),
+        mbr_(mbr) {}
+
+  DEV_HOST_INLINE bool empty() const {
+    for (size_t i = 0; i < num_polygons(); i++) {
+      if (!get_polygon(i).empty()) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  DEV_HOST_INLINE INDEX_T num_polygons() const {
+    return prefix_sum_parts_.empty() ? 0 : prefix_sum_parts_.size() - 1;
+  }
+
+  DEV_HOST_INLINE Polygon<POINT_T, INDEX_T> get_polygon(INDEX_T i) const {
+    auto ring_begin = prefix_sum_parts_[i];
+    auto ring_end = prefix_sum_parts_[i + 1];
+    ArrayView<INDEX_T> prefix_sum_rings(
+        const_cast<INDEX_T*>(prefix_sum_rings_.data()) + ring_begin,
+        ring_end - ring_begin + 1);
+    return {prefix_sum_rings, vertices_, mbr_};
+  }
+
+  DEV_HOST_INLINE const ArrayView<INDEX_T>& get_prefix_sum_parts() const {
+    return prefix_sum_parts_;
+  }
+
+  DEV_HOST_INLINE const ArrayView<INDEX_T>& get_prefix_sum_rings() const {
+    return prefix_sum_rings_;
+  }
+
+  DEV_HOST_INLINE const ArrayView<POINT_T>& get_vertices() const { return vertices_; }
+
+  DEV_HOST_INLINE const box_t& get_mbr() const { return mbr_; }
+
+ private:
+  ArrayView<INDEX_T> prefix_sum_parts_;
+  ArrayView<INDEX_T> prefix_sum_rings_;
+  ArrayView<POINT_T> vertices_;
+  box_t mbr_;
+};
+
+/**
+ * This class can represent an array of polygons or multi-polygons
+ * @tparam POINT_T
+ */
+template <typename POINT_T, typename INDEX_T>
+class MultiPolygonArrayView {
+  using box_t = Box<POINT_T>;
+
+ public:
+  using point_t = POINT_T;
+  using geometry_t = MultiPolygon<point_t, INDEX_T>;
+  MultiPolygonArrayView() = default;
+
+  DEV_HOST MultiPolygonArrayView(const ArrayView<INDEX_T>& prefix_sum_geoms,
+                                 const ArrayView<INDEX_T>& prefix_sum_parts,
+                                 const ArrayView<INDEX_T>& prefix_sum_rings,
+                                 const ArrayView<point_t>& vertices,
+                                 const ArrayView<box_t>& mbrs)
+      : prefix_sum_geoms_(prefix_sum_geoms),
+        prefix_sum_parts_(prefix_sum_parts),
+        prefix_sum_rings_(prefix_sum_rings),
+        vertices_(vertices),
+        mbrs_(mbrs) {}
+
+  DEV_HOST_INLINE size_t size() const {
+    return prefix_sum_geoms_.empty() ? 0 : prefix_sum_geoms_.size() - 1;
+  }
+
+  DEV_HOST_INLINE MultiPolygon<point_t, INDEX_T> operator[](size_t i) {
+    auto part_begin = prefix_sum_geoms_[i];
+    auto part_end = prefix_sum_geoms_[i + 1];
+    ArrayView<INDEX_T> prefix_sum_parts(prefix_sum_parts_.data() + part_begin,
+                                        part_end - part_begin + 1);
+
+    return {prefix_sum_parts, prefix_sum_rings_, vertices_, mbrs_[i]};
+  }
+
+  DEV_HOST_INLINE MultiPolygon<point_t, INDEX_T> operator[](size_t i) const {
+    auto part_begin = prefix_sum_geoms_[i];
+    auto part_end = prefix_sum_geoms_[i + 1];
+    ArrayView<INDEX_T> prefix_sum_parts(
+        const_cast<INDEX_T*>(prefix_sum_parts_.data()) + part_begin,
+        part_end - part_begin + 1);
+
+    return {prefix_sum_parts, prefix_sum_rings_, vertices_, mbrs_[i]};
+  }
+
+  DEV_HOST_INLINE ArrayView<INDEX_T> get_prefix_sum_geoms() const { return prefix_sum_geoms_; }
+
+  DEV_HOST_INLINE ArrayView<INDEX_T> get_prefix_sum_parts() const { return prefix_sum_parts_; }
+
+  DEV_HOST_INLINE ArrayView<INDEX_T> get_prefix_sum_rings() const { return prefix_sum_rings_; }
+
+  DEV_HOST_INLINE ArrayView<point_t> get_vertices() const { return vertices_; }
+
+  DEV_HOST_INLINE ArrayView<box_t> get_mbrs() const { return mbrs_; }
+
+ private:
+  ArrayView<INDEX_T> prefix_sum_geoms_;
+  ArrayView<INDEX_T> prefix_sum_parts_;
+  ArrayView<INDEX_T> prefix_sum_rings_;
+  ArrayView<point_t> vertices_;
+  ArrayView<box_t> mbrs_;
+};
+}  // namespace gpuspatial
+#endif  // GPUSPATIAL_GEOM_MULTI_POLYGON_CUH
