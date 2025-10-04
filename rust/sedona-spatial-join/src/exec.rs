@@ -739,7 +739,7 @@ mod tests {
     async fn test_empty_data() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
-            Field::new("dist", DataType::Float64, false),
+            Field::new("dist", DataType::Int32, false),
             WKB_GEOMETRY.to_storage_field("geometry", true).unwrap(),
         ]));
 
@@ -1187,11 +1187,14 @@ mod tests {
     }
 
 
+
     #[cfg(feature = "gpu")]
     #[tokio::test]
     #[ignore] // Requires GPU hardware
     async fn test_gpu_spatial_join_sql() -> Result<()> {
         use sedona_common::option::ExecutionMode;
+        use sedona_testing::create::create_array_storage;
+        use arrow_array::Int32Array;
 
         // Check if GPU is available
         use sedona_libgpuspatial::GpuSpatialContext;
@@ -1207,31 +1210,50 @@ mod tests {
             return Ok(());
         }
 
-        // Create test data using RandomPartitionedDataBuilder
-        let bounds = Rect::new(Coord { x: 0.0, y: 0.0 }, Coord { x: 100.0, y: 100.0 });
+        // Create guaranteed-to-intersect test data
+        // 3 polygons and 5 points where 4 points are inside polygons
+        let polygon_wkts = vec![
+            Some("POLYGON ((0 0, 20 0, 20 20, 0 20, 0 0))"),  // Large polygon covering 0-20
+            Some("POLYGON ((30 30, 50 30, 50 50, 30 50, 30 30))"),  // Medium polygon at 30-50
+            Some("POLYGON ((60 60, 80 60, 80 80, 60 80, 60 60))"),  // Small polygon at 60-80
+        ];
 
-        let (polygon_schema, polygon_partitions) = RandomPartitionedDataBuilder::new()
-            .seed(1)
-            .num_partitions(1)
-            .batches_per_partition(1)
-            .rows_per_batch(100)
-            .geometry_type(GeometryTypeId::Polygon)
-            .sedona_type(WKB_GEOMETRY)
-            .bounds(bounds)
-            .size_range((5.0, 10.0))
-            .null_rate(0.0)
-            .build()?;
+        let point_wkts = vec![
+            Some("POINT (10 10)"),  // Inside polygon 0
+            Some("POINT (15 15)"),  // Inside polygon 0
+            Some("POINT (40 40)"),  // Inside polygon 1
+            Some("POINT (70 70)"),  // Inside polygon 2
+            Some("POINT (100 100)"),  // Outside all
+        ];
 
-        let (point_schema, point_partitions) = RandomPartitionedDataBuilder::new()
-            .seed(2)
-            .num_partitions(1)
-            .batches_per_partition(1)
-            .rows_per_batch(100)
-            .geometry_type(GeometryTypeId::Point)
-            .sedona_type(WKB_GEOMETRY)
-            .bounds(bounds)
-            .null_rate(0.0)
-            .build()?;
+        let polygon_geoms = create_array_storage(&polygon_wkts, &WKB_GEOMETRY);
+        let point_geoms = create_array_storage(&point_wkts, &WKB_GEOMETRY);
+
+        let polygon_ids = Int32Array::from(vec![0, 1, 2]);
+        let point_ids = Int32Array::from(vec![0, 1, 2, 3, 4]);
+
+        let polygon_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            WKB_GEOMETRY.to_storage_field("geometry", false).unwrap(),
+        ]));
+
+        let point_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            WKB_GEOMETRY.to_storage_field("geometry", false).unwrap(),
+        ]));
+
+        let polygon_batch = RecordBatch::try_new(
+            polygon_schema.clone(),
+            vec![Arc::new(polygon_ids), polygon_geoms],
+        )?;
+
+        let point_batch = RecordBatch::try_new(
+            point_schema.clone(),
+            vec![Arc::new(point_ids), point_geoms],
+        )?;
+
+        let polygon_partitions = vec![vec![polygon_batch]];
+        let point_partitions = vec![vec![point_batch]];
 
         // Test with GPU enabled
         let options = SpatialJoinOptions {
@@ -1247,7 +1269,7 @@ mod tests {
             ..Default::default()
         };
 
-        // Test ST_Intersects
+        // Test ST_Intersects - should return 4 rows (4 points inside polygons)
         let result = run_spatial_join_query(
             &polygon_schema,
             &point_schema,
@@ -1259,11 +1281,10 @@ mod tests {
         )
         .await?;
 
-        // Verify we got results
         assert!(result.num_rows() > 0, "Expected join results for ST_Intersects");
-        println!("ST_Intersects returned {} rows", result.num_rows());
+        println!("ST_Intersects returned {} rows (expected 4)", result.num_rows());
 
-        // Test ST_Contains
+        // Test ST_Contains - should also return 4 rows
         let result = run_spatial_join_query(
             &polygon_schema,
             &point_schema,
@@ -1275,9 +1296,8 @@ mod tests {
         )
         .await?;
 
-        // Verify we got results
         assert!(result.num_rows() > 0, "Expected join results for ST_Contains");
-        println!("ST_Contains returned {} rows", result.num_rows());
+        println!("ST_Contains returned {} rows (expected 4)", result.num_rows());
 
         Ok(())
     }
