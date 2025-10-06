@@ -334,46 +334,54 @@ impl GpuSpatialJoinStream {
             self.left_batches.len(),
             self.right_batches.len()
         );
+        eprintln!("DEBUG: Left batches: {}, Right batches: {}", self.left_batches.len(), self.right_batches.len());
 
-        // Process all combinations of left and right batches
-        // This implements a nested loop join at the batch level
-        for (left_idx, left_batch) in self.left_batches.iter().enumerate() {
-            for (right_idx, right_batch) in self.right_batches.iter().enumerate() {
-                log::debug!(
-                    "Processing GPU join batch pair ({}, {}): {} left rows, {} right rows",
-                    left_idx,
-                    right_idx,
-                    left_batch.num_rows(),
-                    right_batch.num_rows()
-                );
+        // Concatenate all left batches into one batch
+        let left_batch = if self.left_batches.len() == 1 {
+            self.left_batches[0].clone()
+        } else {
+            let schema = self.left_batches[0].schema();
+            arrow::compute::concat_batches(&schema, &self.left_batches)
+                .map_err(|e| DataFusionError::Execution(format!("Failed to concatenate left batches: {}", e)))?
+        };
 
-                // Execute GPU spatial join for this batch pair
-                let result_batch = gpu_backend.spatial_join(
-                    left_batch,
-                    right_batch,
-                    self.config.left_geom_column.index,
-                    self.config.right_geom_column.index,
-                    self.config.predicate.into(),
-                ).map_err(|e| {
-                    if self.config.fallback_to_cpu {
-                        log::warn!("GPU join failed: {}, should fallback to CPU", e);
-                    }
-                    DataFusionError::Execution(format!("GPU spatial join execution failed: {}", e))
-                })?;
+        // Concatenate all right batches into one batch
+        let right_batch = if self.right_batches.len() == 1 {
+            self.right_batches[0].clone()
+        } else {
+            let schema = self.right_batches[0].schema();
+            arrow::compute::concat_batches(&schema, &self.right_batches)
+                .map_err(|e| DataFusionError::Execution(format!("Failed to concatenate right batches: {}", e)))?
+        };
 
-                log::debug!("GPU join batch pair ({}, {}) produced {} rows",
-                    left_idx, right_idx, result_batch.num_rows());
+        eprintln!("DEBUG: After concat - Left rows: {}, Right rows: {}", left_batch.num_rows(), right_batch.num_rows());
+        log::info!(
+            "Concatenated batches: {} left rows, {} right rows",
+            left_batch.num_rows(),
+            right_batch.num_rows()
+        );
 
-                // Only add non-empty result batches
-                if result_batch.num_rows() > 0 {
-                    self.result_batches.push_back(result_batch);
-                }
+        // Execute GPU spatial join on concatenated batches
+        let result_batch = gpu_backend.spatial_join(
+            &left_batch,
+            &right_batch,
+            self.config.left_geom_column.index,
+            self.config.right_geom_column.index,
+            self.config.predicate.into(),
+        ).map_err(|e| {
+            if self.config.fallback_to_cpu {
+                log::warn!("GPU join failed: {}, should fallback to CPU", e);
             }
-        }
+            DataFusionError::Execution(format!("GPU spatial join execution failed: {}", e))
+        })?;
 
-        let total_rows: usize = self.result_batches.iter().map(|b| b.num_rows()).sum();
-        log::info!("GPU join produced {} total rows across {} result batches",
-            total_rows, self.result_batches.len());
+        eprintln!("DEBUG: GPU join produced {} rows", result_batch.num_rows());
+        log::info!("GPU join produced {} rows", result_batch.num_rows());
+
+        // Only add non-empty result batch
+        if result_batch.num_rows() > 0 {
+            self.result_batches.push_back(result_batch);
+        }
 
         Ok(())
     }
