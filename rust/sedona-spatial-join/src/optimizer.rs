@@ -1206,11 +1206,17 @@ mod gpu_optimizer {
     pub(crate) fn find_geometry_column(schema: &SchemaRef) -> Result<GeometryColumnInfo> {
         use arrow_schema::DataType;
 
+        eprintln!("DEBUG find_geometry_column: Schema has {} fields", schema.fields().len());
         for (idx, field) in schema.fields().iter().enumerate() {
-            // Check if this is a WKB geometry column
+            eprintln!("  Field {}: name='{}', type={:?}, metadata={:?}", 
+                idx, field.name(), field.data_type(), field.metadata());
+        }
+
+        for (idx, field) in schema.fields().iter().enumerate() {
+            // Check if this is a WKB geometry column (Binary, LargeBinary, or BinaryView)
             if matches!(
                 field.data_type(),
-                DataType::Binary | DataType::LargeBinary
+                DataType::Binary | DataType::LargeBinary | DataType::BinaryView
             ) {
                 // Check metadata for geometry type
                 if let Some(meta) = field.metadata().get("ARROW:extension:name") {
@@ -1229,7 +1235,7 @@ mod gpu_optimizer {
                         .fields()
                         .iter()
                         .skip(idx + 1)
-                        .all(|f| !matches!(f.data_type(), DataType::Binary | DataType::LargeBinary))
+                        .all(|f| !matches!(f.data_type(), DataType::Binary | DataType::LargeBinary | DataType::BinaryView))
                 {
                     log::warn!(
                         "Geometry column '{}' has no GeoArrow metadata, assuming it's WKB",
@@ -1243,6 +1249,7 @@ mod gpu_optimizer {
             }
         }
 
+        eprintln!("DEBUG find_geometry_column: ERROR - No geometry column found!");
         Err(DataFusionError::Plan(
             "No geometry column found in schema".into(),
         ))

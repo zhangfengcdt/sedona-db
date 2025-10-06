@@ -1,9 +1,9 @@
 use crate::Result;
 use arrow::compute::take;
-use arrow_array::{ArrayRef, RecordBatch, UInt32Array};
-use arrow_schema::Schema;
-use sedona_libgpuspatial::{GpuSpatialContext, SpatialPredicate};
+use arrow_array::{Array, ArrayRef, BinaryArray, RecordBatch, UInt32Array};
+use arrow_schema::{DataType, Schema};
 use std::sync::Arc;
+use sedona_libgpuspatial::{GpuSpatialContext, SpatialPredicate};
 
 /// GPU backend for spatial operations
 #[allow(dead_code)]
@@ -39,6 +39,59 @@ impl GpuBackend {
         }
     }
 
+    /// Convert BinaryView array to Binary array for GPU processing
+    fn ensure_binary_array(array: &ArrayRef) -> Result<ArrayRef> {
+        match array.data_type() {
+            DataType::BinaryView => {
+                // Convert BinaryView to Binary for GPU processing
+                use arrow_array::cast::AsArray;
+                let binary_view = array.as_binary_view();
+
+                // Log first few values for debugging
+                if binary_view.len() > 0 {
+                    eprintln!("DEBUG: Converting BinaryView with {} rows", binary_view.len());
+                    for i in 0..binary_view.len().min(3) {
+                        if !binary_view.is_null(i) {
+                            let val = binary_view.value(i);
+                            eprintln!("  Row {}: {} bytes, first 20: {:?}", i, val.len(), &val[..val.len().min(20)]);
+                        }
+                    }
+                }
+
+                let binary_array = BinaryArray::from_iter(
+                    (0..binary_view.len()).map(|i| {
+                        if binary_view.is_null(i) {
+                            None
+                        } else {
+                            Some(binary_view.value(i))
+                        }
+                    })
+                );
+
+                // Verify conversion
+                if binary_array.len() > 0 {
+                    eprintln!("DEBUG: Converted to Binary with {} rows", binary_array.len());
+                    for i in 0..binary_array.len().min(3) {
+                        if !binary_array.is_null(i) {
+                            let val = binary_array.value(i);
+                            eprintln!("  Row {}: {} bytes, first 20: {:?}", i, val.len(), &val[..val.len().min(20)]);
+                        }
+                    }
+                }
+
+                Ok(Arc::new(binary_array) as ArrayRef)
+            }
+            DataType::Binary | DataType::LargeBinary => {
+                // Already in correct format
+                Ok(array.clone())
+            }
+            _ => Err(crate::Error::GpuSpatial(format!(
+                "Expected Binary/BinaryView array, got {:?}",
+                array.data_type()
+            ))),
+        }
+    }
+
     pub fn spatial_join(
         &mut self,
         left_batch: &RecordBatch,
@@ -60,14 +113,38 @@ impl GpuBackend {
         let left_geom = left_batch.column(left_geom_col);
         let right_geom = right_batch.column(right_geom_col);
 
+        log::info!(
+            "GPU spatial join: left_batch={} rows, right_batch={} rows, left_geom type={:?}, right_geom type={:?}",
+            left_batch.num_rows(),
+            right_batch.num_rows(),
+            left_geom.data_type(),
+            right_geom.data_type()
+        );
+
+        // Convert BinaryView to Binary if needed
+        let left_geom = Self::ensure_binary_array(left_geom)?;
+        let right_geom = Self::ensure_binary_array(right_geom)?;
+
+        log::info!(
+            "After conversion: left_geom type={:?} len={}, right_geom type={:?} len={}",
+            left_geom.data_type(),
+            left_geom.len(),
+            right_geom.data_type(),
+            right_geom.len()
+        );
+
         // Perform GPU spatial join
-        match gpu_ctx.spatial_join(left_geom.clone(), right_geom.clone(), predicate) {
+        match gpu_ctx.spatial_join(left_geom, right_geom, predicate) {
             Ok((build_indices, stream_indices)) => {
+                eprintln!("DEBUG: GPU join succeeded: {} matches found", build_indices.len());
+                eprintln!("DEBUG: build_indices: {:?}", &build_indices[..build_indices.len().min(10)]);
+                eprintln!("DEBUG: stream_indices: {:?}", &stream_indices[..stream_indices.len().min(10)]);
+
                 // Create result record batch from the join indices
                 self.create_result_batch(left_batch, right_batch, &build_indices, &stream_indices)
             }
             Err(e) => {
-                log::warn!("GPU spatial join failed: {e:?}, falling back to CPU");
+                eprintln!("DEBUG: GPU spatial join failed: {e:?}");
                 Err(crate::Error::GpuSpatial(format!(
                     "GPU spatial join failed: {e:?}"
                 )))
