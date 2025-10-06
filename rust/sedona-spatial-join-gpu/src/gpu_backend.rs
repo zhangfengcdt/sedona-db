@@ -49,11 +49,9 @@ impl GpuBackend {
 
                 // Log first few values for debugging
                 if binary_view.len() > 0 {
-                    eprintln!("DEBUG: Converting BinaryView with {} rows", binary_view.len());
                     for i in 0..binary_view.len().min(3) {
                         if !binary_view.is_null(i) {
                             let val = binary_view.value(i);
-                            eprintln!("  Row {}: {} bytes, first 20: {:?}", i, val.len(), &val[..val.len().min(20)]);
                         }
                     }
                 }
@@ -70,11 +68,9 @@ impl GpuBackend {
 
                 // Verify conversion
                 if binary_array.len() > 0 {
-                    eprintln!("DEBUG: Converted to Binary with {} rows", binary_array.len());
                     for i in 0..binary_array.len().min(3) {
                         if !binary_array.is_null(i) {
                             let val = binary_array.value(i);
-                            eprintln!("  Row {}: {} bytes, first 20: {:?}", i, val.len(), &val[..val.len().min(20)]);
                         }
                     }
                 }
@@ -134,54 +130,40 @@ impl GpuBackend {
         );
 
         // Debug: Print raw binary data before sending to GPU
-        eprintln!("\n=== DETAILED BINARY DUMP BEFORE GPU ===");
-        eprintln!("LEFT (build) side: {} geometries", left_geom.len());
         if let Some(left_binary) = left_geom.as_any().downcast_ref::<BinaryArray>() {
             for i in 0..left_binary.len().min(5) {
                 if !left_binary.is_null(i) {
                     let wkb = left_binary.value(i);
-                    eprintln!("  Left[{}]: {} bytes", i, wkb.len());
-                    eprintln!("    Full WKB: {:02x?}", wkb);
                     // Parse WKB header
                     if wkb.len() >= 5 {
                         let byte_order = wkb[0];
                         let geom_type = u32::from_le_bytes([wkb[1], wkb[2], wkb[3], wkb[4]]);
-                        eprintln!("    Byte order: {} (1=little endian), Geom type: {}", byte_order, geom_type);
                     }
                 }
             }
         }
 
-        eprintln!("\nRIGHT (stream) side: {} geometries", right_geom.len());
         if let Some(right_binary) = right_geom.as_any().downcast_ref::<BinaryArray>() {
             for i in 0..right_binary.len().min(5) {
                 if !right_binary.is_null(i) {
                     let wkb = right_binary.value(i);
-                    eprintln!("  Right[{}]: {} bytes", i, wkb.len());
-                    eprintln!("    Full WKB: {:02x?}", wkb);
                     // Parse WKB header
                     if wkb.len() >= 5 {
                         let byte_order = wkb[0];
                         let geom_type = u32::from_le_bytes([wkb[1], wkb[2], wkb[3], wkb[4]]);
-                        eprintln!("    Byte order: {} (1=little endian), Geom type: {}", byte_order, geom_type);
                     }
                 }
             }
         }
-        eprintln!("=== END BINARY DUMP ===\n");
 
         // Perform GPU spatial join
         match gpu_ctx.spatial_join(left_geom.clone(), right_geom.clone(), predicate) {
             Ok((build_indices, stream_indices)) => {
-                eprintln!("DEBUG: GPU join succeeded: {} matches found", build_indices.len());
-                eprintln!("DEBUG: build_indices: {:?}", &build_indices[..build_indices.len().min(10)]);
-                eprintln!("DEBUG: stream_indices: {:?}", &stream_indices[..stream_indices.len().min(10)]);
 
                 // Create result record batch from the join indices
                 self.create_result_batch(left_batch, right_batch, &build_indices, &stream_indices)
             }
             Err(e) => {
-                eprintln!("DEBUG: GPU spatial join failed: {e:?}");
                 Err(crate::Error::GpuSpatial(format!(
                     "GPU spatial join failed: {e:?}"
                 )))

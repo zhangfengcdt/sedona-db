@@ -334,7 +334,6 @@ impl GpuSpatialJoinStream {
             self.left_batches.len(),
             self.right_batches.len()
         );
-        eprintln!("DEBUG: Left batches: {}, Right batches: {}", self.left_batches.len(), self.right_batches.len());
 
         // Concatenate all left batches into one batch
         let left_batch = if self.left_batches.len() == 1 {
@@ -354,7 +353,6 @@ impl GpuSpatialJoinStream {
                 .map_err(|e| DataFusionError::Execution(format!("Failed to concatenate right batches: {}", e)))?
         };
 
-        eprintln!("DEBUG: After concat - Left rows: {}, Right rows: {}", left_batch.num_rows(), right_batch.num_rows());
         log::info!(
             "Concatenated batches: {} left rows, {} right rows",
             left_batch.num_rows(),
@@ -375,7 +373,6 @@ impl GpuSpatialJoinStream {
             DataFusionError::Execution(format!("GPU spatial join execution failed: {}", e))
         })?;
 
-        eprintln!("DEBUG: GPU join produced {} rows", result_batch.num_rows());
         log::info!("GPU join produced {} rows", result_batch.num_rows());
 
         // Only add non-empty result batch
