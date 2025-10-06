@@ -53,8 +53,9 @@ impl GpuSpatialJoinExec {
         let schema = Arc::new(join_schema);
 
         // Create execution properties
+        // Inherit partitioning from right (probe) side - each partition processes independently
         let eq_props = EquivalenceProperties::new(schema.clone());
-        let partitioning = Partitioning::UnknownPartitioning(1);
+        let partitioning = right.properties().output_partitioning().clone();
         let properties = PlanProperties::new(
             eq_props,
             partitioning,
@@ -148,14 +149,9 @@ impl ExecutionPlan for GpuSpatialJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if partition != 0 {
-            return Err(datafusion::error::DataFusionError::Execution(
-                "GpuSpatialJoinExec only supports partition 0".into(),
-            ));
-        }
-
         log::info!(
-            "Executing GPU spatial join: {:?}",
+            "Executing GPU spatial join on partition {}: {:?}",
+            partition,
             self.config.predicate
         );
 
@@ -166,6 +162,7 @@ impl ExecutionPlan for GpuSpatialJoinExec {
             self.schema.clone(),
             self.config.clone(),
             context,
+            partition,
         )?;
 
         Ok(Box::pin(stream))

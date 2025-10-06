@@ -74,6 +74,9 @@ pub struct GpuSpatialJoinStream {
 
     /// Right child stream
     right_stream: Option<SendableRecordBatchStream>,
+
+    /// Partition number to execute
+    partition: usize,
 }
 
 /// State machine for GPU spatial join execution
@@ -115,6 +118,7 @@ impl GpuSpatialJoinStream {
         schema: SchemaRef,
         config: GpuSpatialJoinConfig,
         context: Arc<TaskContext>,
+        partition: usize,
     ) -> Result<Self> {
         Ok(Self {
             left,
@@ -129,6 +133,7 @@ impl GpuSpatialJoinStream {
             right_batches: Vec::new(),
             left_stream: None,
             right_stream: None,
+            partition,
         })
     }
 
@@ -211,8 +216,8 @@ impl GpuSpatialJoinStream {
                 }
 
                 GpuJoinState::InitRightStream => {
-                    log::debug!("Initializing right child stream");
-                    match self.right.execute(0, self.context.clone()) {
+                    log::debug!("Initializing right child stream for partition {}", self.partition);
+                    match self.right.execute(self.partition, self.context.clone()) {
                         Ok(stream) => {
                             self.right_stream = Some(stream);
                             self.state = GpuJoinState::ReadRightStream;
