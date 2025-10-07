@@ -25,10 +25,12 @@ use arrow_array::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
+use datafusion_physical_plan::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use futures::stream::Stream;
 
 use crate::config::GpuSpatialJoinConfig;
 use crate::gpu_backend::GpuBackend;
+use std::time::Instant;
 
 /// Stream that executes GPU spatial join
 ///
@@ -38,6 +40,32 @@ use crate::gpu_backend::GpuBackend;
 /// 3. Read data from right child stream
 /// 4. Execute GPU spatial join
 /// 5. Emit result batches
+/// Metrics for GPU spatial join operations
+pub(crate) struct GpuSpatialJoinMetrics {
+    /// Total time for GPU join execution
+    pub(crate) join_time: metrics::Time,
+    /// Time for batch concatenation
+    pub(crate) concat_time: metrics::Time,
+    /// Time for GPU kernel execution
+    pub(crate) gpu_kernel_time: metrics::Time,
+    /// Number of batches produced by this operator
+    pub(crate) output_batches: metrics::Count,
+    /// Number of rows produced by this operator
+    pub(crate) output_rows: metrics::Count,
+}
+
+impl GpuSpatialJoinMetrics {
+    pub fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
+        Self {
+            join_time: MetricBuilder::new(metrics).subset_time("join_time", partition),
+            concat_time: MetricBuilder::new(metrics).subset_time("concat_time", partition),
+            gpu_kernel_time: MetricBuilder::new(metrics).subset_time("gpu_kernel_time", partition),
+            output_batches: MetricBuilder::new(metrics).counter("output_batches", partition),
+            output_rows: MetricBuilder::new(metrics).counter("output_rows", partition),
+        }
+    }
+}
+
 pub struct GpuSpatialJoinStream {
     /// Left child execution plan
     left: Arc<dyn ExecutionPlan>,
@@ -74,6 +102,12 @@ pub struct GpuSpatialJoinStream {
 
     /// Right child stream
     right_stream: Option<SendableRecordBatchStream>,
+
+    /// Partition number to execute
+    partition: usize,
+
+    /// Metrics for this join operation
+    join_metrics: GpuSpatialJoinMetrics,
 }
 
 /// State machine for GPU spatial join execution
@@ -115,6 +149,8 @@ impl GpuSpatialJoinStream {
         schema: SchemaRef,
         config: GpuSpatialJoinConfig,
         context: Arc<TaskContext>,
+        partition: usize,
+        metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Self> {
         Ok(Self {
             left,
@@ -129,6 +165,8 @@ impl GpuSpatialJoinStream {
             right_batches: Vec::new(),
             left_stream: None,
             right_stream: None,
+            partition,
+            join_metrics: GpuSpatialJoinMetrics::new(partition, metrics),
         })
     }
 
@@ -211,8 +249,8 @@ impl GpuSpatialJoinStream {
                 }
 
                 GpuJoinState::InitRightStream => {
-                    log::debug!("Initializing right child stream");
-                    match self.right.execute(0, self.context.clone()) {
+                    log::debug!("Initializing right child stream for partition {}", self.partition);
+                    match self.right.execute(self.partition, self.context.clone()) {
                         Ok(stream) => {
                             self.right_stream = Some(stream);
                             self.state = GpuJoinState::ReadRightStream;
@@ -329,21 +367,46 @@ impl GpuSpatialJoinStream {
             return Ok(());
         }
 
-        // For now, process first batch from each side as a proof of concept
-        // TODO: Implement batched processing for multiple batches
-        let left_batch = &self.left_batches[0];
-        let right_batch = &self.right_batches[0];
+        let _join_timer = self.join_metrics.join_time.timer();
+        
+        log::info!(
+            "Processing GPU join with {} left batches and {} right batches",
+            self.left_batches.len(),
+            self.right_batches.len()
+        );
 
-        log::debug!(
-            "Processing GPU join: {} left rows, {} right rows",
+        // Concatenate all left batches into one batch
+        let _concat_timer = self.join_metrics.concat_time.timer();
+        let left_batch = if self.left_batches.len() == 1 {
+            self.left_batches[0].clone()
+        } else {
+            let schema = self.left_batches[0].schema();
+            arrow::compute::concat_batches(&schema, &self.left_batches)
+                .map_err(|e| DataFusionError::Execution(format!("Failed to concatenate left batches: {}", e)))?
+        };
+
+        // Concatenate all right batches into one batch
+        let right_batch = if self.right_batches.len() == 1 {
+            self.right_batches[0].clone()
+        } else {
+            let schema = self.right_batches[0].schema();
+            arrow::compute::concat_batches(&schema, &self.right_batches)
+                .map_err(|e| DataFusionError::Execution(format!("Failed to concatenate right batches: {}", e)))?
+        };
+
+        log::info!(
+            "Concatenated batches: {} left rows, {} right rows",
             left_batch.num_rows(),
             right_batch.num_rows()
         );
 
-        // Execute GPU spatial join
+        // Concatenation time is tracked by concat_time timer
+
+        // Execute GPU spatial join on concatenated batches
+        let _gpu_kernel_timer = self.join_metrics.gpu_kernel_time.timer();
         let result_batch = gpu_backend.spatial_join(
-            left_batch,
-            right_batch,
+            &left_batch,
+            &right_batch,
             self.config.left_geom_column.index,
             self.config.right_geom_column.index,
             self.config.predicate.into(),
@@ -355,7 +418,14 @@ impl GpuSpatialJoinStream {
         })?;
 
         log::info!("GPU join produced {} rows", result_batch.num_rows());
-        self.result_batches.push_back(result_batch);
+
+        // Only add non-empty result batch
+        if result_batch.num_rows() > 0 {
+            self.join_metrics.output_batches.add(1);
+            self.join_metrics.output_rows.add(result_batch.num_rows());
+            self.result_batches.push_back(result_batch);
+        }
+
         Ok(())
     }
 }

@@ -8,8 +8,10 @@ use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::Partitioning;
+use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
+    joins::utils::build_join_schema, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    SendableRecordBatchStream,
 };
 
 use crate::config::GpuSpatialJoinConfig;
@@ -36,6 +38,9 @@ pub struct GpuSpatialJoinExec {
 
     /// Execution properties
     properties: PlanProperties,
+
+    /// Metrics for this join operation
+    metrics: datafusion_physical_plan::metrics::ExecutionPlanMetricsSet,
 }
 
 impl GpuSpatialJoinExec {
@@ -44,16 +49,17 @@ impl GpuSpatialJoinExec {
         right: Arc<dyn ExecutionPlan>,
         config: GpuSpatialJoinConfig,
     ) -> Result<Self> {
-        // Combine schemas for output
+        // Build join schema using DataFusion's utility to handle duplicate column names
         let left_schema = left.schema();
         let right_schema = right.schema();
-        let mut fields = left_schema.fields().to_vec();
-        fields.extend_from_slice(right_schema.fields());
-        let schema = Arc::new(arrow::datatypes::Schema::new(fields));
+        let (join_schema, _column_indices) =
+            build_join_schema(&left_schema, &right_schema, &config.join_type);
+        let schema = Arc::new(join_schema);
 
         // Create execution properties
+        // Inherit partitioning from right (probe) side - each partition processes independently
         let eq_props = EquivalenceProperties::new(schema.clone());
-        let partitioning = Partitioning::UnknownPartitioning(1);
+        let partitioning = right.properties().output_partitioning().clone();
         let properties = PlanProperties::new(
             eq_props,
             partitioning,
@@ -67,6 +73,7 @@ impl GpuSpatialJoinExec {
             config,
             schema,
             properties,
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
@@ -113,6 +120,10 @@ impl ExecutionPlan for GpuSpatialJoinExec {
         self
     }
 
+    fn metrics(&self) -> Option<datafusion_physical_plan::metrics::MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
+
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -147,14 +158,9 @@ impl ExecutionPlan for GpuSpatialJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if partition != 0 {
-            return Err(datafusion::error::DataFusionError::Execution(
-                "GpuSpatialJoinExec only supports partition 0".into(),
-            ));
-        }
-
         log::info!(
-            "Executing GPU spatial join: {:?}",
+            "Executing GPU spatial join on partition {}: {:?}",
+            partition,
             self.config.predicate
         );
 
@@ -165,6 +171,8 @@ impl ExecutionPlan for GpuSpatialJoinExec {
             self.schema.clone(),
             self.config.clone(),
             context,
+            partition,
+            &self.metrics,
         )?;
 
         Ok(Box::pin(stream))

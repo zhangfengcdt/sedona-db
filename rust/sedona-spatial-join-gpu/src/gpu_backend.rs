@@ -1,9 +1,10 @@
 use crate::Result;
 use arrow::compute::take;
-use arrow_array::{ArrayRef, RecordBatch, UInt32Array};
-use arrow_schema::Schema;
-use sedona_libgpuspatial::{GpuSpatialContext, SpatialPredicate};
+use arrow_array::{Array, ArrayRef, BinaryArray, RecordBatch, UInt32Array};
+use arrow_schema::{DataType, Schema};
 use std::sync::Arc;
+use sedona_libgpuspatial::{GpuSpatialContext, SpatialPredicate};
+use std::time::Instant;
 
 /// GPU backend for spatial operations
 #[allow(dead_code)]
@@ -39,6 +40,55 @@ impl GpuBackend {
         }
     }
 
+    /// Convert BinaryView array to Binary array for GPU processing
+    fn ensure_binary_array(array: &ArrayRef) -> Result<ArrayRef> {
+        match array.data_type() {
+            DataType::BinaryView => {
+                // Convert BinaryView to Binary for GPU processing
+                use arrow_array::cast::AsArray;
+                let binary_view = array.as_binary_view();
+
+                // Log first few values for debugging
+                if binary_view.len() > 0 {
+                    for i in 0..binary_view.len().min(3) {
+                        if !binary_view.is_null(i) {
+                            let val = binary_view.value(i);
+                        }
+                    }
+                }
+
+                let binary_array = BinaryArray::from_iter(
+                    (0..binary_view.len()).map(|i| {
+                        if binary_view.is_null(i) {
+                            None
+                        } else {
+                            Some(binary_view.value(i))
+                        }
+                    })
+                );
+
+                // Verify conversion
+                if binary_array.len() > 0 {
+                    for i in 0..binary_array.len().min(3) {
+                        if !binary_array.is_null(i) {
+                            let val = binary_array.value(i);
+                        }
+                    }
+                }
+
+                Ok(Arc::new(binary_array) as ArrayRef)
+            }
+            DataType::Binary | DataType::LargeBinary => {
+                // Already in correct format
+                Ok(array.clone())
+            }
+            _ => Err(crate::Error::GpuSpatial(format!(
+                "Expected Binary/BinaryView array, got {:?}",
+                array.data_type()
+            ))),
+        }
+    }
+
     pub fn spatial_join(
         &mut self,
         left_batch: &RecordBatch,
@@ -60,14 +110,61 @@ impl GpuBackend {
         let left_geom = left_batch.column(left_geom_col);
         let right_geom = right_batch.column(right_geom_col);
 
+        log::info!(
+            "GPU spatial join: left_batch={} rows, right_batch={} rows, left_geom type={:?}, right_geom type={:?}",
+            left_batch.num_rows(),
+            right_batch.num_rows(),
+            left_geom.data_type(),
+            right_geom.data_type()
+        );
+
+        // Convert BinaryView to Binary if needed
+        let left_geom = Self::ensure_binary_array(left_geom)?;
+        let right_geom = Self::ensure_binary_array(right_geom)?;
+
+        log::info!(
+            "After conversion: left_geom type={:?} len={}, right_geom type={:?} len={}",
+            left_geom.data_type(),
+            left_geom.len(),
+            right_geom.data_type(),
+            right_geom.len()
+        );
+
+        // Debug: Print raw binary data before sending to GPU
+        if let Some(left_binary) = left_geom.as_any().downcast_ref::<BinaryArray>() {
+            for i in 0..left_binary.len().min(5) {
+                if !left_binary.is_null(i) {
+                    let wkb = left_binary.value(i);
+                    // Parse WKB header
+                    if wkb.len() >= 5 {
+                        let byte_order = wkb[0];
+                        let geom_type = u32::from_le_bytes([wkb[1], wkb[2], wkb[3], wkb[4]]);
+                    }
+                }
+            }
+        }
+
+        if let Some(right_binary) = right_geom.as_any().downcast_ref::<BinaryArray>() {
+            for i in 0..right_binary.len().min(5) {
+                if !right_binary.is_null(i) {
+                    let wkb = right_binary.value(i);
+                    // Parse WKB header
+                    if wkb.len() >= 5 {
+                        let byte_order = wkb[0];
+                        let geom_type = u32::from_le_bytes([wkb[1], wkb[2], wkb[3], wkb[4]]);
+                    }
+                }
+            }
+        }
+
         // Perform GPU spatial join
         match gpu_ctx.spatial_join(left_geom.clone(), right_geom.clone(), predicate) {
             Ok((build_indices, stream_indices)) => {
+
                 // Create result record batch from the join indices
                 self.create_result_batch(left_batch, right_batch, &build_indices, &stream_indices)
             }
             Err(e) => {
-                log::warn!("GPU spatial join failed: {e:?}, falling back to CPU");
                 Err(crate::Error::GpuSpatial(format!(
                     "GPU spatial join failed: {e:?}"
                 )))
