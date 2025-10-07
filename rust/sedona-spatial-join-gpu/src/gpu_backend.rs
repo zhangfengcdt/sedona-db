@@ -158,11 +158,8 @@ impl GpuBackend {
         }
 
         // Perform GPU spatial join
-        let gpu_start = Instant::now();
         match gpu_ctx.spatial_join(left_geom.clone(), right_geom.clone(), predicate) {
             Ok((build_indices, stream_indices)) => {
-            let gpu_duration = gpu_start.elapsed();
-            eprintln!("  ├─ GPU kernel time: {:.3}s", gpu_duration.as_secs_f64());
 
                 // Create result record batch from the join indices
                 self.create_result_batch(left_batch, right_batch, &build_indices, &stream_indices)

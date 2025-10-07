@@ -25,6 +25,7 @@ use arrow_array::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
+use datafusion_physical_plan::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use futures::stream::Stream;
 
 use crate::config::GpuSpatialJoinConfig;
@@ -39,6 +40,32 @@ use std::time::Instant;
 /// 3. Read data from right child stream
 /// 4. Execute GPU spatial join
 /// 5. Emit result batches
+/// Metrics for GPU spatial join operations
+pub(crate) struct GpuSpatialJoinMetrics {
+    /// Total time for GPU join execution
+    pub(crate) join_time: metrics::Time,
+    /// Time for batch concatenation
+    pub(crate) concat_time: metrics::Time,
+    /// Time for GPU kernel execution
+    pub(crate) gpu_kernel_time: metrics::Time,
+    /// Number of batches produced by this operator
+    pub(crate) output_batches: metrics::Count,
+    /// Number of rows produced by this operator
+    pub(crate) output_rows: metrics::Count,
+}
+
+impl GpuSpatialJoinMetrics {
+    pub fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
+        Self {
+            join_time: MetricBuilder::new(metrics).subset_time("join_time", partition),
+            concat_time: MetricBuilder::new(metrics).subset_time("concat_time", partition),
+            gpu_kernel_time: MetricBuilder::new(metrics).subset_time("gpu_kernel_time", partition),
+            output_batches: MetricBuilder::new(metrics).counter("output_batches", partition),
+            output_rows: MetricBuilder::new(metrics).counter("output_rows", partition),
+        }
+    }
+}
+
 pub struct GpuSpatialJoinStream {
     /// Left child execution plan
     left: Arc<dyn ExecutionPlan>,
@@ -78,6 +105,9 @@ pub struct GpuSpatialJoinStream {
 
     /// Partition number to execute
     partition: usize,
+
+    /// Metrics for this join operation
+    join_metrics: GpuSpatialJoinMetrics,
 }
 
 /// State machine for GPU spatial join execution
@@ -120,6 +150,7 @@ impl GpuSpatialJoinStream {
         config: GpuSpatialJoinConfig,
         context: Arc<TaskContext>,
         partition: usize,
+        metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Self> {
         Ok(Self {
             left,
@@ -135,6 +166,7 @@ impl GpuSpatialJoinStream {
             left_stream: None,
             right_stream: None,
             partition,
+            join_metrics: GpuSpatialJoinMetrics::new(partition, metrics),
         })
     }
 
@@ -321,7 +353,6 @@ impl GpuSpatialJoinStream {
 
     /// Execute GPU spatial join
     fn execute_gpu_join(&mut self) -> Result<()> {
-        let overall_start = Instant::now();
         let gpu_backend = self.gpu_backend.as_mut().ok_or_else(|| {
             DataFusionError::Execution("GPU backend not initialized".into())
         })?;
@@ -336,14 +367,16 @@ impl GpuSpatialJoinStream {
             return Ok(());
         }
 
+        let _join_timer = self.join_metrics.join_time.timer();
+        
         log::info!(
             "Processing GPU join with {} left batches and {} right batches",
             self.left_batches.len(),
             self.right_batches.len()
         );
 
-        let concat_start = Instant::now();
         // Concatenate all left batches into one batch
+        let _concat_timer = self.join_metrics.concat_time.timer();
         let left_batch = if self.left_batches.len() == 1 {
             self.left_batches[0].clone()
         } else {
@@ -367,10 +400,10 @@ impl GpuSpatialJoinStream {
             right_batch.num_rows()
         );
 
-        let concat_duration = concat_start.elapsed();
-        eprintln!("  ├─ Batch concatenation time: {:.3}s", concat_duration.as_secs_f64());
+        // Concatenation time is tracked by concat_time timer
 
         // Execute GPU spatial join on concatenated batches
+        let _gpu_kernel_timer = self.join_metrics.gpu_kernel_time.timer();
         let result_batch = gpu_backend.spatial_join(
             &left_batch,
             &right_batch,
@@ -384,12 +417,12 @@ impl GpuSpatialJoinStream {
             DataFusionError::Execution(format!("GPU spatial join execution failed: {}", e))
         })?;
 
-        let duration = overall_start.elapsed();
-        eprintln!("⚡ GPU join execution time: {:.3}s", duration.as_secs_f64());
         log::info!("GPU join produced {} rows", result_batch.num_rows());
 
         // Only add non-empty result batch
         if result_batch.num_rows() > 0 {
+            self.join_metrics.output_batches.add(1);
+            self.join_metrics.output_rows.add(result_batch.num_rows());
             self.result_batches.push_back(result_batch);
         }
 

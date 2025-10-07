@@ -8,6 +8,7 @@ use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::Partitioning;
+use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::{
     joins::utils::build_join_schema, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
     SendableRecordBatchStream,
@@ -37,6 +38,9 @@ pub struct GpuSpatialJoinExec {
 
     /// Execution properties
     properties: PlanProperties,
+
+    /// Metrics for this join operation
+    metrics: datafusion_physical_plan::metrics::ExecutionPlanMetricsSet,
 }
 
 impl GpuSpatialJoinExec {
@@ -69,6 +73,7 @@ impl GpuSpatialJoinExec {
             config,
             schema,
             properties,
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
@@ -113,6 +118,10 @@ impl ExecutionPlan for GpuSpatialJoinExec {
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn metrics(&self) -> Option<datafusion_physical_plan::metrics::MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 
     fn schema(&self) -> SchemaRef {
@@ -163,6 +172,7 @@ impl ExecutionPlan for GpuSpatialJoinExec {
             self.config.clone(),
             context,
             partition,
+            &self.metrics,
         )?;
 
         Ok(Box::pin(stream))
