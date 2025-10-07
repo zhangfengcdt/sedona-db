@@ -329,33 +329,52 @@ impl GpuSpatialJoinStream {
             return Ok(());
         }
 
-        // For now, process first batch from each side as a proof of concept
-        // TODO: Implement batched processing for multiple batches
-        let left_batch = &self.left_batches[0];
-        let right_batch = &self.right_batches[0];
-
-        log::debug!(
-            "Processing GPU join: {} left rows, {} right rows",
-            left_batch.num_rows(),
-            right_batch.num_rows()
+        log::info!(
+            "Processing GPU join with {} left batches and {} right batches",
+            self.left_batches.len(),
+            self.right_batches.len()
         );
 
-        // Execute GPU spatial join
-        let result_batch = gpu_backend.spatial_join(
-            left_batch,
-            right_batch,
-            self.config.left_geom_column.index,
-            self.config.right_geom_column.index,
-            self.config.predicate.into(),
-        ).map_err(|e| {
-            if self.config.fallback_to_cpu {
-                log::warn!("GPU join failed: {}, should fallback to CPU", e);
-            }
-            DataFusionError::Execution(format!("GPU spatial join execution failed: {}", e))
-        })?;
+        // Process all combinations of left and right batches
+        // This implements a nested loop join at the batch level
+        for (left_idx, left_batch) in self.left_batches.iter().enumerate() {
+            for (right_idx, right_batch) in self.right_batches.iter().enumerate() {
+                log::debug!(
+                    "Processing GPU join batch pair ({}, {}): {} left rows, {} right rows",
+                    left_idx,
+                    right_idx,
+                    left_batch.num_rows(),
+                    right_batch.num_rows()
+                );
 
-        log::info!("GPU join produced {} rows", result_batch.num_rows());
-        self.result_batches.push_back(result_batch);
+                // Execute GPU spatial join for this batch pair
+                let result_batch = gpu_backend.spatial_join(
+                    left_batch,
+                    right_batch,
+                    self.config.left_geom_column.index,
+                    self.config.right_geom_column.index,
+                    self.config.predicate.into(),
+                ).map_err(|e| {
+                    if self.config.fallback_to_cpu {
+                        log::warn!("GPU join failed: {}, should fallback to CPU", e);
+                    }
+                    DataFusionError::Execution(format!("GPU spatial join execution failed: {}", e))
+                })?;
+
+                log::debug!("GPU join batch pair ({}, {}) produced {} rows",
+                    left_idx, right_idx, result_batch.num_rows());
+
+                // Only add non-empty result batches
+                if result_batch.num_rows() > 0 {
+                    self.result_batches.push_back(result_batch);
+                }
+            }
+        }
+
+        let total_rows: usize = self.result_batches.iter().map(|b| b.num_rows()).sum();
+        log::info!("GPU join produced {} total rows across {} result batches",
+            total_rows, self.result_batches.len());
+
         Ok(())
     }
 }
