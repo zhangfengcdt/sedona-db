@@ -979,7 +979,7 @@ impl<'a> SedonaKnnAdapter<'a> {
 
 impl<'a> GeometryAccessor for SedonaKnnAdapter<'a> {
     /// Get geometry for the given item index with lock-free caching
-    fn get_geometry(&self, item_index: usize) -> Option<Geometry<f64>> {
+    fn get_geometry(&self, item_index: usize) -> Option<&Geometry<f64>> {
         let geometry_cache = &self.knn_components.geometry_cache;
 
         // Bounds check
@@ -989,7 +989,7 @@ impl<'a> GeometryAccessor for SedonaKnnAdapter<'a> {
 
         // Try to get from cache first
         if let Some(geom) = geometry_cache[item_index].get() {
-            return Some(geom.clone());
+            return Some(geom);
         }
 
         // Cache miss - decode from WKB
@@ -999,8 +999,9 @@ impl<'a> GeometryAccessor for SedonaKnnAdapter<'a> {
         if let Some(wkb) = indexed_batch.wkb(row_idx as usize) {
             if let Ok(geom) = item_to_geometry(wkb) {
                 // Try to store in cache - if another thread got there first, we just use theirs
-                let _ = geometry_cache[item_index].set(geom.clone());
-                return Some(geom);
+                let _ = geometry_cache[item_index].set(geom);
+                // Return reference to the cached geometry
+                return geometry_cache[item_index].get();
             }
         }
 
