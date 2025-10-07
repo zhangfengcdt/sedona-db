@@ -567,8 +567,7 @@ impl SpatialIndex {
             for &result_idx in &final_results {
                 if (result_idx as usize) < self.data_id_to_batch_pos.len() {
                     if let Some(item_geom) = geometry_accessor.get_geometry(result_idx as usize) {
-                        let distance =
-                            distance_metric.distance_to_geometry(&probe_geom, &item_geom);
+                        let distance = distance_metric.distance_to_geometry(&probe_geom, item_geom);
                         if let Some(distance_f64) = distance.to_f64() {
                             distances_with_indices.push((distance_f64, result_idx));
                         }
@@ -622,7 +621,7 @@ impl SpatialIndex {
                         if let Some(item_geom) = geometry_accessor.get_geometry(result_idx as usize)
                         {
                             let distance =
-                                distance_metric.distance_to_geometry(&probe_geom, &item_geom);
+                                distance_metric.distance_to_geometry(&probe_geom, item_geom);
                             if let Some(distance_f64) = distance.to_f64() {
                                 all_distances_with_indices.push((distance_f64, result_idx));
                             }
