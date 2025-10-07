@@ -29,6 +29,7 @@ use futures::stream::Stream;
 
 use crate::config::GpuSpatialJoinConfig;
 use crate::gpu_backend::GpuBackend;
+use std::time::Instant;
 
 /// Stream that executes GPU spatial join
 ///
@@ -320,6 +321,7 @@ impl GpuSpatialJoinStream {
 
     /// Execute GPU spatial join
     fn execute_gpu_join(&mut self) -> Result<()> {
+        let overall_start = Instant::now();
         let gpu_backend = self.gpu_backend.as_mut().ok_or_else(|| {
             DataFusionError::Execution("GPU backend not initialized".into())
         })?;
@@ -340,6 +342,7 @@ impl GpuSpatialJoinStream {
             self.right_batches.len()
         );
 
+        let concat_start = Instant::now();
         // Concatenate all left batches into one batch
         let left_batch = if self.left_batches.len() == 1 {
             self.left_batches[0].clone()
@@ -364,6 +367,9 @@ impl GpuSpatialJoinStream {
             right_batch.num_rows()
         );
 
+        let concat_duration = concat_start.elapsed();
+        eprintln!("  ├─ Batch concatenation time: {:.3}s", concat_duration.as_secs_f64());
+
         // Execute GPU spatial join on concatenated batches
         let result_batch = gpu_backend.spatial_join(
             &left_batch,
@@ -378,6 +384,8 @@ impl GpuSpatialJoinStream {
             DataFusionError::Execution(format!("GPU spatial join execution failed: {}", e))
         })?;
 
+        let duration = overall_start.elapsed();
+        eprintln!("⚡ GPU join execution time: {:.3}s", duration.as_secs_f64());
         log::info!("GPU join produced {} rows", result_batch.num_rows());
 
         // Only add non-empty result batch
