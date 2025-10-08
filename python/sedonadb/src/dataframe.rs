@@ -32,7 +32,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyCapsule;
 use sedona::context::{SedonaDataFrame, SedonaWriteOptions};
 use sedona::show::{DisplayMode, DisplayTableOptions};
-use sedona_geoparquet::options::TableGeoParquetOptions;
+use sedona_geoparquet::options::{GeoParquetVersion, TableGeoParquetOptions};
 use sedona_schema::schema::SedonaSchema;
 use tokio::runtime::Runtime;
 
@@ -139,6 +139,7 @@ impl InternalDataFrame {
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn to_parquet<'py>(
         &self,
         py: Python<'py>,
@@ -147,6 +148,8 @@ impl InternalDataFrame {
         partition_by: Vec<String>,
         sort_by: Vec<String>,
         single_file_output: bool,
+        geoparquet_version: Option<String>,
+        overwrite_bbox_columns: bool,
     ) -> Result<(), PySedonaError> {
         // sort_by needs to be SortExpr. A Vec<String> can unambiguously be interpreted as
         // field names (ascending), but other types of expressions aren't supported here yet.
@@ -162,7 +165,14 @@ impl InternalDataFrame {
             .with_partition_by(partition_by)
             .with_sort_by(sort_by_expr)
             .with_single_file_output(single_file_output);
-        let writer_options = TableGeoParquetOptions::default();
+
+        let mut writer_options = TableGeoParquetOptions::new();
+        writer_options.overwrite_bbox_columns = overwrite_bbox_columns;
+        if let Some(geoparquet_version) = geoparquet_version {
+            writer_options.geoparquet_version = geoparquet_version.parse()?;
+        } else {
+            writer_options.geoparquet_version = GeoParquetVersion::Omitted;
+        }
 
         wait_for_future(
             py,
