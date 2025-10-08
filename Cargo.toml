@@ -45,7 +45,7 @@ default-members = [
     "c/sedona-s2geography",
     "c/sedona-tg",
     "r/sedonadb/src/rust",
-    "rust/sedona-adbc",
+    # "rust/sedona-adbc",  # Excluded: requires Arrow 56, but datafusion uses Arrow 55
     "rust/sedona-expr",
     "rust/sedona-functions",
     "rust/sedona-geo",
@@ -78,12 +78,12 @@ abi_stable = "0.11.3"
 adbc_core = "0.20.0"
 adbc_ffi = "0.20.0"
 lru = "0.12"
-arrow = { version = "55.1.0", features = ["prettyprint", "ffi", "chrono-tz"] }
-arrow-array = { version = "55.1.0" }
-arrow-cast = { version = "55.1.0" }
-arrow-data = { version = "55.1.0" }
-arrow-json = { version = "55.1.0" }
-arrow-schema = { version = "55.1.0" }
+arrow = { version = "55.2.0", features = ["prettyprint", "ffi", "chrono-tz"] }
+arrow-array = { version = "55.2.0" }
+arrow-cast = { version = "55.2.0" }
+arrow-data = { version = "55.2.0" }
+arrow-json = { version = "55.2.0" }
+arrow-schema = { version = "55.2.0" }
 async-trait = { version = "0.1.87" }
 bytes = "1.10"
 chrono = { version = "0.4.38", default-features = false }
@@ -122,7 +122,7 @@ wkb = { version = "0.8.0", features = ["geos"] }
 wkt = "0.13.0"
 
 parking_lot = "0.12"
-parquet = { version = "55.1.0", default-features = false, features = [
+parquet = { version = "55.2.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
