@@ -1,3 +1,11 @@
+#include "array_stream.hpp"
+#include "gpuspatial/loader/wkb_loader.h"
+#include "gpuspatial/relate/relate.cuh"
+#include "gpuspatial/utils/pinned_vector.h"
+#include "test_common.hpp"
+
+#include <rmm/cuda_stream_view.hpp>
+
 #include <geos/geom/Geometry.h>
 #include <geos/io/WKTReader.h>
 #include <geos/operation/relateng/RelateGeometry.h>
@@ -5,12 +13,6 @@
 #include <geos/operation/relateng/RelateNG.h>
 #include <geos/operation/relateng/RelatePredicate.h>
 #include <gtest/gtest.h>
-#include "array_stream.hpp"
-#include "gpuspatial/loader/wkb_loader.h"
-#include "gpuspatial/relate/relate.cuh"
-#include "gpuspatial/utils/pinned_vector.h"
-#include "rmm/cuda_stream_view.hpp"
-#include "test_common.hpp"
 
 using namespace geos::geom;
 using namespace geos::operation::relateng;

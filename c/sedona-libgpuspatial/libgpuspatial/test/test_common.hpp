@@ -1,11 +1,12 @@
 #ifndef GPUSPATIAL_TEST_TEST_COMMON_HPP
 #define GPUSPATIAL_TEST_TEST_COMMON_HPP
-#include <gtest/gtest.h>
 #include "gpuspatial/geom/point.cuh"
 #include "gpuspatial/utils/array_view.h"
 #include "gpuspatial/utils/pinned_vector.h"
-#include "rmm/cuda_stream_view.hpp"
-#include "rmm/device_uvector.hpp"
+
+#include <gtest/gtest.h>
+#include <rmm/cuda_stream_view.hpp>
+#include <rmm/device_uvector.hpp>
 
 namespace TestUtils {
 using PointTypes =

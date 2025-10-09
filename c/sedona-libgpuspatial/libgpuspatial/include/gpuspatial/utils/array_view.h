@@ -2,7 +2,7 @@
 #define GPUSPATIAL_UTILS_ARRAY_VIEW_H
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
-#include <thrust/swap.h>
+
 #include "gpuspatial/utils/cuda_utils.h"
 
 namespace gpuspatial {

@@ -1,6 +1,5 @@
 #ifndef GPUSPATIAL_INDEX_OPTIX_SPATIAL_INDEX_CUH
 #define GPUSPATIAL_INDEX_OPTIX_SPATIAL_INDEX_CUH
-#include <thread>
 #include "gpuspatial/geom/box.cuh"
 #include "gpuspatial/geom/point.cuh"
 #include "gpuspatial/index/detail/rt_engine.hpp"
@@ -12,9 +11,12 @@
 #include "gpuspatial/utils/gpu_timer.hpp"
 #include "gpuspatial/utils/queue.h"
 
-#include "rmm/cuda_stream_pool.hpp"
-#include "rmm/cuda_stream_view.hpp"
-#include "rmm/device_uvector.hpp"
+#include <thread>
+
+#include <rmm/cuda_stream_pool.hpp>
+#include <rmm/cuda_stream_view.hpp>
+#include <rmm/device_uvector.hpp>
+
 // #define GPUSPATIAL_PROFILING
 namespace gpuspatial {
 

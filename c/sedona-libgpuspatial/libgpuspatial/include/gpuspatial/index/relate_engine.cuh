@@ -3,7 +3,8 @@
 #include "gpuspatial/loader/device_geometries.cuh"
 #include "gpuspatial/relate/predicate.cuh"
 #include "gpuspatial/utils/queue.h"
-#include "rmm/cuda_stream_view.hpp"
+
+#include <rmm/cuda_stream_view.hpp>
 
 namespace gpuspatial {
 
@@ -38,6 +39,16 @@ class RelateEngine {
                 const MultiPolygonArrayView<POINT_T, INDEX_T>& geom_array1,
                 const PointArrayView<POINT_T, INDEX_T>& geom_array2, Predicate predicate,
                 Queue<thrust::pair<uint32_t, uint32_t>>& ids);
+
+  void Evaluate(const rmm::cuda_stream_view& stream,
+                const PointArrayView<POINT_T, INDEX_T>& geom_array1,
+                const PolygonArrayView<POINT_T, INDEX_T>& geom_array2,
+                Predicate predicate, Queue<thrust::pair<uint32_t, uint32_t>>& ids);
+
+  void Evaluate(const rmm::cuda_stream_view& stream,
+                const PointArrayView<POINT_T, INDEX_T>& geom_array1,
+                const MultiPolygonArrayView<POINT_T, INDEX_T>& geom_array2,
+                Predicate predicate, Queue<thrust::pair<uint32_t, uint32_t>>& ids);
 
  private:
   const DeviceGeometries<POINT_T, INDEX_T>* geoms1_;

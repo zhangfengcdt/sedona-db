@@ -3,18 +3,18 @@
 
 #include <optix_host.h>
 #include <optix_types.h>
-#include <thrust/device_vector.h>
 
 #include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include <thrust/device_vector.h>
+#include <rmm/cuda_stream.hpp>
+#include <rmm/device_uvector.hpp>
+
 #include "gpuspatial/index/detail/sbt_record.h"
 #include "gpuspatial/utils/array_view.h"
-#include "rmm/cuda_stream.hpp"
-#include "rmm/device_scalar.hpp"
-#include "rmm/device_uvector.hpp"
 
 #define GPUSPATIAL_OPTIX_LAUNCH_PARAMS_NAME "params"
 

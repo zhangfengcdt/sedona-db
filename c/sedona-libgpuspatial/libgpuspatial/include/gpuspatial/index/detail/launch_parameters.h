@@ -1,10 +1,11 @@
 #ifndef GPUSPATIAL_INDEX_SHADERS_LAUNCH_PARAMETERS_H
 #define GPUSPATIAL_INDEX_SHADERS_LAUNCH_PARAMETERS_H
-#include <thrust/pair.h>
 #include "gpuspatial/geom/box.cuh"
 #include "gpuspatial/geom/point.cuh"
 #include "gpuspatial/utils/array_view.h"
 #include "gpuspatial/utils/queue_view.h"
+
+#include <thrust/pair.h>
 
 namespace gpuspatial {
 namespace detail {
