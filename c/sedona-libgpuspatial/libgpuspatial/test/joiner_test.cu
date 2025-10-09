@@ -16,7 +16,6 @@ std::string GetTestDataPath(const std::string& relative_path_to_file);
 }
 
 namespace gpuspatial {
-/*
 TEST(JoinerTest, PIP) {
   SpatialJoiner::SpatialJoinerConfig config;
   std::string ptx_root = TestUtils::GetTestDataPath("shaders_ptx");
@@ -153,7 +152,6 @@ TEST(JoinerTest, PIP) {
     array_index_offset += stream_array->length;
   }
 }
-*/
 
 TEST(JoinerTest, PIPInverse) {
   SpatialJoiner::SpatialJoinerConfig config;
@@ -296,7 +294,6 @@ TEST(JoinerTest, PIPInverse) {
   }
 }
 
-#if 0
 TEST(JoinerTest, PolygonPolygonContains) {
   SpatialJoiner::SpatialJoinerConfig config;
   std::string ptx_root = TestUtils::GetTestDataPath("shaders_ptx");
@@ -367,7 +364,6 @@ TEST(JoinerTest, PolygonPolygonContains) {
     spatial_joiner.PushStream(context.get(), nullptr, stream_array.get(), 0,
                               stream_array->length, Predicate::kContains, &build_indices,
                               &array_indices, array_index_offset);
-
     geom_polygons1.resize(build_array->length);
     geom_polygons2.resize(stream_array->length);
 
@@ -430,6 +426,5 @@ TEST(JoinerTest, PolygonPolygonContains) {
     array_index_offset += stream_array->length;
   }
 }
-#endif
 
 }  // namespace gpuspatial

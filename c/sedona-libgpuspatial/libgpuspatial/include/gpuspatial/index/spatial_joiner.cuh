@@ -124,10 +124,6 @@ class SpatialJoiner : public StreamingJoiner {
                                std::vector<uint32_t>* build_indices,
                                std::vector<uint32_t>* stream_indices);
 
-  void handleStreamPoints(SpatialJoinerContext* ctx, Predicate predicate,
-                          std::vector<uint32_t>* build_indices,
-                          std::vector<uint32_t>* stream_indices);
-
   void filter(SpatialJoinerContext* ctx, uint32_t dim_x, bool swap_id = false);
 
   void refine(SpatialJoinerContext* ctx, Predicate predicate,

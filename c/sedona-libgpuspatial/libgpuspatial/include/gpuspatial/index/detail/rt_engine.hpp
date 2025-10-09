@@ -1,20 +1,21 @@
 #ifndef GPUSPATIAL_DETAILS_RT_ENGINE_HPP
 #define GPUSPATIAL_DETAILS_RT_ENGINE_HPP
 
+#include "gpuspatial/utils/array_view.h"
+
 #include <optix_host.h>
 #include <optix_types.h>
+
+#include <thrust/device_vector.h>
+#include <rmm/cuda_stream.hpp>
+#include <rmm/device_uvector.hpp>
 
 #include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include <thrust/device_vector.h>
-#include <rmm/cuda_stream.hpp>
-#include <rmm/device_uvector.hpp>
-
 #include "gpuspatial/index/detail/sbt_record.h"
-#include "gpuspatial/utils/array_view.h"
 
 #define GPUSPATIAL_OPTIX_LAUNCH_PARAMS_NAME "params"
 
