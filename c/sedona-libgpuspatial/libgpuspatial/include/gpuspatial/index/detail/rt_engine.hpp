@@ -1,9 +1,14 @@
 #ifndef GPUSPATIAL_DETAILS_RT_ENGINE_HPP
 #define GPUSPATIAL_DETAILS_RT_ENGINE_HPP
 
+#include "gpuspatial/utils/array_view.h"
+
 #include <optix_host.h>
 #include <optix_types.h>
+
 #include <thrust/device_vector.h>
+#include <rmm/cuda_stream.hpp>
+#include <rmm/device_uvector.hpp>
 
 #include <map>
 #include <memory>
@@ -11,10 +16,6 @@
 #include <vector>
 
 #include "gpuspatial/index/detail/sbt_record.h"
-#include "gpuspatial/utils/array_view.h"
-#include "rmm/cuda_stream.hpp"
-#include "rmm/device_scalar.hpp"
-#include "rmm/device_uvector.hpp"
 
 #define GPUSPATIAL_OPTIX_LAUNCH_PARAMS_NAME "params"
 

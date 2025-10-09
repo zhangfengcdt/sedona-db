@@ -1,7 +1,3 @@
-
-#include <geoarrow/geoarrow.h>
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
 #include "array_stream.hpp"
 #include "gpuspatial/geom/multi_polygon.cuh"
 #include "gpuspatial/loader/device_geometries.cuh"
@@ -9,10 +5,14 @@
 #include "gpuspatial/utils/pinned_vector.h"
 #include "nanoarrow/nanoarrow.hpp"
 
-#include "rmm/cuda_stream.hpp"
-
 #include "gpuspatial/geom/multi_point.cuh"
 #include "test_common.hpp"
+
+#include <geoarrow/geoarrow.h>
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <rmm/cuda_stream.hpp>
 
 namespace gpuspatial {
 

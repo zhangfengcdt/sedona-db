@@ -4,8 +4,9 @@
 #include "gpuspatial/utils/markers.hpp"
 #include "gpuspatial/utils/mem_utils.hpp"
 #include "gpuspatial/utils/stopwatch.h"
-#include "rmm/exec_policy.hpp"
 #include "shaders/shader_id.hpp"
+
+#include <rmm/exec_policy.hpp>
 
 #define OPTIX_MAX_RAYS (1u << 30)
 namespace gpuspatial {
@@ -32,7 +33,8 @@ void OptixSpatialIndex<POINT_T, INDEX_T>::Clear() {
 }
 
 template <typename POINT_T, typename INDEX_T>
-void OptixSpatialIndex<POINT_T, INDEX_T>::PushBuild(const box_t* boxes, uint32_t n_boxes) {
+void OptixSpatialIndex<POINT_T, INDEX_T>::PushBuild(const box_t* boxes,
+                                                    uint32_t n_boxes) {
   IntervalRangeMarker marker(n_boxes, "PushBuild");
 
   if (boxes == nullptr || n_boxes == 0) {
@@ -259,8 +261,8 @@ void OptixSpatialIndex<POINT_T, INDEX_T>::prepareLaunchParamsBoxQuery(
 
 template <typename POINT_T, typename INDEX_T>
 void OptixSpatialIndex<POINT_T, INDEX_T>::filter(SpatialIndexContext* ctx, uint32_t dim_x,
-                                               std::vector<uint32_t>* build_indices,
-                                               std::vector<uint32_t>* stream_indices) {
+                                                 std::vector<uint32_t>* build_indices,
+                                                 std::vector<uint32_t>* stream_indices) {
 #ifdef GPUSPATIAL_PROFILING
   ctx->timer.start(ctx->cuda_stream);
 #endif
@@ -327,15 +329,18 @@ void InitOptixSpatialIndex(SpatialIndex<POINT_T, INDEX_T>* index, const char* pt
 template class OptixSpatialIndex<Point<float, 2>, uint32_t>;
 template class OptixSpatialIndex<Point<double, 2>, uint32_t>;
 
-// template std::unique_ptr<SpatialIndex<Point<float, 2>, uint32_t>> CreateOptixSpatialIndex();
-// template void InitOptixSpatialIndex(SpatialIndex<Point<float, 2>, uint32_t>* index, const char* ptx_root,
+// template std::unique_ptr<SpatialIndex<Point<float, 2>, uint32_t>>
+// CreateOptixSpatialIndex(); template void
+// InitOptixSpatialIndex(SpatialIndex<Point<float, 2>, uint32_t>* index, const char*
+// ptx_root,
 //                                     uint32_t concurrency);
 
 // template class SpatialIndex<double, 2>;
 // template std::unique_ptr<SpatialIndex<double, 2>> CreateOptixSpatialIndex();
 //
 // // template class SpatialIndex<double, 2>;
-// template void InitOptixSpatialIndex(SpatialIndex<double, 2>* index, const char* ptx_root,
+// template void InitOptixSpatialIndex(SpatialIndex<double, 2>* index, const char*
+// ptx_root,
 //                                     uint32_t concurrency);
 
 }  // namespace gpuspatial

@@ -7,6 +7,7 @@
 #include "arrow/filesystem/s3fs.h"
 #include "arrow/record_batch.h"
 // #include "baseline/boost_index.hpp"
+
 #include "baseline/geos_index.hpp"
 #include "geoarrow_geos/geoarrow_geos.h"
 #include "geos/vend/json.hpp"
@@ -14,10 +15,12 @@
 #include "nanoarrow/nanoarrow.hpp"
 #include "nlohmann/json.hpp"
 #include "parquet/arrow/reader.h"
-#include "rmm/mr/device/binning_memory_resource.hpp"
-#include "rmm/mr/device/cuda_async_memory_resource.hpp"
+
 #include "run_queries.cuh"
 #include "thread_pool.h"
+
+#include <rmm/mr/device/binning_memory_resource.hpp>
+#include <rmm/mr/device/cuda_async_memory_resource.hpp>
 
 #define MAX_DOWNLOAD_THREADS (10)
 #define ARROW_THROW_NOT_OK(status_expr)       \
@@ -302,8 +305,8 @@ void RunQueries(BenchmarkConfig& config) {
       joiner = std::make_unique<GEOSIndex>();
       break;
     }
-  default:
-    throw std::runtime_error("Unsupported execution type");
+    default:
+      throw std::runtime_error("Unsupported execution type");
   }
   double push_build_ms = 0, build_index_ms = 0, query_ms = 0;
   int64_t build_size = 0;
@@ -389,9 +392,9 @@ void RunQueries(BenchmarkConfig& config) {
           QueryResult query_result;
           sw.start();
           joiner->PushStream(ctx.get(), &tmp_schema, unique_array.get(), 0,
-                            array->length(), Predicate::kContains,
-                            query_result.build_indices.get(),
-                            query_result.stream_indices.get(), array_index_offset);
+                             array->length(), Predicate::kContains,
+                             query_result.build_indices.get(),
+                             query_result.stream_indices.get(), array_index_offset);
           sw.stop();
           query_result.json_query["time"] = sw.ms();
           query_result.json_query["record_batch_idx"] = batch_idx;

@@ -1,7 +1,5 @@
 #ifndef GPUSPATIAL_INDEX_SPATIAL_JOINER_CUH
 #define GPUSPATIAL_INDEX_SPATIAL_JOINER_CUH
-#include <fstream>
-#include <thread>
 #include "geoarrow/geoarrow_type.h"
 #include "gpuspatial/geom/box.cuh"
 #include "gpuspatial/geom/point.cuh"
@@ -15,9 +13,13 @@
 #include "gpuspatial/utils/gpu_timer.hpp"
 #include "gpuspatial/utils/queue.h"
 
-#include "rmm/cuda_stream_pool.hpp"
-#include "rmm/cuda_stream_view.hpp"
-#include "rmm/device_uvector.hpp"
+#include <fstream>
+#include <thread>
+
+#include <rmm/cuda_stream_pool.hpp>
+#include <rmm/cuda_stream_view.hpp>
+#include <rmm/device_uvector.hpp>
+
 // #define GPUSPATIAL_PROFILING
 namespace gpuspatial {
 
@@ -106,13 +108,27 @@ class SpatialJoiner : public StreamingJoiner {
                   int32_t array_index_offset) override;
 
   // Internal method but has to be public for the CUDA kernel to access
-  void handleStreamBoxes(SpatialJoinerContext* ctx, Predicate predicate,
-                         std::vector<uint32_t>* build_indices,
-                         std::vector<uint32_t>* stream_indices);
+  void handleBuildPointStreamPoint(SpatialJoinerContext* ctx, Predicate predicate,
+                                   std::vector<uint32_t>* build_indices,
+                                   std::vector<uint32_t>* stream_indices);
+
+  void handleBuildBoxStreamPoint(SpatialJoinerContext* ctx, Predicate predicate,
+                                 std::vector<uint32_t>* build_indices,
+                                 std::vector<uint32_t>* stream_indices);
+
+  void handleBuildPointStreamBox(SpatialJoinerContext* ctx, Predicate predicate,
+                                 std::vector<uint32_t>* build_indices,
+                                 std::vector<uint32_t>* stream_indices);
+
+  void handleBuildBoxStreamBox(SpatialJoinerContext* ctx, Predicate predicate,
+                               std::vector<uint32_t>* build_indices,
+                               std::vector<uint32_t>* stream_indices);
+
+  void filter(SpatialJoinerContext* ctx, uint32_t dim_x, bool swap_id = false);
+
   void refine(SpatialJoinerContext* ctx, Predicate predicate,
               std::vector<uint32_t>* build_indices,
               std::vector<uint32_t>* stream_indices);
-  void filter(SpatialJoinerContext* ctx, uint32_t dim_x);
 
  private:
   SpatialJoinerConfig config_;
@@ -124,23 +140,17 @@ class SpatialJoiner : public StreamingJoiner {
 
   std::vector<std::shared_ptr<GeometrySegment>> segments_;
   std::shared_ptr<DeviceGeometries<point_t, index_t>> build_geometries_;
-  GeometryGrouper<point_t, index_t> geometry_grouper;
+  GeometryGrouper<point_t, index_t> geometry_grouper_;
   RelateEngine<point_t, index_t> relate_engine_;
   OptixTraversableHandle handle_;
 
   std::shared_ptr<ObjectPool<SpatialJoinerContext>> ctx_pool_;
-
-  void handleStreamPoints(SpatialJoinerContext* ctx, Predicate predicate,
-                          std::vector<uint32_t>* build_indices,
-                          std::vector<uint32_t>* stream_indices);
 
   OptixTraversableHandle buildBVH(const rmm::cuda_stream_view& stream,
                                   const ArrayView<OptixAabb>& aabbs,
                                   std::unique_ptr<rmm::device_uvector<char>>& buffer);
 
   void allocateResultBuffer(SpatialJoinerContext* ctx);
-
-  void prepareLaunchParamsPointQuery(SpatialJoinerContext* ctx);
 
   void prepareLaunchParamsBoxQuery(SpatialJoinerContext* ctx, bool forward);
 };

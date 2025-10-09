@@ -3,8 +3,9 @@
 #include "gpuspatial/index/spatial_joiner.cuh"
 #include "gpuspatial/utils/markers.hpp"
 #include "gpuspatial/utils/stopwatch.h"
-#include "rmm/exec_policy.hpp"
 #include "shaders/shader_id.hpp"
+
+#include <rmm/exec_policy.hpp>
 
 #define OPTIX_MAX_RAYS (1lu << 30)
 namespace gpuspatial {
@@ -24,7 +25,7 @@ void SpatialJoiner::Clear() {
   bvh_buffer_ = nullptr;
   segments_.clear();
   build_type_ = GeometryType::kNumGeometryTypes;
-  geometry_grouper.clear();
+  geometry_grouper_.clear();
   build_geometries_ = nullptr;
 }
 
@@ -123,8 +124,9 @@ void SpatialJoiner::FinishBuilding() {
       throw std::runtime_error("Unimplemented build type: " +
                                GeometryTypeToString(build_type_));
   }
-  geometry_grouper.Group(stream, *build_geometries_, config_.n_geoms_per_aabb);
-  handle_ = buildBVH(stream, geometry_grouper.get_aabbs(), bvh_buffer_);
+  geometry_grouper_.Group(stream, *build_geometries_, config_.n_geoms_per_aabb);
+  // TODO: The BVH for build is not necessary if build is point and stream is not point
+  handle_ = buildBVH(stream, geometry_grouper_.get_aabbs(), bvh_buffer_);
   relate_engine_ = RelateEngine(build_geometries_.get());
 }
 
@@ -213,11 +215,18 @@ void SpatialJoiner::PushStream(Context* base_ctx, const ArrowSchema* schema,
   ctx->parse_ms += sw.ms();
 #endif
 
-  // Box-Point query
-  if (stream_type == GeometryType::kPoint) {
-    handleStreamPoints(ctx, predicate, build_indices, stream_indices);
-  } else {  // Box-Box query
-    handleStreamBoxes(ctx, predicate, build_indices, stream_indices);
+  if (build_type_ == GeometryType::kPoint) {
+    if (stream_type == GeometryType::kPoint) {
+      handleBuildPointStreamPoint(ctx, predicate, build_indices, stream_indices);
+    } else {
+      handleBuildPointStreamBox(ctx, predicate, build_indices, stream_indices);
+    }
+  } else {
+    if (stream_type == GeometryType::kPoint) {
+      handleBuildBoxStreamPoint(ctx, predicate, build_indices, stream_indices);
+    } else {
+      handleBuildBoxStreamBox(ctx, predicate, build_indices, stream_indices);
+    }
   }
 #ifdef GPUSPATIAL_PROFILING
   printf("parse %lf, alloc %lf, filter %lf, refine %lf, copy_res %lf ms\n", ctx->parse_ms,
@@ -225,27 +234,117 @@ void SpatialJoiner::PushStream(Context* base_ctx, const ArrowSchema* schema,
 #endif
 }
 
-void SpatialJoiner::handleStreamPoints(SpatialJoinerContext* ctx, Predicate predicate,
-                                       std::vector<uint32_t>* build_indices,
-                                       std::vector<uint32_t>* stream_indices) {
+void SpatialJoiner::handleBuildPointStreamPoint(SpatialJoinerContext* ctx,
+                                                Predicate predicate,
+                                                std::vector<uint32_t>* build_indices,
+                                                std::vector<uint32_t>* stream_indices) {
   allocateResultBuffer(ctx);
 
-  prepareLaunchParamsPointQuery(ctx);
+  ctx->shader_id = GetPointQueryShaderId<point_t>();
+  assert(ctx->stream_geometries->get_geometry_type() == GeometryType::kPoint);
 
-  uint32_t dim_x = std::min(OPTIX_MAX_RAYS, ctx->stream_geometries->get_points().size());
+  using launch_params_t = detail::LaunchParamsPointQuery<point_t>;
+  ctx->launch_params_buffer =
+      std::make_unique<rmm::device_buffer>(sizeof(launch_params_t), ctx->cuda_stream);
+  ctx->h_launch_params_buffer.resize(sizeof(launch_params_t));
+  auto& launch_params = *(launch_params_t*)ctx->h_launch_params_buffer.data();
+
+  launch_params.aabbs1 = geometry_grouper_.get_aabbs();
+  launch_params.prefix_sum = geometry_grouper_.get_prefix_sum();
+  launch_params.reordered_indices = geometry_grouper_.get_reordered_indices();
+  launch_params.mbrs1 = ArrayView<box_t>();  // no MBRs for point
+  launch_params.points2 = ctx->stream_geometries->get_points();
+  launch_params.handle = handle_;
+  launch_params.ids = ctx->results.DeviceObject();
+  CUDA_CHECK(cudaMemcpyAsync(ctx->launch_params_buffer->data(), &launch_params,
+                             sizeof(launch_params_t), cudaMemcpyHostToDevice,
+                             ctx->cuda_stream));
+
+  uint32_t dim_x = std::min(OPTIX_MAX_RAYS, ctx->stream_geometries->num_features());
 
   filter(ctx, dim_x);
   refine(ctx, predicate, build_indices, stream_indices);
 }
 
-void SpatialJoiner::handleStreamBoxes(SpatialJoinerContext* ctx, Predicate predicate,
-                                      std::vector<uint32_t>* build_indices,
-                                      std::vector<uint32_t>* stream_indices) {
+void SpatialJoiner::handleBuildBoxStreamPoint(SpatialJoinerContext* ctx,
+                                              Predicate predicate,
+                                              std::vector<uint32_t>* build_indices,
+                                              std::vector<uint32_t>* stream_indices) {
+  allocateResultBuffer(ctx);
+
+  ctx->shader_id = GetPointQueryShaderId<point_t>();
+  assert(ctx->stream_geometries->get_geometry_type() == GeometryType::kPoint);
+
+  using launch_params_t = detail::LaunchParamsPointQuery<point_t>;
+  ctx->launch_params_buffer =
+      std::make_unique<rmm::device_buffer>(sizeof(launch_params_t), ctx->cuda_stream);
+  ctx->h_launch_params_buffer.resize(sizeof(launch_params_t));
+  auto& launch_params = *(launch_params_t*)ctx->h_launch_params_buffer.data();
+
+  launch_params.aabbs1 = geometry_grouper_.get_aabbs();
+  launch_params.prefix_sum = geometry_grouper_.get_prefix_sum();
+  launch_params.reordered_indices = geometry_grouper_.get_reordered_indices();
+  launch_params.mbrs1 = build_geometries_->get_mbrs();
+  launch_params.points2 = ctx->stream_geometries->get_points();
+  launch_params.handle = handle_;
+  launch_params.ids = ctx->results.DeviceObject();
+  CUDA_CHECK(cudaMemcpyAsync(ctx->launch_params_buffer->data(), &launch_params,
+                             sizeof(launch_params_t), cudaMemcpyHostToDevice,
+                             ctx->cuda_stream));
+
+  uint32_t dim_x = std::min(OPTIX_MAX_RAYS, ctx->stream_geometries->num_features());
+
+  filter(ctx, dim_x);
+  refine(ctx, predicate, build_indices, stream_indices);
+}
+
+void SpatialJoiner::handleBuildPointStreamBox(SpatialJoinerContext* ctx,
+                                              Predicate predicate,
+                                              std::vector<uint32_t>* build_indices,
+                                              std::vector<uint32_t>* stream_indices) {
+  allocateResultBuffer(ctx);
+
+  ctx->shader_id = GetPointQueryShaderId<point_t>();
+  assert(build_geometries_->get_geometry_type() == GeometryType::kPoint);
+
+  using launch_params_t = detail::LaunchParamsPointQuery<point_t>;
+  ctx->launch_params_buffer =
+      std::make_unique<rmm::device_buffer>(sizeof(launch_params_t), ctx->cuda_stream);
+  ctx->h_launch_params_buffer.resize(sizeof(launch_params_t));
+  auto& launch_params = *(launch_params_t*)ctx->h_launch_params_buffer.data();
+
+  // ctx->stream_geometries->get_mbrs();
+  GeometryGrouper<point_t, index_t> grouper;
+  grouper.Group(ctx->cuda_stream, *ctx->stream_geometries, config_.n_geoms_per_aabb);
+
+  auto handle = buildBVH(ctx->cuda_stream, grouper.get_aabbs(), ctx->bvh_buffer);
+
+  launch_params.aabbs1 = grouper.get_aabbs();
+  launch_params.prefix_sum = grouper.get_prefix_sum();
+  launch_params.reordered_indices = grouper.get_reordered_indices();
+  launch_params.mbrs1 = ctx->stream_geometries->get_mbrs();
+  launch_params.points2 = build_geometries_->get_points();
+  launch_params.handle = handle;
+  launch_params.ids = ctx->results.DeviceObject();
+  CUDA_CHECK(cudaMemcpyAsync(ctx->launch_params_buffer->data(), &launch_params,
+                             sizeof(launch_params_t), cudaMemcpyHostToDevice,
+                             ctx->cuda_stream));
+
+  uint32_t dim_x = std::min(OPTIX_MAX_RAYS, build_geometries_->num_features());
+
+  filter(ctx, dim_x, true);
+  refine(ctx, predicate, build_indices, stream_indices);
+}
+
+void SpatialJoiner::handleBuildBoxStreamBox(SpatialJoinerContext* ctx,
+                                            Predicate predicate,
+                                            std::vector<uint32_t>* build_indices,
+                                            std::vector<uint32_t>* stream_indices) {
   allocateResultBuffer(ctx);
 
   // forward cast: cast rays from stream geometries with the BVH of build geometries
   {
-    auto dim_x = std::min(OPTIX_MAX_RAYS, ctx->stream_geometries->get_mbrs().size());
+    auto dim_x = std::min(OPTIX_MAX_RAYS, ctx->stream_geometries->num_features());
 
     prepareLaunchParamsBoxQuery(ctx, true);
     filter(ctx, dim_x);
@@ -255,7 +354,7 @@ void SpatialJoiner::handleStreamBoxes(SpatialJoinerContext* ctx, Predicate predi
 
   // backward cast: cast rays from the build geometries with the BVH of stream geometries
   {
-    auto dim_x = std::min(OPTIX_MAX_RAYS, build_geometries_->get_mbrs().size());
+    auto dim_x = std::min(OPTIX_MAX_RAYS, build_geometries_->num_features());
     auto v_mbrs = ctx->stream_geometries->get_mbrs();
     rmm::device_uvector<OptixAabb> aabbs(v_mbrs.size(), ctx->cuda_stream);
 
@@ -276,10 +375,10 @@ void SpatialJoiner::handleStreamBoxes(SpatialJoinerContext* ctx, Predicate predi
 OptixTraversableHandle SpatialJoiner::buildBVH(
     const rmm::cuda_stream_view& stream, const ArrayView<OptixAabb>& aabbs,
     std::unique_ptr<rmm::device_uvector<char>>& buffer) {
-  if (buffer == nullptr) {
-    auto buffer_size_bytes = rt_engine_.EstimateMemoryUsageForAABB(
-        aabbs.size(), config_.prefer_fast_build, config_.compact);
+  auto buffer_size_bytes = rt_engine_.EstimateMemoryUsageForAABB(
+      aabbs.size(), config_.prefer_fast_build, config_.compact);
 
+  if (buffer == nullptr || buffer->size() < buffer_size_bytes) {
     buffer = std::make_unique<rmm::device_uvector<char>>(buffer_size_bytes, stream);
   }
 
@@ -308,8 +407,8 @@ void SpatialJoiner::allocateResultBuffer(SpatialJoinerContext* ctx) {
 
   auto reserve_bytes = ceil(avail_bytes * config_.result_buffer_memory_reserve_ratio);
   reserve_bytes = reserve_bytes / config_.concurrency + 1;
-  // two uint32_t for each result pair (build index, stream index) and one uint32_t for the
-  // temp storage
+  // two uint32_t for each result pair (build index, stream index) and one uint32_t for
+  // the temp storage
   uint32_t n_items = reserve_bytes / (2 * sizeof(uint32_t) + sizeof(uint32_t));
 
   ctx->results.Init(ctx->cuda_stream, n_items);
@@ -317,28 +416,6 @@ void SpatialJoiner::allocateResultBuffer(SpatialJoinerContext* ctx) {
 #ifdef GPUSPATIAL_PROFILING
   ctx->alloc_ms += ctx->timer.stop(ctx->cuda_stream);
 #endif
-}
-
-void SpatialJoiner::prepareLaunchParamsPointQuery(SpatialJoinerContext* ctx) {
-  ctx->shader_id = GetPointQueryShaderId<point_t>();
-  assert(ctx->stream_geometries->get_geometry_type() == GeometryType::kPoint);
-
-  using launch_params_t = detail::LaunchParamsPointQuery<point_t>;
-  ctx->launch_params_buffer =
-      std::make_unique<rmm::device_buffer>(sizeof(launch_params_t), ctx->cuda_stream);
-  ctx->h_launch_params_buffer.resize(sizeof(launch_params_t));
-  auto& launch_params = *(launch_params_t*)ctx->h_launch_params_buffer.data();
-
-  launch_params.aabbs1 = geometry_grouper.get_aabbs();
-  launch_params.prefix_sum = geometry_grouper.get_prefix_sum();
-  launch_params.reordered_indices = geometry_grouper.get_reordered_indices();
-  launch_params.mbrs1 = build_geometries_->get_mbrs();
-  launch_params.points2 = ctx->stream_geometries->get_points();
-  launch_params.handle = handle_;
-  launch_params.ids = ctx->results.DeviceObject();
-  CUDA_CHECK(cudaMemcpyAsync(ctx->launch_params_buffer->data(), &launch_params,
-                             sizeof(launch_params_t), cudaMemcpyHostToDevice,
-                             ctx->cuda_stream));
 }
 
 void SpatialJoiner::prepareLaunchParamsBoxQuery(SpatialJoinerContext* ctx, bool foward) {
@@ -350,9 +427,9 @@ void SpatialJoiner::prepareLaunchParamsBoxQuery(SpatialJoinerContext* ctx, bool 
 
   assert(ctx->stream_geometries->get_geometry_type() != GeometryType::kPoint);
 
-  launch_params.aabbs1 = geometry_grouper.get_aabbs();
-  launch_params.prefix_sum = geometry_grouper.get_prefix_sum();
-  launch_params.reordered_indices = geometry_grouper.get_reordered_indices();
+  launch_params.aabbs1 = geometry_grouper_.get_aabbs();
+  launch_params.prefix_sum = geometry_grouper_.get_prefix_sum();
+  launch_params.reordered_indices = geometry_grouper_.get_reordered_indices();
   launch_params.mbrs1 = build_geometries_->get_mbrs();
   launch_params.mbrs2 = ctx->stream_geometries->get_mbrs();
   if (foward) {
@@ -369,13 +446,31 @@ void SpatialJoiner::prepareLaunchParamsBoxQuery(SpatialJoinerContext* ctx, bool 
                              ctx->cuda_stream));
 }
 
-void SpatialJoiner::filter(SpatialJoinerContext* ctx, uint32_t dim_x) {
+void SpatialJoiner::filter(SpatialJoinerContext* ctx, uint32_t dim_x, bool swap_id) {
 #ifdef GPUSPATIAL_PROFILING
   ctx->timer.start(ctx->cuda_stream);
 #endif
-  rt_engine_.Render(ctx->cuda_stream, ctx->shader_id, dim3{dim_x, 1, 1},
-                    ArrayView<char>((char*)ctx->launch_params_buffer->data(),
-                                    ctx->launch_params_buffer->size()));
+  Stopwatch sw;
+
+  sw.start();
+  if (dim_x > 0) {
+    rt_engine_.Render(ctx->cuda_stream, ctx->shader_id, dim3{dim_x, 1, 1},
+                      ArrayView<char>((char*)ctx->launch_params_buffer->data(),
+                                      ctx->launch_params_buffer->size()));
+  }
+  auto result_size = ctx->results.size(ctx->cuda_stream);
+  sw.stop();
+
+  if (swap_id && result_size > 0) {
+    // swap the pair (build_id, stream_id) to (stream_id, build_id)
+    thrust::transform(rmm::exec_policy_nosync(ctx->cuda_stream), ctx->results.data(),
+                      ctx->results.data() + result_size, ctx->results.data(),
+                      [] __device__(const thrust::pair<uint32_t, uint32_t>& pair)
+                          -> thrust::pair<uint32_t, uint32_t> {
+                        return thrust::make_pair(pair.second, pair.first);
+                      });
+  }
+
 #ifdef GPUSPATIAL_PROFILING
   ctx->filter_ms += ctx->timer.stop(ctx->cuda_stream);
 #endif

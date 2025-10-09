@@ -150,6 +150,14 @@ struct DeviceGeometries {
 
   GeometryType get_geometry_type() const { return type_; }
 
+  size_t num_features() const {
+    if (type_ == GeometryType::kPoint) {
+      return points_->size();
+    } else {
+      return mbrs_->size();
+    }
+  }
+
  private:
   friend class PointSegment<POINT_T>;
   friend class MultiPointSegment<POINT_T, INDEX_T>;

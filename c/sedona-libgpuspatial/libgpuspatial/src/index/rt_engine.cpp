@@ -1,10 +1,14 @@
 #include "gpuspatial/index/detail/rt_engine.hpp"
+
+#include "gpuspatial/utils/cuda_utils.h"
+#include "gpuspatial/utils/exception.h"
+#include "index/shaders/shader_config.h"
+
 // this header provides OPTIX_FUNCTION_TABLE_SYMBOL
 // Only included once in the compilation unit
 #include <optix_function_table_definition.h>
 #include <optix_stack_size.h>
 #include <optix_stubs.h>
-#include <thrust/async/copy.h>
 #include <unistd.h>
 
 #include <filesystem>
@@ -13,9 +17,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "gpuspatial/utils/cuda_utils.h"
-#include "gpuspatial/utils/exception.h"
-#include "index/shaders/shader_config.h"
+#include <rmm/device_scalar.hpp>
 
 namespace {
 // OptiX log callback function
