@@ -1,10 +1,8 @@
 #ifndef GPUSPATIAL_UTILS_ARRAY_VIEW_H
 #define GPUSPATIAL_UTILS_ARRAY_VIEW_H
-#include <thrust/device_vector.h>
-#include <thrust/host_vector.h>
-
 #include "gpuspatial/utils/cuda_utils.h"
 
+#include <thrust/swap.h>
 namespace gpuspatial {
 template <typename T>
 class ArrayView {
