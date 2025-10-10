@@ -342,6 +342,24 @@ def test_dataframe_to_parquet(con):
         )
 
 
+def test_record_batch_reader_projection(con):
+    def batches():
+        for _ in range(3):
+            yield pa.record_batch({"a": ["a", "b", "c"], "b": [1, 2, 3]})
+
+    reader = pa.RecordBatchReader.from_batches(next(batches()).schema, batches())
+    df = con.create_data_frame(reader)
+    df.to_view("temp_rbr_proj", overwrite=True)
+    try:
+        # Query the view with projection (only select column b)
+        proj_df = con.sql("SELECT b FROM temp_rbr_proj")
+        tbl = proj_df.to_arrow_table()
+        assert tbl.column_names == ["b"]
+        assert tbl.to_pydict()["b"] == [1, 2, 3] * 3
+    finally:
+        con.drop_view("temp_rbr_proj")
+
+
 def test_show(con, capsys):
     con.sql("SELECT 1 as one").show()
     expected = """
