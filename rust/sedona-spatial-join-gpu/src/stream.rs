@@ -25,6 +25,7 @@ use arrow_array::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
+use datafusion::physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use futures::stream::Stream;
 
@@ -103,6 +104,12 @@ pub struct GpuSpatialJoinStream {
     /// Right child stream
     right_stream: Option<SendableRecordBatchStream>,
 
+    /// Current left partition being read
+    left_partition_index: usize,
+
+    /// Total number of left partitions
+    left_num_partitions: usize,
+
     /// Partition number to execute
     partition: usize,
 
@@ -152,6 +159,7 @@ impl GpuSpatialJoinStream {
         partition: usize,
         metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Self> {
+        let left_num_partitions = left.output_partitioning().partition_count();
         Ok(Self {
             left,
             right,
@@ -165,6 +173,8 @@ impl GpuSpatialJoinStream {
             right_batches: Vec::new(),
             left_stream: None,
             right_stream: None,
+            left_partition_index: 0,
+            left_num_partitions,
             partition,
             join_metrics: GpuSpatialJoinMetrics::new(partition, metrics),
         })
@@ -199,8 +209,9 @@ impl GpuSpatialJoinStream {
                 }
 
                 GpuJoinState::InitLeftStream => {
-                    log::debug!("Initializing left child stream");
-                    match self.left.execute(0, self.context.clone()) {
+                    log::debug!("Initializing left child stream, partition {} of {}",
+                        self.left_partition_index, self.left_num_partitions);
+                    match self.left.execute(self.left_partition_index, self.context.clone()) {
                         Ok(stream) => {
                             self.left_stream = Some(stream);
                             self.state = GpuJoinState::ReadLeftStream;
@@ -230,11 +241,25 @@ impl GpuSpatialJoinStream {
                             Poll::Ready(None) => {
                                 // Left stream complete
                                 log::debug!(
-                                    "Read {} left batches with total {} rows",
+                                    "Read {} left batches with total {} rows from partition {}",
                                     self.left_batches.len(),
-                                    self.left_batches.iter().map(|b| b.num_rows()).sum::<usize>()
+                                    self.left_batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+                                    self.left_partition_index
                                 );
-                                self.state = GpuJoinState::InitRightStream;
+                                self.left_partition_index += 1;
+                                if self.left_partition_index < self.left_num_partitions {
+                                    // More left partitions to read
+                                    log::debug!("Moving to next left partition {}/{}",
+                                        self.left_partition_index, self.left_num_partitions);
+                                    self.left_stream = None;
+                                    self.state = GpuJoinState::InitLeftStream;
+                                } else {
+                                    // All left partitions read
+                                    log::debug!("All {} left partitions read, total {} rows",
+                                        self.left_num_partitions,
+                                        self.left_batches.iter().map(|b| b.num_rows()).sum::<usize>());
+                                    self.state = GpuJoinState::InitRightStream;
+                                }
                             }
                             Poll::Pending => {
                                 return Poll::Pending;
