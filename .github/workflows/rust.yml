@@ -91,7 +91,7 @@ jobs:
         with:
           path: vcpkg/packages
           # Bump the number at the end of this line to force a new dependency build
-          key: vcpkg-installed-${{ runner.os }}-${{ runner.arch }}-${{ env.VCPKG_REF }}-1
+          key: vcpkg-installed-${{ runner.os }}-${{ runner.arch }}-${{ env.VCPKG_REF }}-2
 
       - name: Install vcpkg dependencies
         if: steps.cache-vcpkg.outputs.cache-hit != 'true'
@@ -106,10 +106,11 @@ jobs:
         run: |
           rustup toolchain install stable --no-self-update
           rustup default stable
+
       - uses: Swatinem/rust-cache@v2
         with:
           # Update this key to force a new cache
-          prefix-key: "rust-${{ matrix.name }}-v3"
+          prefix-key: "rust-${{ matrix.name }}-v4"
 
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
