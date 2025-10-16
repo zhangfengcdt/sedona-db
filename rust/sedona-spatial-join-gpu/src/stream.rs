@@ -28,6 +28,7 @@ use datafusion::physical_plan::{ExecutionPlan, RecordBatchStream, SendableRecord
 use datafusion::physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use futures::stream::Stream;
+use futures::FutureExt;
 
 use crate::config::GpuSpatialJoinConfig;
 use crate::gpu_backend::GpuBackend;
@@ -68,17 +69,11 @@ impl GpuSpatialJoinMetrics {
 }
 
 pub struct GpuSpatialJoinStream {
-    /// Left child execution plan
-    left: Arc<dyn ExecutionPlan>,
-
-    /// Right child execution plan
+    /// Right child execution plan (probe side)
     right: Arc<dyn ExecutionPlan>,
 
     /// Output schema
     schema: SchemaRef,
-
-    /// Join configuration
-    config: GpuSpatialJoinConfig,
 
     /// Task context
     context: Arc<TaskContext>,
@@ -92,35 +87,20 @@ pub struct GpuSpatialJoinStream {
     /// Result batches to emit
     result_batches: VecDeque<RecordBatch>,
 
-    /// Left side batches (accumulated before GPU transfer)
-    left_batches: Vec<RecordBatch>,
-
     /// Right side batches (accumulated before GPU transfer)
     right_batches: Vec<RecordBatch>,
 
-    /// Left child stream
-    left_stream: Option<SendableRecordBatchStream>,
-
     /// Right child stream
     right_stream: Option<SendableRecordBatchStream>,
-
-    /// Current left partition being read
-    left_partition_index: usize,
-
-    /// Total number of left partitions
-    left_num_partitions: usize,
-
-    /// Current right partition being read
-    right_partition_index: usize,
-
-    /// Total number of right partitions
-    right_num_partitions: usize,
 
     /// Partition number to execute
     partition: usize,
 
     /// Metrics for this join operation
     join_metrics: GpuSpatialJoinMetrics,
+
+    /// Shared build data (left side) from build phase
+    once_build_data: crate::once_fut::OnceFut<crate::build_data::GpuBuildData>,
 }
 
 /// State machine for GPU spatial join execution
@@ -129,19 +109,13 @@ enum GpuJoinState {
     /// Initialize GPU context
     Init,
 
-    /// Initialize left child stream
-    InitLeftStream,
-
-    /// Reading batches from left stream
-    ReadLeftStream,
-
     /// Initialize right child stream
     InitRightStream,
 
     /// Reading batches from right stream
     ReadRightStream,
 
-    /// Execute GPU spatial join
+    /// Execute GPU spatial join (awaits left-side build data)
     ExecuteGpuJoin,
 
     /// Emit result batches
@@ -155,38 +129,49 @@ enum GpuJoinState {
 }
 
 impl GpuSpatialJoinStream {
-    /// Create a new GPU spatial join stream
-    pub fn new(
-        left: Arc<dyn ExecutionPlan>,
+    /// Create a new GPU spatial join stream for probe phase
+    ///
+    /// This constructor is called per output partition and creates a stream that:
+    /// 1. Awaits shared left-side build data from once_build_data
+    /// 2. Reads the right partition specified by `partition` parameter
+    /// 3. Executes GPU join between shared left data and this partition's right data
+    pub fn new_probe(
+        once_build_data: crate::once_fut::OnceFut<crate::build_data::GpuBuildData>,
         right: Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
-        config: GpuSpatialJoinConfig,
         context: Arc<TaskContext>,
         partition: usize,
         metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Self> {
-        let left_num_partitions = left.output_partitioning().partition_count();
-        let right_num_partitions = right.output_partitioning().partition_count();
         Ok(Self {
-            left,
             right,
             schema,
-            config,
             context,
             gpu_backend: None,
             state: GpuJoinState::Init,
             result_batches: VecDeque::new(),
-            left_batches: Vec::new(),
             right_batches: Vec::new(),
-            left_stream: None,
             right_stream: None,
-            left_partition_index: 0,
-            left_num_partitions,
-            right_partition_index: 0,
-            right_num_partitions,
             partition,
             join_metrics: GpuSpatialJoinMetrics::new(partition, metrics),
+            once_build_data,
         })
+    }
+
+    /// Create a new GPU spatial join stream (deprecated - use new_probe)
+    #[deprecated(note = "Use new_probe instead")]
+    pub fn new(
+        _left: Arc<dyn ExecutionPlan>,
+        _right: Arc<dyn ExecutionPlan>,
+        _schema: SchemaRef,
+        _config: GpuSpatialJoinConfig,
+        _context: Arc<TaskContext>,
+        _partition: usize,
+        _metrics: &ExecutionPlanMetricsSet,
+    ) -> Result<Self> {
+        Err(DataFusionError::Internal(
+            "GpuSpatialJoinStream::new is deprecated, use new_probe instead".into()
+        ))
     }
 
     /// Poll the stream for next batch
@@ -198,93 +183,20 @@ impl GpuSpatialJoinStream {
                     match self.initialize_gpu() {
                         Ok(()) => {
                             log::debug!("GPU backend initialized successfully");
-                            self.state = GpuJoinState::InitLeftStream;
+                            self.state = GpuJoinState::InitRightStream;
                         }
                         Err(e) => {
-                            if self.config.fallback_to_cpu {
-                                log::warn!("GPU initialization failed: {}, falling back to CPU", e);
-                                self.state = GpuJoinState::Failed(format!(
-                                    "GPU initialization failed (fallback to CPU): {}",
-                                    e
-                                ));
-                                return Poll::Ready(Some(Err(e)));
-                            } else {
-                                log::error!("GPU initialization failed: {}", e);
-                                self.state = GpuJoinState::Failed(e.to_string());
-                                return Poll::Ready(Some(Err(e)));
-                            }
-                        }
-                    }
-                }
-
-                GpuJoinState::InitLeftStream => {
-                    log::debug!("Initializing left child stream, partition {} of {}",
-                        self.left_partition_index, self.left_num_partitions);
-                    match self.left.execute(self.left_partition_index, self.context.clone()) {
-                        Ok(stream) => {
-                            self.left_stream = Some(stream);
-                            self.state = GpuJoinState::ReadLeftStream;
-                        }
-                        Err(e) => {
-                            log::error!("Failed to execute left child: {}", e);
+                            // Note: fallback_to_cpu config is in GpuBuildData, will be checked in ExecuteGpuJoin
+                            log::error!("GPU initialization failed: {}", e);
                             self.state = GpuJoinState::Failed(e.to_string());
                             return Poll::Ready(Some(Err(e)));
                         }
                     }
                 }
 
-                GpuJoinState::ReadLeftStream => {
-                    if let Some(stream) = &mut self.left_stream {
-                        match Pin::new(stream).poll_next(_cx) {
-                            Poll::Ready(Some(Ok(batch))) => {
-                                log::debug!("Received left batch with {} rows", batch.num_rows());
-                                self.left_batches.push(batch);
-                                // Continue reading more batches
-                                continue;
-                            }
-                            Poll::Ready(Some(Err(e))) => {
-                                log::error!("Error reading left stream: {}", e);
-                                self.state = GpuJoinState::Failed(e.to_string());
-                                return Poll::Ready(Some(Err(e)));
-                            }
-                            Poll::Ready(None) => {
-                                // Left stream complete
-                                log::debug!(
-                                    "Read {} left batches with total {} rows from partition {}",
-                                    self.left_batches.len(),
-                                    self.left_batches.iter().map(|b| b.num_rows()).sum::<usize>(),
-                                    self.left_partition_index
-                                );
-                                self.left_partition_index += 1;
-                                if self.left_partition_index < self.left_num_partitions {
-                                    // More left partitions to read
-                                    log::debug!("Moving to next left partition {}/{}",
-                                        self.left_partition_index, self.left_num_partitions);
-                                    self.left_stream = None;
-                                    self.state = GpuJoinState::InitLeftStream;
-                                } else {
-                                    // All left partitions read
-                                    log::debug!("All {} left partitions read, total {} rows",
-                                        self.left_num_partitions,
-                                        self.left_batches.iter().map(|b| b.num_rows()).sum::<usize>());
-                                    self.state = GpuJoinState::InitRightStream;
-                                }
-                            }
-                            Poll::Pending => {
-                                return Poll::Pending;
-                            }
-                        }
-                    } else {
-                        self.state = GpuJoinState::Failed("Left stream not initialized".into());
-                        return Poll::Ready(Some(Err(DataFusionError::Execution(
-                            "Left stream not initialized".into(),
-                        ))));
-                    }
-                }
-
                 GpuJoinState::InitRightStream => {
-                    log::debug!("Initializing right child stream, partition {} of {}", self.right_partition_index, self.right_num_partitions);
-                    match self.right.execute(self.right_partition_index, self.context.clone()) {
+                    log::debug!("Initializing right child stream for partition {}", self.partition);
+                    match self.right.execute(self.partition, self.context.clone()) {
                         Ok(stream) => {
                             self.right_stream = Some(stream);
                             self.state = GpuJoinState::ReadRightStream;
@@ -312,27 +224,15 @@ impl GpuSpatialJoinStream {
                                 return Poll::Ready(Some(Err(e)));
                             }
                             Poll::Ready(None) => {
-                                // Right stream complete
+                                // Right stream complete for this partition
                                 log::debug!(
                                     "Read {} right batches with total {} rows from partition {}",
                                     self.right_batches.len(),
                                     self.right_batches.iter().map(|b| b.num_rows()).sum::<usize>(),
-                                    self.right_partition_index
+                                    self.partition
                                 );
-                                self.right_partition_index += 1;
-                                if self.right_partition_index < self.right_num_partitions {
-                                    // More right partitions to read
-                                    log::debug!("Moving to next right partition {}/{}",
-                                        self.right_partition_index, self.right_num_partitions);
-                                    self.right_stream = None;
-                                    self.state = GpuJoinState::InitRightStream;
-                                } else {
-                                    // All right partitions read
-                                    log::debug!("All {} right partitions read, total {} rows",
-                                        self.right_num_partitions,
-                                        self.right_batches.iter().map(|b| b.num_rows()).sum::<usize>());
-                                    self.state = GpuJoinState::ExecuteGpuJoin;
-                                }
+                                // Move to execute GPU join with this partition's right data
+                                self.state = GpuJoinState::ExecuteGpuJoin;
                             }
                             Poll::Pending => {
                                 return Poll::Pending;
@@ -347,9 +247,22 @@ impl GpuSpatialJoinStream {
                 }
 
                 GpuJoinState::ExecuteGpuJoin => {
-                    log::info!("Executing GPU spatial join");
+                    log::info!("Awaiting build data and executing GPU spatial join");
 
-                    match self.execute_gpu_join() {
+                    // Poll the shared build data future
+                    let build_data = match futures::ready!(self.once_build_data.get_shared(_cx)) {
+                        Ok(data) => data,
+                        Err(e) => {
+                            log::error!("Failed to get build data: {}", e);
+                            self.state = GpuJoinState::Failed(e.to_string());
+                            return Poll::Ready(Some(Err(e)));
+                        }
+                    };
+
+                    log::debug!("Build data received: {} left rows", build_data.left_row_count);
+
+                    // Execute GPU join with build data
+                    match self.execute_gpu_join_with_build_data(&build_data) {
                         Ok(()) => {
                             log::info!(
                                 "GPU join completed, produced {} result batches",
@@ -390,7 +303,9 @@ impl GpuSpatialJoinStream {
 
     /// Initialize GPU backend
     fn initialize_gpu(&mut self) -> Result<()> {
-        let mut backend = GpuBackend::new(self.config.device_id)
+        // Use device 0 by default - actual device config is in GpuBuildData
+        // but we need to initialize GPU context early in the Init state
+        let mut backend = GpuBackend::new(0)
             .map_err(|e| DataFusionError::Execution(format!("GPU backend creation failed: {}", e)))?;
         backend.init()
             .map_err(|e| DataFusionError::Execution(format!("GPU initialization failed: {}", e)))?;
@@ -398,17 +313,19 @@ impl GpuSpatialJoinStream {
         Ok(())
     }
 
-
-    /// Execute GPU spatial join
-    fn execute_gpu_join(&mut self) -> Result<()> {
+    /// Execute GPU spatial join with build data
+    fn execute_gpu_join_with_build_data(&mut self, build_data: &crate::build_data::GpuBuildData) -> Result<()> {
         let gpu_backend = self.gpu_backend.as_mut().ok_or_else(|| {
             DataFusionError::Execution("GPU backend not initialized".into())
         })?;
 
+        let left_batch = build_data.left_batch();
+        let config = build_data.config();
+
         // Check if we have data to join
-        if self.left_batches.is_empty() || self.right_batches.is_empty() {
-            log::warn!("No data to join (left: {}, right: {})",
-                self.left_batches.len(), self.right_batches.len());
+        if left_batch.num_rows() == 0 || self.right_batches.is_empty() {
+            log::warn!("No data to join (left: {} rows, right: {} batches)",
+                left_batch.num_rows(), self.right_batches.len());
             // Create empty result with correct schema
             let empty_batch = RecordBatch::new_empty(self.schema.clone());
             self.result_batches.push_back(empty_batch);
@@ -416,24 +333,15 @@ impl GpuSpatialJoinStream {
         }
 
         let _join_timer = self.join_metrics.join_time.timer();
-        
+
         log::info!(
-            "Processing GPU join with {} left batches and {} right batches",
-            self.left_batches.len(),
+            "Processing GPU join with {} left rows and {} right batches",
+            left_batch.num_rows(),
             self.right_batches.len()
         );
 
-        // Concatenate all left batches into one batch
-        let _concat_timer = self.join_metrics.concat_time.timer();
-        let left_batch = if self.left_batches.len() == 1 {
-            self.left_batches[0].clone()
-        } else {
-            let schema = self.left_batches[0].schema();
-            arrow::compute::concat_batches(&schema, &self.left_batches)
-                .map_err(|e| DataFusionError::Execution(format!("Failed to concatenate left batches: {}", e)))?
-        };
-
         // Concatenate all right batches into one batch
+        let _concat_timer = self.join_metrics.concat_time.timer();
         let right_batch = if self.right_batches.len() == 1 {
             self.right_batches[0].clone()
         } else {
@@ -443,7 +351,7 @@ impl GpuSpatialJoinStream {
         };
 
         log::info!(
-            "Concatenated batches: {} left rows, {} right rows",
+            "Using build data: {} left rows, {} right rows",
             left_batch.num_rows(),
             right_batch.num_rows()
         );
@@ -453,13 +361,13 @@ impl GpuSpatialJoinStream {
         // Execute GPU spatial join on concatenated batches
         let _gpu_kernel_timer = self.join_metrics.gpu_kernel_time.timer();
         let result_batch = gpu_backend.spatial_join(
-            &left_batch,
+            left_batch,
             &right_batch,
-            self.config.left_geom_column.index,
-            self.config.right_geom_column.index,
-            self.config.predicate.into(),
+            config.left_geom_column.index,
+            config.right_geom_column.index,
+            config.predicate.into(),
         ).map_err(|e| {
-            if self.config.fallback_to_cpu {
+            if config.fallback_to_cpu {
                 log::warn!("GPU join failed: {}, should fallback to CPU", e);
             }
             DataFusionError::Execution(format!("GPU spatial join execution failed: {}", e))
