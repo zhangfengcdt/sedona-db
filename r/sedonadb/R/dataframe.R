@@ -67,6 +67,13 @@ as_sedonadb_dataframe.nanoarrow_array_stream <- function(x, ..., schema = NULL,
   as_sedonadb_dataframe(new_sedonadb_dataframe(ctx, df), schema = schema)
 }
 
+#' @export
+as_sedonadb_dataframe.datafusion_table_provider <- function(x, ..., schema = NULL) {
+  ctx <- ctx()
+  df <- ctx$data_frame_from_table_provider(x)
+  new_sedonadb_dataframe(ctx, df)
+}
+
 #' Count rows in a DataFrame
 #'
 #' @param .data A sedonadb_dataframe
@@ -297,9 +304,13 @@ infer_nanoarrow_schema.sedonadb_dataframe <- function(x, ...) {
 
 #' @importFrom nanoarrow as_nanoarrow_array_stream
 #' @export
-as_nanoarrow_array_stream.sedonadb_dataframe <- function(x, ...) {
+as_nanoarrow_array_stream.sedonadb_dataframe <- function(x, ..., schema = NULL) {
+  if (!is.null(schema)) {
+    schema <- nanoarrow::as_nanoarrow_schema(schema)
+  }
+
   stream <- nanoarrow::nanoarrow_allocate_array_stream()
-  x$df$to_arrow_stream(stream)
+  x$df$to_arrow_stream(stream, schema)
   stream
 }
 

@@ -5223,6 +5223,7 @@ dependencies = [
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
+ "datafusion-ffi",
  "savvy",
  "savvy-ffi",
  "sedona",

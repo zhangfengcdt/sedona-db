@@ -24,7 +24,8 @@ use datafusion::catalog::MemTable;
 use datafusion::{logical_expr::SortExpr, prelude::DataFrame};
 use datafusion_common::Column;
 use datafusion_expr::Expr;
-use savvy::{savvy, savvy_err, Result};
+use datafusion_ffi::table_provider::FFI_TableProvider;
+use savvy::{savvy, savvy_err, IntoExtPtrSexp, Result};
 use sedona::context::{SedonaDataFrame, SedonaWriteOptions};
 use sedona::reader::SedonaStreamReader;
 use sedona::show::{DisplayMode, DisplayTableOptions};
@@ -33,6 +34,7 @@ use sedona_schema::schema::SedonaSchema;
 use tokio::runtime::Runtime;
 
 use crate::context::InternalContext;
+use crate::ffi::{import_schema, FFITableProviderR};
 use crate::runtime::wait_for_future_captured_r;
 
 #[savvy]
@@ -86,10 +88,20 @@ impl InternalDataFrame {
         Ok(())
     }
 
-    fn to_arrow_stream(&self, out: savvy::Sexp) -> Result<()> {
+    fn to_arrow_stream(&self, out: savvy::Sexp, requested_schema_xptr: savvy::Sexp) -> Result<()> {
         let out_void = unsafe { savvy_ffi::R_ExternalPtrAddr(out.0) };
         if out_void.is_null() {
             return Err(savvy_err!("external pointer to null in to_arrow_stream()"));
+        }
+
+        let maybe_requested_schema = if requested_schema_xptr.is_null() {
+            None
+        } else {
+            Some(import_schema(requested_schema_xptr))
+        };
+
+        if maybe_requested_schema.is_some() {
+            return Err(savvy_err!("Requested schema is not supported"));
         }
 
         let inner = self.inner.clone();
@@ -107,6 +119,21 @@ impl InternalDataFrame {
         unsafe { swap_nonoverlapping(&mut ffi_stream, ffi_out, 1) };
 
         Ok(())
+    }
+
+    fn to_provider(&self) -> Result<savvy::Sexp> {
+        let provider = self.inner.clone().into_view();
+        // Literal true is because the TableProvider that wraps this DataFrame
+        // can support filters being pushed down.
+        let ffi_provider =
+            FFI_TableProvider::new(provider, true, Some(self.runtime.handle().clone()));
+
+        let mut ffi_xptr = FFITableProviderR(ffi_provider).into_external_pointer();
+        unsafe { savvy_ffi::Rf_protect(ffi_xptr.0) };
+        ffi_xptr.set_class(vec!["datafusion_table_provider"])?;
+        unsafe { savvy_ffi::Rf_unprotect(1) };
+
+        Ok(ffi_xptr)
     }
 
     fn compute(&self, ctx: &InternalContext) -> Result<InternalDataFrame> {
