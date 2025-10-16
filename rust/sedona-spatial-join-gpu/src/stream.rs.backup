@@ -110,12 +110,6 @@ pub struct GpuSpatialJoinStream {
     /// Total number of left partitions
     left_num_partitions: usize,
 
-    /// Current right partition being read
-    right_partition_index: usize,
-
-    /// Total number of right partitions
-    right_num_partitions: usize,
-
     /// Partition number to execute
     partition: usize,
 
@@ -166,7 +160,6 @@ impl GpuSpatialJoinStream {
         metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Self> {
         let left_num_partitions = left.output_partitioning().partition_count();
-        let right_num_partitions = right.output_partitioning().partition_count();
         Ok(Self {
             left,
             right,
@@ -182,8 +175,6 @@ impl GpuSpatialJoinStream {
             right_stream: None,
             left_partition_index: 0,
             left_num_partitions,
-            right_partition_index: 0,
-            right_num_partitions,
             partition,
             join_metrics: GpuSpatialJoinMetrics::new(partition, metrics),
         })
@@ -283,8 +274,8 @@ impl GpuSpatialJoinStream {
                 }
 
                 GpuJoinState::InitRightStream => {
-                    log::debug!("Initializing right child stream, partition {} of {}", self.right_partition_index, self.right_num_partitions);
-                    match self.right.execute(self.right_partition_index, self.context.clone()) {
+                    log::debug!("Initializing right child stream for partition {}", self.partition);
+                    match self.right.execute(self.partition, self.context.clone()) {
                         Ok(stream) => {
                             self.right_stream = Some(stream);
                             self.state = GpuJoinState::ReadRightStream;
@@ -314,25 +305,11 @@ impl GpuSpatialJoinStream {
                             Poll::Ready(None) => {
                                 // Right stream complete
                                 log::debug!(
-                                    "Read {} right batches with total {} rows from partition {}",
+                                    "Read {} right batches with total {} rows",
                                     self.right_batches.len(),
-                                    self.right_batches.iter().map(|b| b.num_rows()).sum::<usize>(),
-                                    self.right_partition_index
+                                    self.right_batches.iter().map(|b| b.num_rows()).sum::<usize>()
                                 );
-                                self.right_partition_index += 1;
-                                if self.right_partition_index < self.right_num_partitions {
-                                    // More right partitions to read
-                                    log::debug!("Moving to next right partition {}/{}",
-                                        self.right_partition_index, self.right_num_partitions);
-                                    self.right_stream = None;
-                                    self.state = GpuJoinState::InitRightStream;
-                                } else {
-                                    // All right partitions read
-                                    log::debug!("All {} right partitions read, total {} rows",
-                                        self.right_num_partitions,
-                                        self.right_batches.iter().map(|b| b.num_rows()).sum::<usize>());
-                                    self.state = GpuJoinState::ExecuteGpuJoin;
-                                }
+                                self.state = GpuJoinState::ExecuteGpuJoin;
                             }
                             Poll::Pending => {
                                 return Poll::Pending;
