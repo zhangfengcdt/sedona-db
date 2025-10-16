@@ -41,42 +41,15 @@ impl GpuBackend {
     }
 
     /// Convert BinaryView array to Binary array for GPU processing
+    /// OPTIMIZATION: Use Arrow's optimized cast instead of manual iteration
     fn ensure_binary_array(array: &ArrayRef) -> Result<ArrayRef> {
         match array.data_type() {
             DataType::BinaryView => {
-                // Convert BinaryView to Binary for GPU processing
-                use arrow_array::cast::AsArray;
-                let binary_view = array.as_binary_view();
-
-                // Log first few values for debugging
-                if binary_view.len() > 0 {
-                    for i in 0..binary_view.len().min(3) {
-                        if !binary_view.is_null(i) {
-                            let val = binary_view.value(i);
-                        }
-                    }
-                }
-
-                let binary_array = BinaryArray::from_iter(
-                    (0..binary_view.len()).map(|i| {
-                        if binary_view.is_null(i) {
-                            None
-                        } else {
-                            Some(binary_view.value(i))
-                        }
-                    })
-                );
-
-                // Verify conversion
-                if binary_array.len() > 0 {
-                    for i in 0..binary_array.len().min(3) {
-                        if !binary_array.is_null(i) {
-                            let val = binary_array.value(i);
-                        }
-                    }
-                }
-
-                Ok(Arc::new(binary_array) as ArrayRef)
+                // OPTIMIZATION: Use Arrow's cast which is much faster than manual iteration
+                use arrow::compute::cast;
+                cast(array.as_ref(), &DataType::Binary).map_err(|e| {
+                    crate::Error::Arrow(e)
+                })
             }
             DataType::Binary | DataType::LargeBinary => {
                 // Already in correct format
@@ -158,7 +131,8 @@ impl GpuBackend {
         }
 
         // Perform GPU spatial join
-        match gpu_ctx.spatial_join(left_geom.clone(), right_geom.clone(), predicate) {
+        // OPTIMIZATION: Remove clones - Arc is cheap to clone, but avoid if possible
+        match gpu_ctx.spatial_join(left_geom, right_geom, predicate) {
             Ok((build_indices, stream_indices)) => {
 
                 // Create result record batch from the join indices
@@ -194,13 +168,17 @@ impl GpuBackend {
             return Ok(RecordBatch::new_empty(Arc::new(combined_schema)));
         }
 
-        // Build arrays for left side (build indices)
+// Build arrays for left side (build indices)
+        // OPTIMIZATION: Create index arrays once and reuse for all columns
+        let build_idx_array = UInt32Array::from(build_indices.to_vec());
+        let stream_idx_array = UInt32Array::from(stream_indices.to_vec());
+        
         let mut left_arrays: Vec<ArrayRef> = Vec::new();
         for i in 0..left_batch.num_columns() {
             let column = left_batch.column(i);
             let selected = take(
                 column.as_ref(),
-                &UInt32Array::from(build_indices.to_vec()),
+                &build_idx_array,
                 None,
             )?;
             left_arrays.push(selected);
@@ -212,11 +190,34 @@ impl GpuBackend {
             let column = right_batch.column(i);
             let selected = take(
                 column.as_ref(),
-                &UInt32Array::from(stream_indices.to_vec()),
+                &stream_idx_array,
                 None,
             )?;
             right_arrays.push(selected);
         }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
         // Combine arrays and create schema
         let mut all_arrays = left_arrays;
