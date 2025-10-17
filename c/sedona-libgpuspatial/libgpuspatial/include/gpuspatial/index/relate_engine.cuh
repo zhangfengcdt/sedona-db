@@ -50,6 +50,18 @@ class RelateEngine {
                 const MultiPolygonArrayView<POINT_T, INDEX_T>& geom_array2,
                 Predicate predicate, Queue<thrust::pair<uint32_t, uint32_t>>& ids);
 
+  template <typename GEOM1_ARRAY_VIEW_T, typename GEOM2_ARRAY_VIEW_T>
+  void EvaluatePointPolygonLB(const rmm::cuda_stream_view& stream,
+                              const GEOM1_ARRAY_VIEW_T& geom_array1,
+                              const GEOM2_ARRAY_VIEW_T& geom_array2, Predicate predicate,
+                              Queue<thrust::pair<uint32_t, uint32_t>>& ids);
+
+  template <typename GEOM1_ARRAY_VIEW_T, typename GEOM2_ARRAY_VIEW_T>
+  void EvaluatePolygonPointLB(const rmm::cuda_stream_view& stream,
+                              const GEOM1_ARRAY_VIEW_T& geom_array1,
+                              const GEOM2_ARRAY_VIEW_T& geom_array2, Predicate predicate,
+                              Queue<thrust::pair<uint32_t, uint32_t>>& ids);
+
  private:
   const DeviceGeometries<POINT_T, INDEX_T>* geoms1_;
 };

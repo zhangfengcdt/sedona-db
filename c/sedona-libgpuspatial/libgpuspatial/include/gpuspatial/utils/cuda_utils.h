@@ -1,6 +1,7 @@
 #ifndef UTILS_CUDA_UTILS_H
 #define UTILS_CUDA_UTILS_H
 #define MAX_BLOCK_SIZE (256)
+#define WARP_SIZE (32)
 #if defined(__CUDACC__) || defined(__CUDABE__)
 #define DEV_HOST __device__ __host__
 #define DEV_HOST_INLINE __device__ __host__ __forceinline__

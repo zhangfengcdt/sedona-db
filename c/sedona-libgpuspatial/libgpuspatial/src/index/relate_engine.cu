@@ -3,11 +3,13 @@
 #include "gpuspatial/loader/device_geometries.cuh"
 #include "gpuspatial/relate/predicate.cuh"
 #include "gpuspatial/relate/relate.cuh"
+#include "gpuspatial/relate/relate_block.cuh"
 #include "gpuspatial/relate/relate_warp.cuh"
 #include "gpuspatial/utils/array_view.h"
 #include "gpuspatial/utils/launcher.h"
 #include "gpuspatial/utils/queue.h"
 
+#include <thrust/partition.h>
 #include <thrust/remove.h>
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/exec_policy.hpp>
@@ -77,20 +79,20 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
     }
     case GeometryType::kMultiPoint: {
       using geom2_array_view_t = MultiPointArrayView<POINT_T, INDEX_T>;
-      Evaluate(stream, geoms2.template GetGeometryArrayView<geom2_array_view_t>(),
-               predicate, ids);
+      // Evaluate(stream, geoms2.template GetGeometryArrayView<geom2_array_view_t>(),
+      // predicate, ids);
       break;
     }
     case GeometryType::kLineString: {
       using geom2_array_view_t = LineStringArrayView<POINT_T, INDEX_T>;
-      Evaluate(stream, geoms2.template GetGeometryArrayView<geom2_array_view_t>(),
-               predicate, ids);
+      // Evaluate(stream, geoms2.template GetGeometryArrayView<geom2_array_view_t>(),
+      //          predicate, ids);
       break;
     }
     case GeometryType::kMultiLineString: {
       using geom2_array_view_t = MultiLineStringArrayView<POINT_T, INDEX_T>;
-      Evaluate(stream, geoms2.template GetGeometryArrayView<geom2_array_view_t>(),
-               predicate, ids);
+      // Evaluate(stream, geoms2.template GetGeometryArrayView<geom2_array_view_t>(),
+      //          predicate, ids);
       break;
     }
     case GeometryType::kPolygon: {
@@ -101,8 +103,8 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
     }
     case GeometryType::kMultiPolygon: {
       using geom2_array_view_t = MultiPolygonArrayView<POINT_T, INDEX_T>;
-      Evaluate(stream, geoms2.template GetGeometryArrayView<geom2_array_view_t>(),
-               predicate, ids);
+      // Evaluate(stream, geoms2.template GetGeometryArrayView<geom2_array_view_t>(),
+      // predicate, ids);
       break;
     }
     default:
@@ -123,20 +125,20 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
     }
     case GeometryType::kMultiPoint: {
       using geom1_array_view_t = MultiPointArrayView<POINT_T, INDEX_T>;
-      Evaluate(stream, geoms1_->template GetGeometryArrayView<geom1_array_view_t>(),
-               geom_array2, predicate, ids);
+      // Evaluate(stream, geoms1_->template GetGeometryArrayView<geom1_array_view_t>(),
+      //          geom_array2, predicate, ids);
       break;
     }
     case GeometryType::kLineString: {
       using geom1_array_view_t = LineStringArrayView<POINT_T, INDEX_T>;
-      Evaluate(stream, geoms1_->template GetGeometryArrayView<geom1_array_view_t>(),
-               geom_array2, predicate, ids);
+      // Evaluate(stream, geoms1_->template GetGeometryArrayView<geom1_array_view_t>(),
+      //          geom_array2, predicate, ids);
       break;
     }
     case GeometryType::kMultiLineString: {
       using geom1_array_view_t = MultiLineStringArrayView<POINT_T, INDEX_T>;
-      Evaluate(stream, geoms1_->template GetGeometryArrayView<geom1_array_view_t>(),
-               geom_array2, predicate, ids);
+      // Evaluate(stream, geoms1_->template GetGeometryArrayView<geom1_array_view_t>(),
+      //          geom_array2, predicate, ids);
       break;
     }
     case GeometryType::kPolygon: {
@@ -228,52 +230,7 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
     const PolygonArrayView<POINT_T, INDEX_T>& geom_array1,
     const PointArrayView<POINT_T, INDEX_T>& geom_array2, Predicate predicate,
     Queue<thrust::pair<uint32_t, uint32_t>>& ids) {
-  auto v_ids = ids.DeviceObject();
-  auto ids_size = ids.size(stream);
-  auto invalid_pair = thrust::make_pair(std::numeric_limits<uint32_t>::max(),
-                                        std::numeric_limits<uint32_t>::max());
-  auto n_features = geom_array1.size();
-  auto n_points = geom_array1.get_vertices().size();
-  auto avg_points = (n_points + n_features - 1) / n_features;
-
-  // It's worth to use warp-level parallelism if the average number of points per
-  // polygon is greater than or equal to 32, otherwise we fallback to the general
-  // method.
-  if (avg_points >= 32) {
-    LaunchKernel(stream, [=] __device__() mutable {
-      auto lane_id = threadIdx.x % 32;
-      auto warp_id = threadIdx.x / 32;
-      auto global_warp_id = TID_1D / 32;
-      auto global_n_warps = TOTAL_THREADS_1D / 32;
-      using WarpReduce = cub::WarpReduce<int>;
-      __shared__ WarpReduce::TempStorage temp_storage[MAX_BLOCK_SIZE / 32];
-
-      // each warp takes an AABB
-      for (auto i = global_warp_id; i < ids_size; i += global_n_warps) {
-        const auto& pair = v_ids[i];
-        auto geom1_id = pair.first;
-        auto geom2_id = pair.second;
-        const auto& geom1 = geom_array1[geom1_id];
-        const auto& geom2 = geom_array2[geom2_id];
-
-        auto IM = relate(geom1, geom2, &temp_storage[warp_id]);
-
-        // overwrite the entry that does not match the predicate
-        if (lane_id == 0) {
-          if (!detail::EvaluatePredicate(predicate, IM)) v_ids[i] = invalid_pair;
-        }
-      }
-    });
-    auto end = thrust::remove_if(
-        rmm::exec_policy_nosync(stream), ids.data(), ids.data() + ids_size,
-        [=] __device__(const thrust::pair<uint32_t, uint32_t>& pair) {
-          return pair == invalid_pair;
-        });
-    ids.set_size(stream, end - ids.data());
-  } else {
-    this->Evaluate<PolygonArrayView<POINT_T, INDEX_T>, PointArrayView<POINT_T, INDEX_T>>(
-        stream, geom_array1, geom_array2, predicate, ids);
-  }
+  EvaluatePolygonPointLB(stream, geom_array1, geom_array2, predicate, ids);
 }
 
 template <typename POINT_T, typename INDEX_T>
@@ -282,53 +239,7 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
     const MultiPolygonArrayView<POINT_T, INDEX_T>& geom_array1,
     const PointArrayView<POINT_T, INDEX_T>& geom_array2, Predicate predicate,
     Queue<thrust::pair<uint32_t, uint32_t>>& ids) {
-  auto v_ids = ids.DeviceObject();
-  auto ids_size = ids.size(stream);
-  auto invalid_pair = thrust::make_pair(std::numeric_limits<uint32_t>::max(),
-                                        std::numeric_limits<uint32_t>::max());
-  auto n_features = geom_array1.size();
-  auto n_points = geom_array1.get_vertices().size();
-  auto avg_points = (n_points + n_features - 1) / n_features;
-
-  // It's worth to use warp-level parallelism if the average number of points per
-  // polygon is greater than or equal to 32, otherwise we fallback to the general
-  // method.
-  if (avg_points >= 32) {
-    LaunchKernel(stream, [=] __device__() mutable {
-      auto lane_id = threadIdx.x % 32;
-      auto warp_id = threadIdx.x / 32;
-      auto global_warp_id = TID_1D / 32;
-      auto global_n_warps = TOTAL_THREADS_1D / 32;
-      using WarpReduce = cub::WarpReduce<int>;
-      __shared__ WarpReduce::TempStorage temp_storage[MAX_BLOCK_SIZE / 32];
-
-      // each warp takes an AABB
-      for (auto i = global_warp_id; i < ids_size; i += global_n_warps) {
-        const auto& pair = v_ids[i];
-        auto geom1_id = pair.first;
-        auto geom2_id = pair.second;
-        const auto& geom1 = geom_array1[geom1_id];
-        const auto& geom2 = geom_array2[geom2_id];
-
-        auto IM = relate(geom1, geom2, &temp_storage[warp_id]);
-
-        // overwrite the entry that does not match the predicate
-        if (lane_id == 0) {
-          if (!detail::EvaluatePredicate(predicate, IM)) v_ids[i] = invalid_pair;
-        }
-      }
-    });
-    auto end = thrust::remove_if(
-        rmm::exec_policy_nosync(stream), ids.data(), ids.data() + ids_size,
-        [=] __device__(const thrust::pair<uint32_t, uint32_t>& pair) {
-          return pair == invalid_pair;
-        });
-    ids.set_size(stream, end - ids.data());
-  } else {
-    this->Evaluate<MultiPolygonArrayView<POINT_T, INDEX_T>,
-                   PointArrayView<POINT_T, INDEX_T>>(stream, geom_array1, geom_array2,
-                                                     predicate, ids);
-  }
+  EvaluatePolygonPointLB(stream, geom_array1, geom_array2, predicate, ids);
 }
 
 template <typename POINT_T, typename INDEX_T>
@@ -337,52 +248,7 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
     const PointArrayView<POINT_T, INDEX_T>& geom_array1,
     const PolygonArrayView<POINT_T, INDEX_T>& geom_array2, Predicate predicate,
     Queue<thrust::pair<uint32_t, uint32_t>>& ids) {
-  auto v_ids = ids.DeviceObject();
-  auto ids_size = ids.size(stream);
-  auto invalid_pair = thrust::make_pair(std::numeric_limits<uint32_t>::max(),
-                                        std::numeric_limits<uint32_t>::max());
-  auto n_features = geom_array2.size();
-  auto n_points = geom_array2.get_vertices().size();
-  auto avg_points = (n_points + n_features - 1) / n_features;
-
-  // It's worth to use warp-level parallelism if the average number of points per
-  // polygon is greater than or equal to 32, otherwise we fallback to the general
-  // method.
-  if (avg_points >= 32) {
-    LaunchKernel(stream, [=] __device__() mutable {
-      auto lane_id = threadIdx.x % 32;
-      auto warp_id = threadIdx.x / 32;
-      auto global_warp_id = TID_1D / 32;
-      auto global_n_warps = TOTAL_THREADS_1D / 32;
-      using WarpReduce = cub::WarpReduce<int>;
-      __shared__ WarpReduce::TempStorage temp_storage[MAX_BLOCK_SIZE / 32];
-
-      // each warp takes an AABB
-      for (auto i = global_warp_id; i < ids_size; i += global_n_warps) {
-        const auto& pair = v_ids[i];
-        auto geom1_id = pair.first;
-        auto geom2_id = pair.second;
-        const auto& geom1 = geom_array1[geom1_id];
-        const auto& geom2 = geom_array2[geom2_id];
-
-        auto IM = relate(geom1, geom2, &temp_storage[warp_id]);
-
-        // overwrite the entry that does not match the predicate
-        if (lane_id == 0) {
-          if (!detail::EvaluatePredicate(predicate, IM)) v_ids[i] = invalid_pair;
-        }
-      }
-    });
-    auto end = thrust::remove_if(
-        rmm::exec_policy_nosync(stream), ids.data(), ids.data() + ids_size,
-        [=] __device__(const thrust::pair<uint32_t, uint32_t>& pair) {
-          return pair == invalid_pair;
-        });
-    ids.set_size(stream, end - ids.data());
-  } else {
-    this->Evaluate<PointArrayView<POINT_T, INDEX_T>, PolygonArrayView<POINT_T, INDEX_T>>(
-        stream, geom_array1, geom_array2, predicate, ids);
-  }
+  EvaluatePointPolygonLB(stream, geom_array1, geom_array2, predicate, ids);
 }
 
 template <typename POINT_T, typename INDEX_T>
@@ -391,54 +257,211 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
     const PointArrayView<POINT_T, INDEX_T>& geom_array1,
     const MultiPolygonArrayView<POINT_T, INDEX_T>& geom_array2, Predicate predicate,
     Queue<thrust::pair<uint32_t, uint32_t>>& ids) {
-  auto v_ids = ids.DeviceObject();
+  EvaluatePointPolygonLB(stream, geom_array1, geom_array2, predicate, ids);
+}
+
+template <typename POINT_T, typename INDEX_T>
+template <typename GEOM1_ARRAY_VIEW_T, typename GEOM2_ARRAY_VIEW_T>
+void RelateEngine<POINT_T, INDEX_T>::EvaluatePointPolygonLB(
+    const rmm::cuda_stream_view& stream, const GEOM1_ARRAY_VIEW_T& geom_array1,
+    const GEOM2_ARRAY_VIEW_T& geom_array2, Predicate predicate,
+    Queue<thrust::pair<uint32_t, uint32_t>>& ids) {
   auto ids_size = ids.size(stream);
   auto invalid_pair = thrust::make_pair(std::numeric_limits<uint32_t>::max(),
                                         std::numeric_limits<uint32_t>::max());
-  auto n_features = geom_array2.size();
-  auto n_points = geom_array2.get_vertices().size();
-  auto avg_points = (n_points + n_features - 1) / n_features;
 
-  // It's worth to use warp-level parallelism if the average number of points per
-  // polygon is greater than or equal to 32, otherwise we fallback to the general
-  // method.
-  if (avg_points >= 32) {
-    LaunchKernel(stream, [=] __device__() mutable {
-      auto lane_id = threadIdx.x % 32;
-      auto warp_id = threadIdx.x / 32;
-      auto global_warp_id = TID_1D / 32;
-      auto global_n_warps = TOTAL_THREADS_1D / 32;
-      using WarpReduce = cub::WarpReduce<int>;
-      __shared__ WarpReduce::TempStorage temp_storage[MAX_BLOCK_SIZE / 32];
-
-      // each warp takes an AABB
-      for (auto i = global_warp_id; i < ids_size; i += global_n_warps) {
-        const auto& pair = v_ids[i];
-        auto geom1_id = pair.first;
+  // serial [serial end], use warp [warp end], use block
+  auto serial_end = thrust::partition(
+      rmm::exec_policy_nosync(stream), ids.data(), ids.data() + ids_size,
+      [=] __device__(const thrust::pair<uint32_t, uint32_t>& pair) {
         auto geom2_id = pair.second;
-        const auto& geom1 = geom_array1[geom1_id];
-        const auto& geom2 = geom_array2[geom2_id];
+        auto nv = geom_array2[geom2_id].num_vertices();
+        return nv < WARP_SIZE;
+      });
 
-        auto IM = relate(geom1, geom2, &temp_storage[warp_id]);
+  auto warp_end = thrust::partition(
+      rmm::exec_policy_nosync(stream), serial_end, ids.data() + ids_size,
+      [=] __device__(const thrust::pair<uint32_t, uint32_t>& pair) {
+        auto geom2_id = pair.second;
+        auto nv = geom_array2[geom2_id].num_vertices();
+        return nv < MAX_BLOCK_SIZE;
+      });
 
-        // overwrite the entry that does not match the predicate
-        if (lane_id == 0) {
-          if (!detail::EvaluatePredicate(predicate, IM)) v_ids[i] = invalid_pair;
-        }
+  auto n_serial = thrust::distance(ids.data(), serial_end);
+  auto n_use_warp = thrust::distance(serial_end, warp_end);
+  auto n_use_block = thrust::distance(warp_end, ids.data() + ids_size);
+
+  LaunchKernel(stream, [=] __device__() mutable {
+    using BlockReduce = cub::BlockReduce<int, MAX_BLOCK_SIZE>;
+    __shared__ BlockReduce::TempStorage temp_storage;
+
+    // each warp takes an AABB
+    for (auto i = blockIdx.x; i < n_use_block; i += gridDim.x) {
+      auto& pair = warp_end[i];
+      auto geom1_id = pair.first;
+      auto geom2_id = pair.second;
+      const auto& geom1 = geom_array1[geom1_id];
+      const auto& geom2 = geom_array2[geom2_id];
+
+      auto IM = relate(geom1, geom2, &temp_storage);
+
+      // overwrite the entry that does not match the predicate
+      if (threadIdx.x == 0) {
+        if (!detail::EvaluatePredicate(predicate, IM)) pair = invalid_pair;
       }
-    });
-    auto end = thrust::remove_if(
-        rmm::exec_policy_nosync(stream), ids.data(), ids.data() + ids_size,
-        [=] __device__(const thrust::pair<uint32_t, uint32_t>& pair) {
-          return pair == invalid_pair;
-        });
-    ids.set_size(stream, end - ids.data());
-  } else {
-    this->Evaluate<PointArrayView<POINT_T, INDEX_T>,
-                   MultiPolygonArrayView<POINT_T, INDEX_T>>(stream, geom_array1,
-                                                            geom_array2, predicate, ids);
-  }
+    }
+  });
+
+  LaunchKernel(stream, [=] __device__() mutable {
+    auto lane_id = threadIdx.x % WARP_SIZE;
+    auto warp_id = threadIdx.x / WARP_SIZE;
+    auto global_warp_id = TID_1D / WARP_SIZE;
+    auto global_n_warps = TOTAL_THREADS_1D / WARP_SIZE;
+    using WarpReduce = cub::WarpReduce<int>;
+    __shared__ WarpReduce::TempStorage temp_storage[MAX_BLOCK_SIZE / WARP_SIZE];
+
+    // each warp takes an AABB
+    for (auto i = global_warp_id; i < n_use_warp; i += global_n_warps) {
+      auto& pair = serial_end[i];
+      auto geom1_id = pair.first;
+      auto geom2_id = pair.second;
+      const auto& geom1 = geom_array1[geom1_id];
+      const auto& geom2 = geom_array2[geom2_id];
+
+      auto IM = relate(geom1, geom2, &temp_storage[warp_id]);
+
+      // overwrite the entry that does not match the predicate
+      if (lane_id == 0) {
+        if (!detail::EvaluatePredicate(predicate, IM)) pair = invalid_pair;
+      }
+    }
+  });
+
+  thrust::transform(rmm::exec_policy_nosync(stream), ids.data(), ids.data() + n_serial,
+                    ids.data(),
+                    [=] __device__(const thrust::pair<uint32_t, uint32_t>& pair) {
+                      auto geom1_id = pair.first;
+                      auto geom2_id = pair.second;
+                      const auto& geom1 = geom_array1[geom1_id];
+                      const auto& geom2 = geom_array2[geom2_id];
+
+                      auto IM = relate(geom1, geom2);
+                      if (detail::EvaluatePredicate(predicate, IM)) {
+                        return pair;
+                      } else {
+                        return invalid_pair;
+                      }
+                    });
+
+  auto end = thrust::remove_if(
+      rmm::exec_policy_nosync(stream), ids.data(), ids.data() + ids_size,
+      [=] __device__(const thrust::pair<uint32_t, uint32_t>& pair) {
+        return pair == invalid_pair;
+      });
+  ids.set_size(stream, end - ids.data());
 }
+
+template <typename POINT_T, typename INDEX_T>
+template <typename GEOM1_ARRAY_VIEW_T, typename GEOM2_ARRAY_VIEW_T>
+void RelateEngine<POINT_T, INDEX_T>::EvaluatePolygonPointLB(
+    const rmm::cuda_stream_view& stream, const GEOM1_ARRAY_VIEW_T& geom_array1,
+    const GEOM2_ARRAY_VIEW_T& geom_array2, Predicate predicate,
+    Queue<thrust::pair<uint32_t, uint32_t>>& ids) {
+  auto ids_size = ids.size(stream);
+  auto invalid_pair = thrust::make_pair(std::numeric_limits<uint32_t>::max(),
+                                        std::numeric_limits<uint32_t>::max());
+
+  // serial [serial end], use warp [warp end], use block
+  auto serial_end = thrust::partition(
+      rmm::exec_policy_nosync(stream), ids.data(), ids.data() + ids_size,
+      [=] __device__(const thrust::pair<uint32_t, uint32_t>& pair) {
+        auto geom1_id = pair.first;
+        auto nv = geom_array1[geom1_id].num_vertices();
+        return nv < WARP_SIZE;
+      });
+
+  auto warp_end = thrust::partition(
+      rmm::exec_policy_nosync(stream), serial_end, ids.data() + ids_size,
+      [=] __device__(const thrust::pair<uint32_t, uint32_t>& pair) {
+        auto geom1_id = pair.first;
+        auto nv = geom_array1[geom1_id].num_vertices();
+        return nv < MAX_BLOCK_SIZE;
+      });
+
+  auto n_serial = thrust::distance(ids.data(), serial_end);
+  auto n_use_warp = thrust::distance(serial_end, warp_end);
+  auto n_use_block = thrust::distance(warp_end, ids.data() + ids_size);
+
+  LaunchKernel(stream, [=] __device__() mutable {
+    using BlockReduce = cub::BlockReduce<int, MAX_BLOCK_SIZE>;
+    __shared__ BlockReduce::TempStorage temp_storage;
+
+    // each warp takes an AABB
+    for (auto i = blockIdx.x; i < n_use_block; i += gridDim.x) {
+      auto& pair = warp_end[i];
+      auto geom1_id = pair.first;
+      auto geom2_id = pair.second;
+      const auto& geom1 = geom_array1[geom1_id];
+      const auto& geom2 = geom_array2[geom2_id];
+
+      auto IM = relate(geom1, geom2, &temp_storage);
+
+      // overwrite the entry that does not match the predicate
+      if (threadIdx.x == 0) {
+        if (!detail::EvaluatePredicate(predicate, IM)) pair = invalid_pair;
+      }
+    }
+  });
+
+  LaunchKernel(stream, [=] __device__() mutable {
+    auto lane_id = threadIdx.x % WARP_SIZE;
+    auto warp_id = threadIdx.x / WARP_SIZE;
+    auto global_warp_id = TID_1D / WARP_SIZE;
+    auto global_n_warps = TOTAL_THREADS_1D / WARP_SIZE;
+    using WarpReduce = cub::WarpReduce<int>;
+    __shared__ WarpReduce::TempStorage temp_storage[MAX_BLOCK_SIZE / WARP_SIZE];
+
+    // each warp takes an AABB
+    for (auto i = global_warp_id; i < n_use_warp; i += global_n_warps) {
+      auto& pair = serial_end[i];
+      auto geom1_id = pair.first;
+      auto geom2_id = pair.second;
+      const auto& geom1 = geom_array1[geom1_id];
+      const auto& geom2 = geom_array2[geom2_id];
+
+      auto IM = relate(geom1, geom2, &temp_storage[warp_id]);
+
+      // overwrite the entry that does not match the predicate
+      if (lane_id == 0) {
+        if (!detail::EvaluatePredicate(predicate, IM)) pair = invalid_pair;
+      }
+    }
+  });
+
+  thrust::transform(rmm::exec_policy_nosync(stream), ids.data(), ids.data() + n_serial,
+                    ids.data(),
+                    [=] __device__(const thrust::pair<uint32_t, uint32_t>& pair) {
+                      auto geom1_id = pair.first;
+                      auto geom2_id = pair.second;
+                      const auto& geom1 = geom_array1[geom1_id];
+                      const auto& geom2 = geom_array2[geom2_id];
+
+                      auto IM = relate(geom1, geom2);
+                      if (detail::EvaluatePredicate(predicate, IM)) {
+                        return pair;
+                      } else {
+                        return invalid_pair;
+                      }
+                    });
+
+  auto end = thrust::remove_if(
+      rmm::exec_policy_nosync(stream), ids.data(), ids.data() + ids_size,
+      [=] __device__(const thrust::pair<uint32_t, uint32_t>& pair) {
+        return pair == invalid_pair;
+      });
+  ids.set_size(stream, end - ids.data());
+}
+
 // Explicitly instantiate the template for specific types
 template class RelateEngine<Point<double, 2>, uint32_t>;
 }  // namespace gpuspatial

@@ -54,6 +54,15 @@ class MultiPolygon {
 
   DEV_HOST_INLINE const box_t& get_mbr() const { return mbr_; }
 
+  DEV_HOST_INLINE uint32_t num_vertices() const {
+    uint32_t nv = 0;
+    for (int i = 0; i < num_polygons(); i++) {
+      const auto& poly = get_polygon(i);
+      nv += poly.num_vertices();
+    }
+    return nv;
+  }
+
  private:
   ArrayView<INDEX_T> prefix_sum_parts_;
   ArrayView<INDEX_T> prefix_sum_rings_;
@@ -108,11 +117,17 @@ class MultiPolygonArrayView {
     return {prefix_sum_parts, prefix_sum_rings_, vertices_, mbrs_[i]};
   }
 
-  DEV_HOST_INLINE ArrayView<INDEX_T> get_prefix_sum_geoms() const { return prefix_sum_geoms_; }
+  DEV_HOST_INLINE ArrayView<INDEX_T> get_prefix_sum_geoms() const {
+    return prefix_sum_geoms_;
+  }
 
-  DEV_HOST_INLINE ArrayView<INDEX_T> get_prefix_sum_parts() const { return prefix_sum_parts_; }
+  DEV_HOST_INLINE ArrayView<INDEX_T> get_prefix_sum_parts() const {
+    return prefix_sum_parts_;
+  }
 
-  DEV_HOST_INLINE ArrayView<INDEX_T> get_prefix_sum_rings() const { return prefix_sum_rings_; }
+  DEV_HOST_INLINE ArrayView<INDEX_T> get_prefix_sum_rings() const {
+    return prefix_sum_rings_;
+  }
 
   DEV_HOST_INLINE ArrayView<point_t> get_vertices() const { return vertices_; }
 

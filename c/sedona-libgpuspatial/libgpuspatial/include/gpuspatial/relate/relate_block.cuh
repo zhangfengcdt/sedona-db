@@ -1,12 +1,12 @@
-#ifndef GPUSPATIAL_RELATE_RELATE_WARP_CUH
-#define GPUSPATIAL_RELATE_RELATE_WARP_CUH
+#ifndef GPUSPATIAL_RELATE_RELATE_BLOCK_CUH
+#define GPUSPATIAL_RELATE_RELATE_BLOCK_CUH
 #include "gpuspatial/relate/relate.cuh"
 namespace gpuspatial {
 
 template <typename POINT_T, typename INDEX_T>
-DEV_INLINE int32_t relate(const MultiPoint<POINT_T>& geom1,
-                          const MultiPolygon<POINT_T, INDEX_T>& geom2,
-                          cub::WarpReduce<int>::TempStorage* temp_storage) {
+DEV_INLINE int32_t
+relate(const MultiPoint<POINT_T>& geom1, const MultiPolygon<POINT_T, INDEX_T>& geom2,
+       cub::BlockReduce<int, MAX_BLOCK_SIZE>::TempStorage* temp_storage) {
   uint32_t nloops1;
   uint32_t nloops2;
   int32_t retval = IM__EXTER_EXTER_2D;
@@ -51,6 +51,7 @@ DEV_INLINE int32_t relate(const MultiPoint<POINT_T>& geom1,
           break;
         }
         default: {
+          printf("Error!!\n");
           assert(false);
           return -1; /* error */
         }
@@ -62,16 +63,16 @@ DEV_INLINE int32_t relate(const MultiPoint<POINT_T>& geom1,
 }
 
 template <typename POINT_T, typename INDEX_T>
-DEV_INLINE int32_t relate(const MultiPolygon<POINT_T, INDEX_T>& geom1,
-                          const MultiPoint<POINT_T>& geom2,
-                          cub::WarpReduce<int>::TempStorage* temp_storage) {
+DEV_INLINE int32_t
+relate(const MultiPolygon<POINT_T, INDEX_T>& geom1, const MultiPoint<POINT_T>& geom2,
+       cub::BlockReduce<int, MAX_BLOCK_SIZE>::TempStorage* temp_storage) {
   return IM__TWIST(relate(geom2, geom1, temp_storage));
 }
 
 template <typename POINT_T, typename INDEX_T>
-DEV_INLINE int32_t relate(const POINT_T& geom1,
-                          const MultiPolygon<POINT_T, INDEX_T>& geom2,
-                          cub::WarpReduce<int>::TempStorage* temp_storage) {
+DEV_INLINE int32_t
+relate(const POINT_T& geom1, const MultiPolygon<POINT_T, INDEX_T>& geom2,
+       cub::BlockReduce<int, MAX_BLOCK_SIZE>::TempStorage* temp_storage) {
   MultiPoint<POINT_T> p1;
   if (!geom1.empty()) {
     p1 = {ArrayView<POINT_T>(const_cast<POINT_T*>(&geom1), 1), geom1.get_mbr()};
@@ -80,15 +81,16 @@ DEV_INLINE int32_t relate(const POINT_T& geom1,
 }
 
 template <typename POINT_T, typename INDEX_T>
-DEV_INLINE int32_t relate(const MultiPolygon<POINT_T, INDEX_T>& geom1,
-                          const POINT_T& geom2,
-                          cub::WarpReduce<int>::TempStorage* temp_storage) {
+DEV_INLINE int32_t
+relate(const MultiPolygon<POINT_T, INDEX_T>& geom1, const POINT_T& geom2,
+       cub::BlockReduce<int, MAX_BLOCK_SIZE>::TempStorage* temp_storage) {
   return IM__TWIST(relate(geom2, geom1, temp_storage));
 }
 
 template <typename POINT_T, typename INDEX_T>
-DEV_INLINE int32_t relate(const POINT_T& geom1, const Polygon<POINT_T, INDEX_T>& geom2,
-                          cub::WarpReduce<int>::TempStorage* temp_storage) {
+DEV_INLINE int32_t
+relate(const POINT_T& geom1, const Polygon<POINT_T, INDEX_T>& geom2,
+       cub::BlockReduce<int, MAX_BLOCK_SIZE>::TempStorage* temp_storage) {
   MultiPoint<POINT_T> m1;
   if (!geom1.empty()) {
     m1 = {ArrayView<POINT_T>(const_cast<POINT_T*>(&geom1), 1), geom1.get_mbr()};
@@ -106,10 +108,11 @@ DEV_INLINE int32_t relate(const POINT_T& geom1, const Polygon<POINT_T, INDEX_T>&
 }
 
 template <typename POINT_T, typename INDEX_T>
-DEV_INLINE int32_t relate(const Polygon<POINT_T, INDEX_T>& geom1, const POINT_T& geom2,
-                          cub::WarpReduce<int>::TempStorage* temp_storage) {
+DEV_INLINE int32_t
+relate(const Polygon<POINT_T, INDEX_T>& geom1, const POINT_T& geom2,
+       cub::BlockReduce<int, MAX_BLOCK_SIZE>::TempStorage* temp_storage) {
   return IM__TWIST(relate(geom2, geom1, temp_storage));
 }
 
 }  // namespace gpuspatial
-#endif  // GPUSPATIAL_RELATE_RELATE_WARP_CUH
+#endif  // GPUSPATIAL_RELATE_RELATE_BLOCK_CUH
