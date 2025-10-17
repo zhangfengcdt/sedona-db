@@ -41,26 +41,32 @@ static bool HasSuffix(const std::string& str, const std::string& suffix) {
   return false;
 }
 
+bool StartsWith(const std::string& mainString, const std::string& prefix) {
+  // If the prefix is longer than the main string, it can't be a prefix.
+  if (prefix.length() > mainString.length()) {
+    return false;
+  }
+  // Extract a substring from mainString starting at index 0
+  // with the length of the prefix, and compare it.
+  return mainString.substr(0, prefix.length()) == prefix;
+}
+
 arrow::Status ReadParquetFromS3(
-    const std::string& s3_url, int64_t batch_size,
+    arrow::fs::FileSystem* fs, const std::string& url, int64_t batch_size,
     std::vector<std::shared_ptr<arrow::Array>>& record_batches,
     int max_files = std::numeric_limits<int>::max()) {
   // 1. Initialize S3 Filesystem
 
-  arrow::fs::S3Options options = arrow::fs::S3Options::Defaults();
-
-  ARROW_ASSIGN_OR_RAISE(auto s3fs, arrow::fs::S3FileSystem::Make(options));
-  std::cout << "Successfully initialized S3 filesystem." << std::endl;
+  // std::cout << "Successfully initialized S3 filesystem." << std::endl;
 
   // 2. Create a selector to list all files recursively
   arrow::fs::FileSelector selector;
-  selector.base_dir = s3_url;
+  selector.base_dir = url;
   selector.recursive = true;
 
   // 3. Get the list of FileInfo objects
-  ARROW_ASSIGN_OR_RAISE(auto file_infos, s3fs->GetFileInfo(selector));
-  std::cout << "Found " << file_infos.size() << " total objects in " << s3_url
-            << std::endl;
+  ARROW_ASSIGN_OR_RAISE(auto file_infos, fs->GetFileInfo(selector));
+  std::cout << "Found " << file_infos.size() << " total objects in " << url << std::endl;
 
   ThreadPool pool(MAX_DOWNLOAD_THREADS);
   std::vector<std::future<std::vector<std::shared_ptr<arrow::Array>>>> loading_rb;
@@ -83,10 +89,10 @@ arrow::Status ReadParquetFromS3(
     std::cout << "--- Processing Parquet file: " << path << " ---" << std::endl;
 
     loading_rb.emplace_back(pool.enqueue(
-        [&s3fs, batch_size](
+        [fs, batch_size](
             const arrow::fs::FileInfo& fi) -> std::vector<std::shared_ptr<arrow::Array>> {
           // Open a stream to the S3 file
-          auto input_file = s3fs->OpenInputFile(fi);
+          auto input_file = fs->OpenInputFile(fi);
 
           // Open the Parquet file reader
           auto arrow_reader = parquet::arrow::OpenFile(input_file.ValueOrDie(),
@@ -125,7 +131,8 @@ arrow::Status ReadParquetFromS3(
 }
 
 template <typename FUNC_T>
-arrow::Status ReadParquetFromS3(const std::string& s3_url, FUNC_T fn,
+arrow::Status ReadParquetFromS3(arrow::fs::FileSystem* fs, const std::string& url,
+                                FUNC_T fn,
                                 int max_files = std::numeric_limits<int>::max()) {
   // 1. Initialize S3 Filesystem
 
@@ -136,13 +143,12 @@ arrow::Status ReadParquetFromS3(const std::string& s3_url, FUNC_T fn,
 
   // 2. Create a selector to list all files recursively
   arrow::fs::FileSelector selector;
-  selector.base_dir = s3_url;
+  selector.base_dir = url;
   selector.recursive = true;
 
   // 3. Get the list of FileInfo objects
   ARROW_ASSIGN_OR_RAISE(auto file_infos, s3fs->GetFileInfo(selector));
-  std::cout << "Found " << file_infos.size() << " total objects in " << s3_url
-            << std::endl;
+  std::cout << "Found " << file_infos.size() << " total objects in " << url << std::endl;
 
   int n_read = 0;
   // 4. Iterate through files, filter for Parquet, and read them
@@ -314,10 +320,31 @@ void RunQueries(BenchmarkConfig& config) {
   joiner->Init(joiner_config.get());
   ArrowSchema tmp_schema = MakeSchemaWKB();
 
+  std::shared_ptr<arrow::fs::FileSystem> build_fs, stream_fs;
+
+  if (StartsWith(config.build_file, "s3://")) {
+    arrow::fs::S3Options options = arrow::fs::S3Options::Defaults();
+    auto res = arrow::fs::S3FileSystem::Make(options);
+    build_fs = res.ValueOrDie();
+    config.build_file.erase(0, std::string("s3://").length());
+  } else {
+    build_fs = std::make_shared<arrow::fs::LocalFileSystem>();
+  }
+
+  if (StartsWith(config.stream_file, "s3://")) {
+    arrow::fs::S3Options options = arrow::fs::S3Options::Defaults();
+    auto res = arrow::fs::S3FileSystem::Make(options);
+    stream_fs = res.ValueOrDie();
+    config.stream_file.erase(0, std::string("s3://").length());
+  } else {
+    stream_fs = std::make_shared<arrow::fs::LocalFileSystem>();
+  }
+
   {
     sw.start();
     std::vector<std::shared_ptr<arrow::Array>> record_batches;
-    ARROW_THROW_NOT_OK(ReadParquetFromS3(config.build_file, 256 * 1000, record_batches));
+    ARROW_THROW_NOT_OK(
+        ReadParquetFromS3(build_fs.get(), config.build_file, 256 * 1000, record_batches));
     sw.stop();
     json_download["build_file_time"] = sw.ms();
 
@@ -354,8 +381,8 @@ void RunQueries(BenchmarkConfig& config) {
 
   sw.start();
   std::vector<std::shared_ptr<arrow::Array>> record_batches;
-  ARROW_THROW_NOT_OK(ReadParquetFromS3(config.stream_file, config.batch_size,
-                                       record_batches, config.limit));
+  ARROW_THROW_NOT_OK(ReadParquetFromS3(stream_fs.get(), config.stream_file,
+                                       config.batch_size, record_batches, config.limit));
   sw.stop();
   json_download["stream_file_time"] = sw.ms();
 
