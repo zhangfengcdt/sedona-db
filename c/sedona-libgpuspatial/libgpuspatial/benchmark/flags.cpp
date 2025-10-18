@@ -1,7 +1,7 @@
 #include "flags.hpp"
 
-DEFINE_string(build_file, "", "file path of build side (S3 URL)");
-DEFINE_string(stream_file, "", "file path of stream side (S3 URL)");
+DEFINE_string(build_file, "", "file path of build side (S3 URL or Local)");
+DEFINE_string(stream_file, "", "file path of stream side (S3 URL or Local)");
 DEFINE_string(output_file, "", "file path of output side (local path, optional)");
 DEFINE_string(execution, "rt/geos", "Using which method to run spatial joins");
 DEFINE_int32(batch_size, 262144, "Number of records to read per batch with Arrow");

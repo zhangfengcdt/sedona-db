@@ -65,7 +65,6 @@ TEST(JoinerTest, PIP) {
 
   int64_t build_count = 0;
   spatial_joiner.Init(&config);
-  printf("begin\n");
   for (int i = 0; i < n_row_groups; i++) {
     ASSERT_EQ(ArrowArrayStreamGetNext(poly_stream.get(), build_array.get(), &error),
               NANOARROW_OK);
@@ -84,7 +83,6 @@ TEST(JoinerTest, PIP) {
     build_indices.clear();
     array_indices.clear();
     spatial_joiner.FinishBuilding();
-    printf("group %d\n", i);
     spatial_joiner.PushStream(context.get(), nullptr, stream_array.get(), 0,
                               stream_array->length, Predicate::kContains, &build_indices,
                               &array_indices, array_index_offset);
