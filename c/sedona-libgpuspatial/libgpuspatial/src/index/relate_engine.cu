@@ -262,7 +262,7 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
   geom1_ids.resize(thrust::distance(geom1_ids.begin(), geom1_ids_end), stream);
   geom1_ids.shrink_to_fit(stream);
 
-  printf("start query polygons %lu, ids %u\n", geom1_ids.size(), ids_size);
+  // printf("start query polygons %lu, ids %u\n", geom1_ids.size(), ids_size);
 
   rmm::device_uvector<INDEX_T> seg_begins(0, stream);
   rmm::device_uvector<INDEX_T> seg_polygon_ids(0, stream);
@@ -280,6 +280,8 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
 
   params.polygons = geom_array1;
   params.points = geom_array2;
+  params.polygon_ids = ArrayView<INDEX_T>(geom1_ids);
+  params.ids = ArrayView<thrust::pair<uint32_t, uint32_t>>(ids.data(), ids_size);
   params.seg_begins = ArrayView<INDEX_T>(seg_begins);
   params.seg_polygon_ids = ArrayView<INDEX_T>(seg_polygon_ids);
   params.handle = handle;
@@ -294,6 +296,37 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
                      dim3{ids_size, 1, 1},
                      ArrayView<char>((char*)params_buffer.data(), params_buffer.size()));
   stream.synchronize();
+
+  auto* p_locations = locations.data();
+  auto* p_ids = ids.data();
+
+  auto invalid_pair = thrust::make_pair(std::numeric_limits<uint32_t>::max(),
+                                        std::numeric_limits<uint32_t>::max());
+
+  thrust::transform(rmm::exec_policy_nosync(stream),
+                    thrust::make_counting_iterator<uint32_t>(0),
+                    thrust::make_counting_iterator<uint32_t>(ids_size), ids.data(),
+                    [=] __device__(uint32_t i) {
+                      const auto& pair = p_ids[i];
+                      auto geom1_id = pair.first;
+                      auto geom2_id = pair.second;
+                      const auto& geom1 = geom_array1[geom1_id];
+                      const auto& geom2 = geom_array2[geom2_id];
+
+                      auto IM = relate(geom1, geom2, p_locations[i]);
+                      if (detail::EvaluatePredicate(predicate, IM)) {
+                        return pair;
+                      } else {
+                        return invalid_pair;
+                      }
+                    });
+
+  auto end = thrust::remove_if(
+      rmm::exec_policy_nosync(stream), ids.data(), ids.data() + ids_size,
+      [=] __device__(const thrust::pair<uint32_t, uint32_t>& pair) {
+        return pair == invalid_pair;
+      });
+  ids.set_size(stream, end - ids.data());
   // EvaluatePolygonPointLB(stream, geom_array1, geom_array2, predicate, ids);
 }
 
@@ -599,41 +632,41 @@ OptixTraversableHandle RelateEngine<POINT_T, INDEX_T>::BuildBVH(
   rmm::device_uvector<OptixAabb> aabbs(num_aabbs, stream);
   auto* p_aabbs = aabbs.data();
 
-  thrust::for_each(rmm::exec_policy_nosync(stream),
-                   thrust::make_counting_iterator<uint32_t>(0),
-                   thrust::make_counting_iterator<uint32_t>(polygon_ids.size()),
-                   [=] __device__(uint32_t i) {
-                     auto polygon_id = polygon_ids[i];
-                     const auto& polygon = polygons[polygon_id];
-                     OptixAabb aabb;
+  thrust::for_each(
+      rmm::exec_policy_nosync(stream), thrust::make_counting_iterator<uint32_t>(0),
+      thrust::make_counting_iterator<uint32_t>(polygon_ids.size()),
+      [=] __device__(uint32_t i) {
+        auto polygon_id = polygon_ids[i];
+        const auto& polygon = polygons[polygon_id];
+        OptixAabb aabb;
 
-                     aabb.minZ = aabb.maxZ = i;
-                     int tail = p_seg_begins[i];
+        aabb.minZ = aabb.maxZ = i;
+        int tail = p_seg_begins[i];
 
-                     for (int ring_idx = 0; ring_idx < polygon.num_rings(); ring_idx++) {
-                       auto ring = polygon.get_ring(ring_idx);
-                       for (int seg_idx = 0; seg_idx < ring.num_segments(); seg_idx++) {
-                         const auto& seg = ring.get_line_segment(seg_idx);
-                         const auto& p1 = seg.get_p1();
-                         const auto& p2 = seg.get_p2();
+        for (int ring_idx = 0; ring_idx < polygon.num_rings(); ring_idx++) {
+          auto ring = polygon.get_ring(ring_idx);
+          for (int seg_idx = 0; seg_idx < ring.num_segments(); seg_idx++) {
+            const auto& seg = ring.get_line_segment(seg_idx);
+            const auto& p1 = seg.get_p1();
+            const auto& p2 = seg.get_p2();
 
-                         aabb.minX = std::min(p1.get_coordinate(0), p2.get_coordinate(0));
-                         aabb.maxX = std::max(p1.get_coordinate(0), p2.get_coordinate(0));
-                         aabb.minY = std::min(p1.get_coordinate(1), p2.get_coordinate(1));
-                         aabb.maxY = std::max(p1.get_coordinate(1), p2.get_coordinate(1));
+            aabb.minX = std::min(p1.x(), p2.x());
+            aabb.maxX = std::max(p1.x(), p2.x());
+            aabb.minY = std::min(p1.y(), p2.y());
+            aabb.maxY = std::max(p1.y(), p2.y());
 
-                         if (std::is_same_v<scalar_t, double>) {
-                           aabb.minX = next_float_from_double(aabb.minX, -1, 2);
-                           aabb.maxX = next_float_from_double(aabb.maxX, 1, 2);
-                           aabb.minY = next_float_from_double(aabb.minY, -1, 2);
-                           aabb.maxY = next_float_from_double(aabb.maxY, 1, 2);
-                         }
-                         p_aabbs[tail] = aabb;
-                         p_seg_polygon_ids[tail] = polygon_id;
-                         tail++;
-                       }
-                     }
-                   });
+            if (std::is_same_v<scalar_t, double>) {
+              aabb.minX = next_float_from_double(aabb.minX, -1, 2);
+              aabb.maxX = next_float_from_double(aabb.maxX, 1, 2);
+              aabb.minY = next_float_from_double(aabb.minY, -1, 2);
+              aabb.maxY = next_float_from_double(aabb.maxY, 1, 2);
+            }
+            p_aabbs[tail] = aabb;
+            p_seg_polygon_ids[tail] = polygon_id;
+            tail++;
+          }
+        }
+      });
   assert(rt_engine_ != nullptr);
   return rt_engine_->BuildAccelCustom(stream.value(), ArrayView<OptixAabb>(aabbs),
                                       buffer);

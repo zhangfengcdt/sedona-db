@@ -701,6 +701,38 @@ DEV_HOST_INLINE int32_t relate(const POINT_T& geom1,
 
 template <typename POINT_T, typename INDEX_T>
 DEV_HOST_INLINE int32_t relate(const POINT_T& geom1,
+                               const Polygon<POINT_T, INDEX_T>& geom2,
+                               PointLocation location) {
+  int32_t retval = IM__EXTER_EXTER_2D;
+
+  bool matched = false;
+
+  retval |= IM__EXTER_INTER_2D | IM__EXTER_BOUND_1D;
+
+  /* dive into the polygon */
+  switch (location) {
+    case PointLocation::kInside: {
+      matched = true;
+      retval |= IM__INTER_INTER_0D;
+      break;
+    }
+    case PointLocation::kBoundary: {
+      matched = true;
+      retval |= IM__INTER_BOUND_0D;
+      break;
+    }
+    case PointLocation::kOutside: {
+      break;
+    }
+    default:
+      return -1; /* error */
+  }
+  if (!matched) retval |= IM__INTER_EXTER_0D;
+  return retval;
+}
+
+template <typename POINT_T, typename INDEX_T>
+DEV_HOST_INLINE int32_t relate(const POINT_T& geom1,
                                const MultiPolygon<POINT_T, INDEX_T>& geom2) {
   MultiPoint<POINT_T> p1;
   if (!geom1.empty()) {
@@ -1356,6 +1388,12 @@ template <typename POINT_T, typename INDEX_T>
 DEV_HOST_INLINE int32_t relate(const Polygon<POINT_T, INDEX_T>& geom1,
                                const POINT_T& geom2) {
   return IM__TWIST(relate(geom2, geom1));
+}
+
+template <typename POINT_T, typename INDEX_T>
+DEV_HOST_INLINE int32_t relate(const Polygon<POINT_T, INDEX_T>& geom1,
+                               const POINT_T& geom2, PointLocation location) {
+  return IM__TWIST(relate(geom2, geom1, location));
 }
 
 template <typename POINT_T, typename INDEX_T>

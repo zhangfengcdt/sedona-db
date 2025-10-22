@@ -53,7 +53,7 @@ struct LaunchParamsPolygonPointQuery {
   using index_t = INDEX_T;
   PolygonArrayView<point_t, index_t> polygons;
   PointArrayView<point_t, index_t> points;
-  ArrayView<uint32_t> polygon_ids; // sorted
+  ArrayView<index_t> polygon_ids; // sorted
   ArrayView<thrust::pair<index_t, index_t>> ids;
   ArrayView<index_t> seg_begins;
   ArrayView<index_t> seg_polygon_ids;
