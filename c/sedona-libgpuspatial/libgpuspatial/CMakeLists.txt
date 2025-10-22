@@ -79,6 +79,8 @@ find_package(CUDAToolkit REQUIRED)
 include(src/index/shaders/config_shaders.cmake)
 CONFIG_SHADERS(PTX_FILES)
 
+message("-- Config shader PTX files ${PTX_FILES}")
+
 add_library(gpuspatial src/index/rt_engine.cpp src/index/relate_engine.cu src/index/optix_spatial_index.cu src/index/spatial_joiner.cu ${PTX_FILES})
 
 # Link libraries

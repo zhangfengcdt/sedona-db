@@ -1,3 +1,4 @@
+#include "gpuspatial/index/detail/launch_parameters.h"
 #include "gpuspatial/index/geometry_grouper.hpp"
 #include "gpuspatial/index/relate_engine.cuh"
 #include "gpuspatial/loader/device_geometries.cuh"
@@ -6,11 +7,16 @@
 #include "gpuspatial/relate/relate_block.cuh"
 #include "gpuspatial/relate/relate_warp.cuh"
 #include "gpuspatial/utils/array_view.h"
+#include "gpuspatial/utils/helpers.h"
 #include "gpuspatial/utils/launcher.h"
 #include "gpuspatial/utils/queue.h"
+#include "gpuspatial/utils/stopwatch.h"
+#include "index/shaders/shader_id.hpp"
 
 #include <thrust/partition.h>
 #include <thrust/remove.h>
+#include <thrust/sort.h>
+#include <thrust/unique.h>
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/exec_policy.hpp>
 
@@ -67,6 +73,11 @@ RelateEngine<POINT_T, INDEX_T>::RelateEngine(
     : geoms1_(geoms1) {}
 
 template <typename POINT_T, typename INDEX_T>
+RelateEngine<POINT_T, INDEX_T>::RelateEngine(
+    const DeviceGeometries<POINT_T, INDEX_T>* geoms1, const details::RTEngine* rt_engine)
+    : geoms1_(geoms1), rt_engine_(rt_engine) {}
+
+template <typename POINT_T, typename INDEX_T>
 void RelateEngine<POINT_T, INDEX_T>::Evaluate(
     const rmm::cuda_stream_view& stream, const DeviceGeometries<POINT_T, INDEX_T>& geoms2,
     Predicate predicate, Queue<thrust::pair<uint32_t, uint32_t>>& ids) {
@@ -77,36 +88,36 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
                predicate, ids);
       break;
     }
-    case GeometryType::kMultiPoint: {
-      using geom2_array_view_t = MultiPointArrayView<POINT_T, INDEX_T>;
-      Evaluate(stream, geoms2.template GetGeometryArrayView<geom2_array_view_t>(),
-               predicate, ids);
-      break;
-    }
-    case GeometryType::kLineString: {
-      using geom2_array_view_t = LineStringArrayView<POINT_T, INDEX_T>;
-      Evaluate(stream, geoms2.template GetGeometryArrayView<geom2_array_view_t>(),
-               predicate, ids);
-      break;
-    }
-    case GeometryType::kMultiLineString: {
-      using geom2_array_view_t = MultiLineStringArrayView<POINT_T, INDEX_T>;
-      Evaluate(stream, geoms2.template GetGeometryArrayView<geom2_array_view_t>(),
-               predicate, ids);
-      break;
-    }
-    case GeometryType::kPolygon: {
-      using geom2_array_view_t = PolygonArrayView<POINT_T, INDEX_T>;
-      Evaluate(stream, geoms2.template GetGeometryArrayView<geom2_array_view_t>(),
-               predicate, ids);
-      break;
-    }
-    case GeometryType::kMultiPolygon: {
-      using geom2_array_view_t = MultiPolygonArrayView<POINT_T, INDEX_T>;
-      Evaluate(stream, geoms2.template GetGeometryArrayView<geom2_array_view_t>(),
-               predicate, ids);
-      break;
-    }
+    // case GeometryType::kMultiPoint: {
+    //   using geom2_array_view_t = MultiPointArrayView<POINT_T, INDEX_T>;
+    //   Evaluate(stream, geoms2.template GetGeometryArrayView<geom2_array_view_t>(),
+    //            predicate, ids);
+    //   break;
+    // }
+    // case GeometryType::kLineString: {
+    //   using geom2_array_view_t = LineStringArrayView<POINT_T, INDEX_T>;
+    //   Evaluate(stream, geoms2.template GetGeometryArrayView<geom2_array_view_t>(),
+    //            predicate, ids);
+    //   break;
+    // }
+    // case GeometryType::kMultiLineString: {
+    //   using geom2_array_view_t = MultiLineStringArrayView<POINT_T, INDEX_T>;
+    //   Evaluate(stream, geoms2.template GetGeometryArrayView<geom2_array_view_t>(),
+    //            predicate, ids);
+    //   break;
+    // }
+    // case GeometryType::kPolygon: {
+    //   using geom2_array_view_t = PolygonArrayView<POINT_T, INDEX_T>;
+    //   Evaluate(stream, geoms2.template GetGeometryArrayView<geom2_array_view_t>(),
+    //            predicate, ids);
+    //   break;
+    // }
+    // case GeometryType::kMultiPolygon: {
+    //   using geom2_array_view_t = MultiPolygonArrayView<POINT_T, INDEX_T>;
+    //   Evaluate(stream, geoms2.template GetGeometryArrayView<geom2_array_view_t>(),
+    //            predicate, ids);
+    //   break;
+    // }
     default:
       assert(false);
   }
@@ -117,30 +128,30 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
     const rmm::cuda_stream_view& stream, const GEOM2_ARRAY_VIEW_T& geom_array2,
     Predicate predicate, Queue<thrust::pair<uint32_t, uint32_t>>& ids) {
   switch (geoms1_->get_geometry_type()) {
-    case GeometryType::kPoint: {
-      using geom1_array_view_t = PointArrayView<POINT_T, INDEX_T>;
-      Evaluate(stream, geoms1_->template GetGeometryArrayView<geom1_array_view_t>(),
-               geom_array2, predicate, ids);
-      break;
-    }
-    case GeometryType::kMultiPoint: {
-      using geom1_array_view_t = MultiPointArrayView<POINT_T, INDEX_T>;
-      Evaluate(stream, geoms1_->template GetGeometryArrayView<geom1_array_view_t>(),
-               geom_array2, predicate, ids);
-      break;
-    }
-    case GeometryType::kLineString: {
-      using geom1_array_view_t = LineStringArrayView<POINT_T, INDEX_T>;
-      Evaluate(stream, geoms1_->template GetGeometryArrayView<geom1_array_view_t>(),
-               geom_array2, predicate, ids);
-      break;
-    }
-    case GeometryType::kMultiLineString: {
-      using geom1_array_view_t = MultiLineStringArrayView<POINT_T, INDEX_T>;
-      Evaluate(stream, geoms1_->template GetGeometryArrayView<geom1_array_view_t>(),
-               geom_array2, predicate, ids);
-      break;
-    }
+    // case GeometryType::kPoint: {
+    //   using geom1_array_view_t = PointArrayView<POINT_T, INDEX_T>;
+    //   Evaluate(stream, geoms1_->template GetGeometryArrayView<geom1_array_view_t>(),
+    //            geom_array2, predicate, ids);
+    //   break;
+    // }
+    // case GeometryType::kMultiPoint: {
+    //   using geom1_array_view_t = MultiPointArrayView<POINT_T, INDEX_T>;
+    //   Evaluate(stream, geoms1_->template GetGeometryArrayView<geom1_array_view_t>(),
+    //            geom_array2, predicate, ids);
+    //   break;
+    // }
+    // case GeometryType::kLineString: {
+    //   using geom1_array_view_t = LineStringArrayView<POINT_T, INDEX_T>;
+    //   Evaluate(stream, geoms1_->template GetGeometryArrayView<geom1_array_view_t>(),
+    //            geom_array2, predicate, ids);
+    //   break;
+    // }
+    // case GeometryType::kMultiLineString: {
+    //   using geom1_array_view_t = MultiLineStringArrayView<POINT_T, INDEX_T>;
+    //   Evaluate(stream, geoms1_->template GetGeometryArrayView<geom1_array_view_t>(),
+    //            geom_array2, predicate, ids);
+    //   break;
+    // }
     case GeometryType::kPolygon: {
       using geom1_array_view_t = PolygonArrayView<POINT_T, INDEX_T>;
       Evaluate(stream, geoms1_->template GetGeometryArrayView<geom1_array_view_t>(),
@@ -149,8 +160,8 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
     }
     case GeometryType::kMultiPolygon: {
       using geom1_array_view_t = MultiPolygonArrayView<POINT_T, INDEX_T>;
-      Evaluate(stream, geoms1_->template GetGeometryArrayView<geom1_array_view_t>(),
-               geom_array2, predicate, ids);
+      // Evaluate(stream, geoms1_->template GetGeometryArrayView<geom1_array_view_t>(),
+      // geom_array2, predicate, ids);
       break;
     }
     default:
@@ -230,7 +241,60 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
     const PolygonArrayView<POINT_T, INDEX_T>& geom_array1,
     const PointArrayView<POINT_T, INDEX_T>& geom_array2, Predicate predicate,
     Queue<thrust::pair<uint32_t, uint32_t>>& ids) {
-  EvaluatePolygonPointLB(stream, geom_array1, geom_array2, predicate, ids);
+  auto ids_size = ids.size(stream);
+
+  if (ids_size == 0) {
+    return;
+  }
+  // sort by polygon id
+
+  rmm::device_uvector<uint32_t> geom1_ids(ids_size, stream);
+
+  thrust::transform(
+      rmm::exec_policy_nosync(stream), ids.data(), ids.data() + ids_size,
+      geom1_ids.data(),
+      [] __device__(const thrust::pair<uint32_t, uint32_t>& pair) { return pair.first; });
+
+  thrust::sort(rmm::exec_policy_nosync(stream), geom1_ids.begin(), geom1_ids.end());
+
+  auto geom1_ids_end =
+      thrust::unique(rmm::exec_policy_nosync(stream), geom1_ids.begin(), geom1_ids.end());
+  geom1_ids.resize(thrust::distance(geom1_ids.begin(), geom1_ids_end), stream);
+  geom1_ids.shrink_to_fit(stream);
+
+  printf("start query polygons %lu, ids %u\n", geom1_ids.size(), ids_size);
+
+  rmm::device_uvector<INDEX_T> seg_begins(0, stream);
+  rmm::device_uvector<INDEX_T> seg_polygon_ids(0, stream);
+  rmm::device_buffer bvh_buffer(0, stream);
+  rmm::device_uvector<PointLocation> locations(ids_size, stream);
+  // aabb id -> vertex begin[polygon] + ith point in this polygon
+  auto handle = BuildBVH(stream, geom_array1, ArrayView<INDEX_T>(geom1_ids), seg_begins,
+                         seg_polygon_ids, bvh_buffer);
+
+  stream.synchronize();
+
+  using params_t = detail::LaunchParamsPolygonPointQuery<POINT_T, INDEX_T>;
+
+  params_t params;
+
+  params.polygons = geom_array1;
+  params.points = geom_array2;
+  params.seg_begins = ArrayView<INDEX_T>(seg_begins);
+  params.seg_polygon_ids = ArrayView<INDEX_T>(seg_polygon_ids);
+  params.handle = handle;
+  params.locations = ArrayView<PointLocation>(locations);
+
+  rmm::device_buffer params_buffer(sizeof(params_t), stream);
+
+  CUDA_CHECK(cudaMemcpyAsync(params_buffer.data(), &params, sizeof(params_t),
+                             cudaMemcpyHostToDevice, stream.value()));
+
+  rt_engine_->Render(stream, GetPolygonPointQueryShaderId<POINT_T>(),
+                     dim3{ids_size, 1, 1},
+                     ArrayView<char>((char*)params_buffer.data(), params_buffer.size()));
+  stream.synchronize();
+  // EvaluatePolygonPointLB(stream, geom_array1, geom_array2, predicate, ids);
 }
 
 template <typename POINT_T, typename INDEX_T>
@@ -391,12 +455,37 @@ void RelateEngine<POINT_T, INDEX_T>::EvaluatePolygonPointLB(
   auto n_serial = thrust::distance(ids.data(), serial_end);
   auto n_use_warp = thrust::distance(serial_end, warp_end);
   auto n_use_block = thrust::distance(warp_end, ids.data() + ids_size);
+  Stopwatch sw;
+  double t_block, t_warp, t_serial;
 
+  rmm::device_uvector<uint32_t> geom1_ids(ids_size, stream), geom2_ids(ids_size, stream);
+
+  thrust::transform(
+      rmm::exec_policy_nosync(stream), ids.data(), ids.data() + ids_size,
+      geom1_ids.data(),
+      [] __device__(const thrust::pair<uint32_t, uint32_t>& pair) { return pair.first; });
+
+  thrust::transform(rmm::exec_policy_nosync(stream), ids.data(), ids.data() + ids_size,
+                    geom2_ids.data(),
+                    [] __device__(const thrust::pair<uint32_t, uint32_t>& pair) {
+                      return pair.second;
+                    });
+
+  thrust::sort(rmm::exec_policy_nosync(stream), geom1_ids.begin(), geom1_ids.end());
+  thrust::sort(rmm::exec_policy_nosync(stream), geom2_ids.begin(), geom2_ids.end());
+
+  uint32_t geom1_size = thrust::unique_count(rmm::exec_policy_nosync(stream),
+                                             geom1_ids.begin(), geom1_ids.end());
+  uint32_t geom2_size = thrust::unique_count(rmm::exec_policy_nosync(stream),
+                                             geom2_ids.begin(), geom2_ids.end());
+
+  printf("ids %u, geom1 %u, geom2 %u\n", ids_size, geom1_size, geom2_size);
+
+  sw.start();
   LaunchKernel(stream, [=] __device__() mutable {
     using BlockReduce = cub::BlockReduce<int, MAX_BLOCK_SIZE>;
     __shared__ BlockReduce::TempStorage temp_storage;
 
-    // each warp takes an AABB
     for (auto i = blockIdx.x; i < n_use_block; i += gridDim.x) {
       auto& pair = warp_end[i];
       auto geom1_id = pair.first;
@@ -412,7 +501,11 @@ void RelateEngine<POINT_T, INDEX_T>::EvaluatePolygonPointLB(
       }
     }
   });
+  stream.synchronize();
+  sw.stop();
+  t_block = sw.ms();
 
+  sw.start();
   LaunchKernel(stream, [=] __device__() mutable {
     auto lane_id = threadIdx.x % WARP_SIZE;
     auto warp_id = threadIdx.x / WARP_SIZE;
@@ -437,7 +530,11 @@ void RelateEngine<POINT_T, INDEX_T>::EvaluatePolygonPointLB(
       }
     }
   });
+  stream.synchronize();
+  sw.stop();
+  t_warp = sw.ms();
 
+  sw.start();
   thrust::transform(rmm::exec_policy_nosync(stream), ids.data(), ids.data() + n_serial,
                     ids.data(),
                     [=] __device__(const thrust::pair<uint32_t, uint32_t>& pair) {
@@ -459,7 +556,87 @@ void RelateEngine<POINT_T, INDEX_T>::EvaluatePolygonPointLB(
       [=] __device__(const thrust::pair<uint32_t, uint32_t>& pair) {
         return pair == invalid_pair;
       });
+  stream.synchronize();
+  sw.stop();
+  t_serial = sw.ms();
+  printf("block %lf, warp %lf, serial %lf\n", t_block, t_warp, t_serial);
   ids.set_size(stream, end - ids.data());
+}
+
+template <typename POINT_T, typename INDEX_T>
+OptixTraversableHandle RelateEngine<POINT_T, INDEX_T>::BuildBVH(
+    const rmm::cuda_stream_view& stream,
+    const PolygonArrayView<POINT_T, INDEX_T>& polygons, ArrayView<uint32_t> polygon_ids,
+    rmm::device_uvector<INDEX_T>& seg_begins,
+    rmm::device_uvector<INDEX_T>& seg_polygon_ids, rmm::device_buffer& buffer) {
+  auto n_polygons = polygon_ids.size();
+  rmm::device_uvector<uint32_t> n_segs(n_polygons, stream);
+
+  thrust::transform(rmm::exec_policy_nosync(stream), polygon_ids.begin(),
+                    polygon_ids.end(), n_segs.begin(),
+                    [=] __device__(const uint32_t& id) -> uint32_t {
+                      const auto& polygon = polygons[id];
+                      uint32_t total_segs = 0;
+
+                      for (int ring = 0; ring < polygon.num_rings(); ring++) {
+                        total_segs += polygon.get_ring(ring).num_segments();
+                      }
+                      return total_segs;
+                    });
+
+  seg_begins = std::move(rmm::device_uvector<INDEX_T>(n_polygons + 1, stream));
+  auto* p_seg_begins = seg_begins.data();
+  seg_begins.set_element_to_zero_async(0, stream);
+
+  thrust::inclusive_scan(rmm::exec_policy_nosync(stream), n_segs.begin(), n_segs.end(),
+                         seg_begins.begin() + 1);
+
+  uint32_t num_aabbs = seg_begins.back_element(stream);
+
+  seg_polygon_ids = std::move(rmm::device_uvector<INDEX_T>(num_aabbs, stream));
+  auto* p_seg_polygon_ids = seg_polygon_ids.data();
+
+  rmm::device_uvector<OptixAabb> aabbs(num_aabbs, stream);
+  auto* p_aabbs = aabbs.data();
+
+  thrust::for_each(rmm::exec_policy_nosync(stream),
+                   thrust::make_counting_iterator<uint32_t>(0),
+                   thrust::make_counting_iterator<uint32_t>(polygon_ids.size()),
+                   [=] __device__(uint32_t i) {
+                     auto polygon_id = polygon_ids[i];
+                     const auto& polygon = polygons[polygon_id];
+                     OptixAabb aabb;
+
+                     aabb.minZ = aabb.maxZ = i;
+                     int tail = p_seg_begins[i];
+
+                     for (int ring_idx = 0; ring_idx < polygon.num_rings(); ring_idx++) {
+                       auto ring = polygon.get_ring(ring_idx);
+                       for (int seg_idx = 0; seg_idx < ring.num_segments(); seg_idx++) {
+                         const auto& seg = ring.get_line_segment(seg_idx);
+                         const auto& p1 = seg.get_p1();
+                         const auto& p2 = seg.get_p2();
+
+                         aabb.minX = std::min(p1.get_coordinate(0), p2.get_coordinate(0));
+                         aabb.maxX = std::max(p1.get_coordinate(0), p2.get_coordinate(0));
+                         aabb.minY = std::min(p1.get_coordinate(1), p2.get_coordinate(1));
+                         aabb.maxY = std::max(p1.get_coordinate(1), p2.get_coordinate(1));
+
+                         if (std::is_same_v<scalar_t, double>) {
+                           aabb.minX = next_float_from_double(aabb.minX, -1, 2);
+                           aabb.maxX = next_float_from_double(aabb.maxX, 1, 2);
+                           aabb.minY = next_float_from_double(aabb.minY, -1, 2);
+                           aabb.maxY = next_float_from_double(aabb.maxY, 1, 2);
+                         }
+                         p_aabbs[tail] = aabb;
+                         p_seg_polygon_ids[tail] = polygon_id;
+                         tail++;
+                       }
+                     }
+                   });
+  assert(rt_engine_ != nullptr);
+  return rt_engine_->BuildAccelCustom(stream.value(), ArrayView<OptixAabb>(aabbs),
+                                      buffer);
 }
 
 // Explicitly instantiate the template for specific types

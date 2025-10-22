@@ -13,6 +13,27 @@ enum class PointLineSegmentLocation {
 };
 
 template <typename POINT_T>
+struct EdgeEquation {
+  typename POINT_T::scalar_t a, b, c;  // ax + by + c=0; b >= 0
+
+  EdgeEquation() = default;
+
+  DEV_HOST EdgeEquation(const POINT_T& p1, const POINT_T& p2) {
+    a = p1.y() - p2.y();
+    b = p2.x() - p1.x();
+    c = -p1.x() * a - p1.y() * b;
+
+    assert(a != 0 || b != 0);
+
+    if (b < 0) {
+      a = -a;
+      b = -b;
+      c = -c;
+    }
+  }
+};
+
+template <typename POINT_T>
 class LineSegment {
   using point_t = POINT_T;
   using scalar_t = typename point_t::scalar_t;

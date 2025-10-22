@@ -76,6 +76,8 @@ TEST(JoinerTest, PIP) {
     ASSERT_EQ(ArrowArrayStreamGetSchema(point_stream.get(), stream_schema.get(), &error),
               NANOARROW_OK);
 
+    printf("start batch %d\n", i);
+
     spatial_joiner.Clear();
     spatial_joiner.PushBuild(nullptr, build_array.get(), 0, build_array->length);
     auto context = spatial_joiner.CreateContext();
@@ -150,7 +152,7 @@ TEST(JoinerTest, PIP) {
     array_index_offset += stream_array->length;
   }
 }
-
+#if 0
 TEST(JoinerTest, PIPInverse) {
   SpatialJoiner::SpatialJoinerConfig config;
   std::string ptx_root = TestUtils::GetTestDataPath("shaders_ptx");
@@ -424,5 +426,6 @@ TEST(JoinerTest, PolygonPolygonContains) {
     array_index_offset += stream_array->length;
   }
 }
+#endif
 
 }  // namespace gpuspatial

@@ -11,9 +11,13 @@
 #include "gpuspatial/utils/markers.hpp"
 #include "gpuspatial/utils/mem_utils.hpp"
 #include "gpuspatial/utils/pinned_vector.h"
-#include "rmm/cuda_stream_view.hpp"
-#include "rmm/device_uvector.hpp"
-#include "rmm/exec_policy.hpp"
+
+#include <thrust/scan.h>
+
+#include <rmm/cuda_stream_view.hpp>
+#include <rmm/device_uvector.hpp>
+#include <rmm/exec_policy.hpp>
+
 
 namespace gpuspatial {
 namespace detail {

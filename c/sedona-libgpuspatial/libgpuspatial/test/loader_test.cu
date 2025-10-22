@@ -370,6 +370,18 @@ TYPED_TEST(WKBLoaderTest, PolygonWKBLoaderWithHoles) {
   ASSERT_FALSE(poly4.Contains(point_t{45, 70}));
   ASSERT_FALSE(poly4.Contains(point_t{55, 35}));
   // ASSERT_FALSE(poly4.Contains(point_t{52, 23}));
+
+  uint32_t polygon_idx, ring_idx;
+  uint32_t v_idx = 0;
+  for (int polygon = 0; polygon < polygon_array.size(); polygon++) {
+    for (int ring = 0; ring < polygon_array[polygon].num_rings(); ring++) {
+      for (int v = 0; v < polygon_array[polygon].get_ring(ring).num_points(); v++) {
+        ASSERT_TRUE(polygon_array.locate_vertex(v_idx++, polygon_idx, ring_idx));
+        ASSERT_EQ(polygon_idx, polygon);
+        ASSERT_EQ(ring_idx, ring);
+      }
+    }
+  }
 }
 
 TYPED_TEST(WKBLoaderTest, PolygonWKBLoaderMultipolygon) {
@@ -454,6 +466,24 @@ TYPED_TEST(WKBLoaderTest, PolygonWKBLoaderMultipolygon) {
   ASSERT_EQ(polygon.num_rings(), 1);
   polygon = multi_polygon_array[7].get_polygon(2);
   ASSERT_EQ(polygon.num_rings(), 1);
+
+  uint32_t geom_idx, part_idx, ring_idx;
+  uint32_t v_idx = 0;
+  for (int geom = 0; geom < multi_polygon_array.size(); geom++) {
+    const auto& polys = multi_polygon_array[geom];
+    for (int part = 0; part < polys.num_polygons(); part++) {
+      auto poly = polys.get_polygon(part);
+      for (int ring = 0; ring < poly.num_rings(); ring++) {
+        for (int v = 0; v < poly.get_ring(ring).num_points(); v++) {
+          ASSERT_TRUE(
+              multi_polygon_array.locate_vertex(v_idx++, geom_idx, part_idx, ring_idx));
+          ASSERT_EQ(geom, geom_idx);
+          ASSERT_EQ(part, part_idx);
+          ASSERT_EQ(ring, ring_idx);
+        }
+      }
+    }
+  }
 }
 
 TEST(WKBLoaderTest, GeoCollectionWKBLoader) {

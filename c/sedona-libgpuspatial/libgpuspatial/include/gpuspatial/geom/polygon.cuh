@@ -3,6 +3,8 @@
 #include <cub/block/block_reduce.cuh>
 #include <cub/warp/warp_reduce.cuh>
 
+#include <thrust/binary_search.h>
+
 #include "gpuspatial/geom/box.cuh"
 #include "gpuspatial/geom/line_string.cuh"
 #include "gpuspatial/utils/array_view.h"
@@ -10,6 +12,12 @@
 #include "gpuspatial/utils/floating_point.h"
 
 namespace gpuspatial {
+
+enum class RingOrientation {
+  kClockwise,
+  kCounterclockwise,
+  kDegenerate,
+};
 
 template <typename POINT_T>
 class LinearRing {
@@ -44,6 +52,47 @@ class LinearRing {
       return false;
     }
     return vertices_.size() >= 3;
+  }
+
+  /**
+    * Calculates the orientation of a ring (list of vertices) using the
+    * Summation of Cross Products (Signed Area).
+
+    * A positive result indicates Counter-Clockwise (CCW).
+    * A negative result indicates Clockwise (CW).
+    * A result near zero indicates a self-intersecting or degenerate polygon.
+
+    Formula: Sum( (x_i+1 - x_i) * (y_i+1 + y_i) )
+   * @return
+   */
+  DEV_HOST_INLINE RingOrientation ring_orientation() const {
+    if (vertices_.size() < 3) {
+      return RingOrientation::kDegenerate;
+    }
+    assert(is_closed());
+    int sum_cross_products = 0;
+    // Note: We iterate through all segments. If the ring is closed (first point == last
+    // point), we stop before the last point, as the loop handles the segment back to the
+    // start. If the list is V1, V2, V3, V1, we calculate (V1->V2), (V2->V3), (V3->V1).
+    // Since the input format in the example repeats the first vertex, we use
+    // range(len(ring) - 1) to cover all segments.
+    for (int i = 0; i < vertices_.size() - 1; i++) {
+      auto& v1 = vertices_[i];
+      auto& v2 = vertices_[i + 1];
+      auto x1 = v1.get_coordinate(0);
+      auto y1 = v1.get_coordinate(1);
+      auto x2 = v2.get_coordinate(0);
+      auto y2 = v2.get_coordinate(1);
+      // Cross product variant: (x2 - x1) * (y1 + y2)
+      sum_cross_products += (x2 - x1) * (y1 + y2);
+    }
+
+    if (sum_cross_products > 0)
+      return RingOrientation::kCounterclockwise;
+    else if (sum_cross_products < 0)
+      return RingOrientation::kClockwise;
+    else
+      return RingOrientation::kDegenerate;
   }
 
   DEV_HOST_INLINE PointLocation locate_point(const point_t& p) const {
@@ -477,6 +526,28 @@ class PolygonArrayView {
   DEV_HOST_INLINE ArrayView<point_t> get_vertices() const { return vertices_; }
 
   DEV_HOST_INLINE ArrayView<box_t> mbrs() const { return mbrs_; }
+
+  DEV_HOST_INLINE bool locate_vertex(index_t global_vertex_idx, index_t& polygon_idx,
+                                     index_t& ring_idx) const {
+    auto it_ring = thrust::upper_bound(thrust::seq, prefix_sum_rings_.begin(),
+                                       prefix_sum_rings_.end(), global_vertex_idx);
+
+    if (it_ring != prefix_sum_rings_.end()) {
+      // which ring the vertex belongs to
+      auto ring_offset = thrust::distance(prefix_sum_rings_.begin(), it_ring) - 1;
+      auto it_polygon = thrust::upper_bound(thrust::seq, prefix_sum_polygons_.begin(),
+                                            prefix_sum_polygons_.end(), ring_offset);
+      if (it_polygon != prefix_sum_polygons_.end()) {
+        // which polygon the vertex belongs to
+        polygon_idx = thrust::distance(prefix_sum_polygons_.begin(), it_polygon) - 1;
+        // which ring of this polygon the vertex belongs to
+        ring_idx = ring_offset - prefix_sum_polygons_[polygon_idx];
+        return true;
+      }
+    }
+    return false;
+  }
+
 
  private:
   ArrayView<index_t> prefix_sum_polygons_;

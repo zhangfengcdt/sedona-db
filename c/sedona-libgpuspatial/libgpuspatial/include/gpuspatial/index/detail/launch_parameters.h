@@ -2,6 +2,8 @@
 #define GPUSPATIAL_INDEX_SHADERS_LAUNCH_PARAMETERS_H
 #include "gpuspatial/geom/box.cuh"
 #include "gpuspatial/geom/point.cuh"
+#include "gpuspatial/geom/polygon.cuh"
+#include "gpuspatial/geom/multi_polygon.cuh"
 #include "gpuspatial/utils/array_view.h"
 #include "gpuspatial/utils/queue_view.h"
 
@@ -43,6 +45,22 @@ struct LaunchParamsBoxQuery {
   // Output: Geom2 ID, Geom2 ID
   QueueView<thrust::pair<uint32_t, uint32_t>> ids;
 };
+
+
+template<typename POINT_T, typename INDEX_T>
+struct LaunchParamsPolygonPointQuery {
+  using point_t = POINT_T;
+  using index_t = INDEX_T;
+  PolygonArrayView<point_t, index_t> polygons;
+  PointArrayView<point_t, index_t> points;
+  ArrayView<uint32_t> polygon_ids; // sorted
+  ArrayView<thrust::pair<index_t, index_t>> ids;
+  ArrayView<index_t> seg_begins;
+  ArrayView<index_t> seg_polygon_ids;
+  OptixTraversableHandle handle;
+  ArrayView<PointLocation> locations;
+};
+
 
 }  // namespace detail
 

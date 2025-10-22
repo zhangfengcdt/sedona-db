@@ -52,7 +52,7 @@ class OptixSpatialIndex : public SpatialIndex<POINT_T, INDEX_T> {
     std::shared_ptr<rmm::device_uvector<point_t>> stream_points;
     std::shared_ptr<rmm::device_uvector<box_t>> stream_boxes;
 
-    std::unique_ptr<rmm::device_uvector<char>> bvh_buffer;
+    std::unique_ptr<rmm::device_buffer> bvh_buffer;
     OptixTraversableHandle handle;
     std::vector<char> h_launch_params_buffer;
     std::unique_ptr<rmm::device_buffer> launch_params_buffer;
@@ -106,7 +106,7 @@ class OptixSpatialIndex : public SpatialIndex<POINT_T, INDEX_T> {
   SpatialIndexConfig config_;
   std::unique_ptr<rmm::cuda_stream_pool> stream_pool_;
   details::RTEngine rt_engine_;
-  std::unique_ptr<rmm::device_uvector<char>> bvh_buffer_;
+  std::unique_ptr<rmm::device_buffer> bvh_buffer_;
 
   std::shared_ptr<BoxSegment<point_t, index_t>> box_seg_;
   std::shared_ptr<DeviceGeometries<point_t, index_t>> build_geometries_;
@@ -117,7 +117,7 @@ class OptixSpatialIndex : public SpatialIndex<POINT_T, INDEX_T> {
 
   OptixTraversableHandle buildBVH(const rmm::cuda_stream_view& stream,
                                   const ArrayView<OptixAabb>& aabbs,
-                                  std::unique_ptr<rmm::device_uvector<char>>& buffer);
+                                  std::unique_ptr<rmm::device_buffer>& buffer);
 
   void allocateResultBuffer(SpatialIndexContext* ctx);
 
