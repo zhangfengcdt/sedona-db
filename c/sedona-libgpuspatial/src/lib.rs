@@ -156,8 +156,17 @@ impl GpuSpatialContext {
                 }
             }
 
+            println!("[GPU Join] Phase 1: Transferring {} left geometries to GPU memory", left_geom.len());
+            let transfer_start = std::time::Instant::now();
             joiner.push_build(&left_geom, 0, left_geom.len() as i64)?;
+            let transfer_elapsed = transfer_start.elapsed();
+            println!("[GPU Join] Phase 1 complete: Data transfer in {:.3}s", transfer_elapsed.as_secs_f64());
+
+            println!("[GPU Join] Phase 2: Building BVH spatial index on GPU");
+            let bvh_start = std::time::Instant::now();
             joiner.finish_building()?;
+            let bvh_elapsed = bvh_start.elapsed();
+            println!("[GPU Join] Phase 2 complete: BVH index built in {:.3}s", bvh_elapsed.as_secs_f64());
 
             // Recreate context after building (required by libgpuspatial)
             let mut new_context = libgpuspatial_glue_bindgen::GpuSpatialJoinerContext {
@@ -181,6 +190,8 @@ impl GpuSpatialContext {
                 }
             }
 
+            println!("[GPU Join] Phase 3: Executing spatial join kernel on GPU ({} right geometries)", right_geom.len());
+            let kernel_start = std::time::Instant::now();
             let gpu_predicate = predicate.into();
             joiner.push_stream(
                 context,
@@ -194,7 +205,10 @@ impl GpuSpatialContext {
             // Get results
             let build_indices = joiner.get_build_indices_buffer(context).to_vec();
             let stream_indices = joiner.get_stream_indices_buffer(context).to_vec();
-            
+            let kernel_elapsed = kernel_start.elapsed();
+
+            println!("[GPU Join] Phase 3 complete: Join kernel executed in {:.3}s, {} result pairs",
+                kernel_elapsed.as_secs_f64(), build_indices.len());
             log::info!("DEBUG: Retrieved {} build indices, {} stream indices",
                 build_indices.len(), stream_indices.len());
 

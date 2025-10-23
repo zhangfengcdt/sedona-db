@@ -24,16 +24,19 @@ impl GpuBackend {
 
     pub fn init(&mut self) -> Result<()> {
         // Initialize GPU context
+        println!("[GPU Join] Initializing GPU context (device {})", self.device_id);
         match GpuSpatialContext::new() {
             Ok(mut ctx) => {
                 ctx.init().map_err(|e| {
                     crate::Error::GpuInit(format!("Failed to initialize GPU context: {e:?}"))
                 })?;
                 self.gpu_context = Some(ctx);
+                println!("[GPU Join] GPU context initialized successfully");
                 Ok(())
             }
             Err(e) => {
                 log::warn!("GPU not available: {e:?}");
+                println!("[GPU Join] Warning: GPU not available: {e:?}");
                 // Gracefully handle GPU not being available
                 Ok(())
             }
@@ -130,10 +133,15 @@ impl GpuBackend {
             }
         }
 
-        // Perform GPU spatial join
+        // Perform GPU spatial join (includes: data transfer, BVH build, and join kernel)
+        println!("[GPU Join] Starting GPU spatial join computation");
+        let gpu_total_start = Instant::now();
         // OPTIMIZATION: Remove clones - Arc is cheap to clone, but avoid if possible
         match gpu_ctx.spatial_join(left_geom, right_geom, predicate) {
             Ok((build_indices, stream_indices)) => {
+                let gpu_total_elapsed = gpu_total_start.elapsed();
+                println!("[GPU Join] GPU spatial join complete in {:.3}s total (see phase breakdown above)", gpu_total_elapsed.as_secs_f64());
+                println!("[GPU Join] Materializing result batch from GPU indices");
 
                 // Create result record batch from the join indices
                 self.create_result_batch(left_batch, right_batch, &build_indices, &stream_indices)
@@ -168,11 +176,14 @@ impl GpuBackend {
             return Ok(RecordBatch::new_empty(Arc::new(combined_schema)));
         }
 
+        println!("[GPU Join] Building result batch: selecting {} rows from left and right", num_matches);
+        let materialize_start = Instant::now();
+
 // Build arrays for left side (build indices)
         // OPTIMIZATION: Create index arrays once and reuse for all columns
         let build_idx_array = UInt32Array::from(build_indices.to_vec());
         let stream_idx_array = UInt32Array::from(stream_indices.to_vec());
-        
+
         let mut left_arrays: Vec<ArrayRef> = Vec::new();
         for i in 0..left_batch.num_columns() {
             let column = left_batch.column(i);
@@ -226,7 +237,12 @@ impl GpuBackend {
         let combined_schema =
             self.create_combined_schema(&left_batch.schema(), &right_batch.schema())?;
 
-        Ok(RecordBatch::try_new(Arc::new(combined_schema), all_arrays)?)
+        let result = RecordBatch::try_new(Arc::new(combined_schema), all_arrays)?;
+        let materialize_elapsed = materialize_start.elapsed();
+        println!("[GPU Join] Result batch materialized in {:.3}s: {} rows, {} columns",
+            materialize_elapsed.as_secs_f64(), result.num_rows(), result.num_columns());
+
+        Ok(result)
     }
 
     /// Create combined schema for join result

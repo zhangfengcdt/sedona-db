@@ -188,15 +188,26 @@ impl ExecutionPlan for GpuSpatialJoinExec {
                         let num_partitions = left.output_partitioning().partition_count();
                         let mut all_batches = Vec::new();
 
+                        println!("[GPU Join] ===== BUILD PHASE START =====");
+                        println!("[GPU Join] Reading {} left partitions from disk", num_partitions);
                         log::info!("Build phase: reading {} left partitions", num_partitions);
 
                         for k in 0..num_partitions {
+                            println!("[GPU Join] Reading left partition {}/{}", k + 1, num_partitions);
                             let mut stream = left.execute(k, Arc::clone(&context))?;
+                            let mut partition_batches = 0;
+                            let mut partition_rows = 0;
                             while let Some(batch_result) = stream.next().await {
-                                all_batches.push(batch_result?);
+                                let batch = batch_result?;
+                                partition_rows += batch.num_rows();
+                                partition_batches += 1;
+                                all_batches.push(batch);
                             }
+                            println!("[GPU Join] Partition {} read: {} batches, {} rows", k, partition_batches, partition_rows);
                         }
 
+                        println!("[GPU Join] All left partitions read: {} total batches", all_batches.len());
+                        println!("[GPU Join] Concatenating {} batches into single batch for GPU", all_batches.len());
                         log::info!("Build phase: concatenating {} batches", all_batches.len());
 
                         // Concatenate all left batches
@@ -205,15 +216,22 @@ impl ExecutionPlan for GpuSpatialJoinExec {
                                 "No data from left side".into()
                             ));
                         } else if all_batches.len() == 1 {
+                            println!("[GPU Join] Single batch, no concatenation needed");
                             all_batches[0].clone()
                         } else {
+                            let concat_start = std::time::Instant::now();
                             let schema = all_batches[0].schema();
-                            arrow::compute::concat_batches(&schema, &all_batches)
+                            let result = arrow::compute::concat_batches(&schema, &all_batches)
                                 .map_err(|e| DataFusionError::Execution(
                                     format!("Failed to concatenate left batches: {}", e)
-                                ))?
+                                ))?;
+                            let concat_elapsed = concat_start.elapsed();
+                            println!("[GPU Join] Concatenation complete in {:.3}s", concat_elapsed.as_secs_f64());
+                            result
                         };
 
+                        println!("[GPU Join] Build phase complete: {} total left rows ready for GPU", left_batch.num_rows());
+                        println!("[GPU Join] ===== BUILD PHASE END =====\n");
                         log::info!("Build phase complete: {} total left rows", left_batch.num_rows());
 
                         Ok(crate::build_data::GpuBuildData::new(left_batch, config))
@@ -223,6 +241,7 @@ impl ExecutionPlan for GpuSpatialJoinExec {
 
         // Phase 2: Probe Phase (per output partition)
         // Create a probe stream for this partition
+        println!("[GPU Join] Creating probe stream for partition {}", partition);
         let stream = crate::stream::GpuSpatialJoinStream::new_probe(
             once_async_build_data,
             self.right.clone(),

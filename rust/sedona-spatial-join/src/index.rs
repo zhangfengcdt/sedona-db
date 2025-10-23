@@ -795,6 +795,10 @@ pub(crate) async fn build_index(
         ));
     }
 
+    println!("[CPU Join] ===== BUILD PHASE START =====");
+    let num_partitions = build_streams.len();
+    println!("[CPU Join] Reading {} left partitions from disk", num_partitions);
+
     // Update schema from the first stream
     build_schema = build_streams.first().unwrap().schema();
     let metrics = metrics_vec.first().unwrap().clone();
@@ -808,6 +812,7 @@ pub(crate) async fn build_index(
         let consumer = MemoryConsumer::new(format!("SpatialJoinFetchBuild[{partition}]"));
         let reservation = consumer.register(&memory_pool);
         join_set.spawn(async move {
+            println!("[CPU Join] Reading left partition {}/{}", partition + 1, num_partitions);
             collect_build_partition(
                 stream,
                 per_task_evaluator.as_ref(),
@@ -831,20 +836,35 @@ pub(crate) async fn build_index(
         memory_pool.clone(),
         metrics,
     )?;
+
+    let mut total_batches = 0;
+    let mut total_rows = 0;
     for result in results {
         let build_partition =
             result.map_err(|e| DataFusionError::Execution(format!("Task join error: {e}")))?;
 
         // Add each geometry batch to the builder
         for indexed_batch in build_partition.batches {
+            total_batches += 1;
+            total_rows += indexed_batch.batch.num_rows();
             builder.add_batch(indexed_batch);
         }
         builder.with_stats(build_partition.stats);
         // build_partition.reservation will be dropped here.
     }
 
+    println!("[CPU Join] All left partitions read: {} total batches, {} rows", total_batches, total_rows);
+    println!("[CPU Join] Building spatial index (R-tree)...");
+    let index_start = std::time::Instant::now();
+
     // Finish building the index
-    builder.finish(build_schema)
+    let index = builder.finish(build_schema)?;
+
+    let index_elapsed = index_start.elapsed();
+    println!("[CPU Join] Spatial index built in {:.3}s", index_elapsed.as_secs_f64());
+    println!("[CPU Join] ===== BUILD PHASE END =====\n");
+
+    Ok(index)
 }
 
 struct BuildPartition {
