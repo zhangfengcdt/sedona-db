@@ -15,12 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 use crate::error::PySedonaError;
-use pyo3::prelude::*;
-// Temporarily excluded due to adbc_core 0.20.0 requiring Arrow 55.x
-// use pyo3::ffi::Py_uintptr_t;
-// use sedona_adbc::AdbcSedonadbDriverInit;
-// use std::ffi::c_void;
+use pyo3::{ffi::Py_uintptr_t, prelude::*};
+use sedona_adbc::AdbcSedonadbDriverInit;
 use sedona_proj::register::{configure_global_proj_engine, ProjCrsEngineBuilder};
+use std::ffi::c_void;
 
 mod context;
 mod dataframe;
@@ -53,12 +51,11 @@ fn sedona_python_version() -> PyResult<String> {
     Ok(VERSION.to_string())
 }
 
-// Temporarily excluded due to adbc_core 0.20.0 requiring Arrow 55.x
-// #[pyfunction]
-// fn sedona_adbc_driver_init() -> PyResult<Py_uintptr_t> {
-//     let driver_init_void = AdbcSedonadbDriverInit as *const c_void;
-//     Ok(driver_init_void as Py_uintptr_t)
-// }
+#[pyfunction]
+fn sedona_adbc_driver_init() -> PyResult<Py_uintptr_t> {
+    let driver_init_void = AdbcSedonadbDriverInit as *const c_void;
+    Ok(driver_init_void as Py_uintptr_t)
+}
 
 #[pyfunction]
 fn configure_proj_shared(
@@ -90,8 +87,7 @@ fn _lib(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     configure_tg_allocator();
 
     m.add_function(wrap_pyfunction!(configure_proj_shared, m)?)?;
-    // Temporarily excluded due to adbc_core 0.20.0 requiring Arrow 55.x
-    // m.add_function(wrap_pyfunction!(sedona_adbc_driver_init, m)?)?;
+    m.add_function(wrap_pyfunction!(sedona_adbc_driver_init, m)?)?;
     m.add_function(wrap_pyfunction!(sedona_python_version, m)?)?;
 
     m.add_class::<context::InternalContext>()?;

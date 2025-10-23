@@ -24,8 +24,7 @@ members = [
     "r/sedonadb/src/rust",
     "rust/sedona-geo-traits-ext",
     "rust/sedona-geo-generic-alg",
-    # Temporarily excluded due to adbc_core 0.20.0 requiring Arrow 55.x
-    # "rust/sedona-adbc",
+    "rust/sedona-adbc",
     "rust/sedona-expr",
     "rust/sedona-functions",
     "rust/sedona-geo",
@@ -57,8 +56,8 @@ rust-version = "1.82"
 [workspace.dependencies]
 approx = "0.5"
 abi_stable = "0.11.3"
-adbc_core = "0.20.0"
-adbc_ffi = "0.20.0"
+adbc_core = ">=0.20.0"
+adbc_ffi = ">=0.20.0"
 lru = "0.12"
 arrow = { version = "56.0.0", features = ["prettyprint", "ffi", "chrono-tz"] }
 arrow-array = { version = "56.0.0" }
@@ -120,6 +119,10 @@ tokio = { version = "1.44" }
 url = "2.5.4"
 
 [patch.crates-io]
+# Use main branch of arrow-adbc which supports Arrow 56.x (remove when 0.21.0 is released)
+adbc_core = { git = "https://github.com/apache/arrow-adbc.git", package = "adbc_core" }
+adbc_ffi = { git = "https://github.com/apache/arrow-adbc.git", package = "adbc_ffi" }
+
 # TODO: remove them once changes we made to geo-index and wkb crates are merged to upstream and released
 geo-index = { git = "https://github.com/wherobots/geo-index.git", branch = "main" }
 wkb = { git = "https://github.com/georust/wkb.git", rev = "130eb0c2b343bc9299aeafba6d34c2a6e53f3b6a" }

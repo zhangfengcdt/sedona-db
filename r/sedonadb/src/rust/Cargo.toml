@@ -33,8 +33,7 @@ datafusion-ffi = { workspace = true }
 savvy = "*"
 savvy-ffi = "*"
 sedona = { path = "../../../../rust/sedona" }
-# Temporarily excluded due to adbc_core 0.20.0 requiring Arrow 55.x
-# sedona-adbc = { path = "../../../../rust/sedona-adbc" }
+sedona-adbc = { path = "../../../../rust/sedona-adbc" }
 sedona-expr = { path = "../../../../rust/sedona-expr" }
 sedona-geoparquet = { path = "../../../../rust/sedona-geoparquet" }
 sedona-proj = { path = "../../../../c/sedona-proj", default-features = false }

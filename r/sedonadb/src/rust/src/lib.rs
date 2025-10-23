@@ -16,12 +16,12 @@
 // under the License.
 // Example functions
 
+use std::ffi::c_void;
+
 use savvy::savvy;
 
-// Temporarily excluded due to adbc_core 0.20.0 requiring Arrow 55.x
-// use std::ffi::c_void;
-// use savvy_ffi::R_NilValue;
-// use sedona_adbc::AdbcSedonadbDriverInit;
+use savvy_ffi::R_NilValue;
+use sedona_adbc::AdbcSedonadbDriverInit;
 use sedona_proj::register::{configure_global_proj_engine, ProjCrsEngineBuilder};
 
 mod context;
@@ -30,19 +30,18 @@ mod error;
 mod ffi;
 mod runtime;
 
-// Temporarily excluded due to adbc_core 0.20.0 requiring Arrow 55.x
-// #[savvy]
-// fn sedonadb_adbc_init_func() -> savvy::Result<savvy::Sexp> {
-//     let driver_init_void = AdbcSedonadbDriverInit as *mut c_void;
-//
-//     unsafe {
-//         Ok(savvy::Sexp(savvy_ffi::R_MakeExternalPtr(
-//             driver_init_void,
-//             R_NilValue,
-//             R_NilValue,
-//         )))
-//     }
-// }
+#[savvy]
+fn sedonadb_adbc_init_func() -> savvy::Result<savvy::Sexp> {
+    let driver_init_void = AdbcSedonadbDriverInit as *mut c_void;
+
+    unsafe {
+        Ok(savvy::Sexp(savvy_ffi::R_MakeExternalPtr(
+            driver_init_void,
+            R_NilValue,
+            R_NilValue,
+        )))
+    }
+}
 
 #[savvy]
 fn configure_proj_shared(

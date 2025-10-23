@@ -41,8 +41,7 @@ datafusion-ffi = { workspace = true }
 futures = { workspace = true }
 pyo3 = { version = "0.25.1" }
 sedona = { path = "../../rust/sedona" }
-# Temporarily excluded due to adbc_core 0.20.0 requiring Arrow 55.x
-# sedona-adbc = { path = "../../rust/sedona-adbc" }
+sedona-adbc = { path = "../../rust/sedona-adbc" }
 sedona-geoparquet = { path = "../../rust/sedona-geoparquet" }
 sedona-schema = { path = "../../rust/sedona-schema" }
 sedona-proj = { path = "../../c/sedona-proj", default-features = false }
