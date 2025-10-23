@@ -28,7 +28,9 @@ use datafusion::{
         file_format::parquet::ParquetSink, physical_plan::FileSinkConfig, sink::DataSinkExec,
     },
 };
-use datafusion_common::{config::ConfigOptions, exec_datafusion_err, exec_err, not_impl_err, DataFusionError, Result};
+use datafusion_common::{
+    config::ConfigOptions, exec_datafusion_err, exec_err, not_impl_err, DataFusionError, Result,
+};
 use datafusion_expr::{dml::InsertOp, ColumnarValue, ScalarUDF, Volatility};
 use datafusion_physical_expr::{
     expressions::Column, LexRequirement, PhysicalExpr, ScalarFunctionExpr,
