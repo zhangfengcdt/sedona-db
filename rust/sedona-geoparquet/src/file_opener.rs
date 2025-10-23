@@ -18,10 +18,10 @@ use std::{collections::HashMap, sync::Arc};
 
 use arrow_schema::SchemaRef;
 use datafusion::datasource::{
-    file_format::parquet::fetch_parquet_metadata,
     listing::PartitionedFile,
     physical_plan::{parquet::ParquetAccessPlan, FileMeta, FileOpenFuture, FileOpener},
 };
+use datafusion_datasource_parquet::metadata::DFParquetMetadata;
 use datafusion_common::Result;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder};
@@ -113,12 +113,12 @@ impl FileOpener for GeoParquetFileOpener {
         let self_clone = self.clone();
 
         Ok(Box::pin(async move {
-            let parquet_metadata = fetch_parquet_metadata(
+            let parquet_metadata = DFParquetMetadata::new(
                 &self_clone.object_store,
                 &file_meta.object_meta,
-                self_clone.metadata_size_hint,
-                None,
             )
+            .with_metadata_size_hint(self_clone.metadata_size_hint)
+            .fetch_metadata()
             .await?;
 
             let mut access_plan = ParquetAccessPlan::new_all(parquet_metadata.num_row_groups());

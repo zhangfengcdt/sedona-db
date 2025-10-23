@@ -374,6 +374,7 @@ mod test {
             arg_fields,
             number_rows: 1,
             return_field,
+            config_options: Arc::new(ConfigOptions::default()),
         };
 
         let value = udf.invoke_with_args(args)?;

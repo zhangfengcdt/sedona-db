@@ -608,6 +608,7 @@ mod tests {
             arg_fields: arg_fields.to_vec(),
             number_rows: row_count,
             return_field,
+            config_options: Arc::new(ConfigOptions::default()),
         };
 
         let value = udf.invoke_with_args(args)?;
