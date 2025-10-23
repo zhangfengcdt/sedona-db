@@ -402,6 +402,7 @@ fn parse_args(args: &[Arc<dyn PhysicalExpr>]) -> Vec<ArgRef<'_>> {
 #[cfg(test)]
 mod test {
     use arrow_schema::{DataType, Field};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::{ScalarUDF, Signature, SimpleScalarUDF, Volatility};
     use rstest::rstest;
     use sedona_geometry::{bounding_box::BoundingBox, interval::Interval};

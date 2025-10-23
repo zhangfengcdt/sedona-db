@@ -331,6 +331,7 @@ mod tests {
     use super::*;
     use arrow_array::ArrayRef;
     use arrow_schema::{DataType, Field};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
     use rstest::rstest;
     use sedona_expr::scalar_udf::SedonaScalarUDF;
