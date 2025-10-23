@@ -30,4 +30,5 @@ mod st_isvalid;
 mod st_isvalidreason;
 mod st_length;
 mod st_perimeter;
+mod st_unaryunion;
 pub mod wkb_to_geos;
