@@ -3,6 +3,8 @@
 #include <cub/block/block_reduce.cuh>
 #include <cub/warp/warp_reduce.cuh>
 
+#include <thrust/binary_search.h>
+
 #include "gpuspatial/geom/box.cuh"
 #include "gpuspatial/geom/line_string.cuh"
 #include "gpuspatial/utils/array_view.h"
@@ -10,6 +12,12 @@
 #include "gpuspatial/utils/floating_point.h"
 
 namespace gpuspatial {
+
+enum class RingOrientation {
+  kClockwise,
+  kCounterclockwise,
+  kDegenerate,
+};
 
 template <typename POINT_T>
 class LinearRing {
@@ -44,6 +52,47 @@ class LinearRing {
       return false;
     }
     return vertices_.size() >= 3;
+  }
+
+  /**
+    * Calculates the orientation of a ring (list of vertices) using the
+    * Summation of Cross Products (Signed Area).
+
+    * A positive result indicates Counter-Clockwise (CCW).
+    * A negative result indicates Clockwise (CW).
+    * A result near zero indicates a self-intersecting or degenerate polygon.
+
+    Formula: Sum( (x_i+1 - x_i) * (y_i+1 + y_i) )
+   * @return
+   */
+  DEV_HOST_INLINE RingOrientation ring_orientation() const {
+    if (vertices_.size() < 3) {
+      return RingOrientation::kDegenerate;
+    }
+    assert(is_closed());
+    int sum_cross_products = 0;
+    // Note: We iterate through all segments. If the ring is closed (first point == last
+    // point), we stop before the last point, as the loop handles the segment back to the
+    // start. If the list is V1, V2, V3, V1, we calculate (V1->V2), (V2->V3), (V3->V1).
+    // Since the input format in the example repeats the first vertex, we use
+    // range(len(ring) - 1) to cover all segments.
+    for (int i = 0; i < vertices_.size() - 1; i++) {
+      auto& v1 = vertices_[i];
+      auto& v2 = vertices_[i + 1];
+      auto x1 = v1.get_coordinate(0);
+      auto y1 = v1.get_coordinate(1);
+      auto x2 = v2.get_coordinate(0);
+      auto y2 = v2.get_coordinate(1);
+      // Cross product variant: (x2 - x1) * (y1 + y2)
+      sum_cross_products += (x2 - x1) * (y1 + y2);
+    }
+
+    if (sum_cross_products > 0)
+      return RingOrientation::kCounterclockwise;
+    else if (sum_cross_products < 0)
+      return RingOrientation::kClockwise;
+    else
+      return RingOrientation::kDegenerate;
   }
 
   DEV_HOST_INLINE PointLocation locate_point(const point_t& p) const {
@@ -115,6 +164,90 @@ class LinearRing {
     }
 
     return PointLocation::kError;
+  }
+
+  DEV_INLINE PointLocation
+  locate_point(const point_t& p,
+               cub::BlockReduce<int, MAX_BLOCK_SIZE>::TempStorage* temp_storage) const {
+    int wn = 0;
+    bool on_boundary = false;
+
+    for (int i = threadIdx.x; i < num_points() - 1; i += blockDim.x) {
+      const auto& p1 = get_point(i);
+      const auto& p2 = get_point(i + 1);
+      /* zero length segments are ignored. */
+      if (p1 == p2) continue;
+      LineSegment<point_t> seg(p1, p2);
+
+      auto side = seg.orientation(p);
+      if (side == 0) {
+        if (seg.get_mbr().covers(p)) {
+          on_boundary = true;
+          break;
+        }
+      }
+
+      bool is_rising = (p1.y() <= p.y()) && (p.y() < p2.y()) && (side == 1);
+      bool is_falling = (p2.y() <= p.y()) && (p.y() < p1.y()) && (side == -1);
+      // Add 1 if rising, subtract 1 if falling, add 0 otherwise.
+      // The boolean values will be implicitly cast to 0 or 1.
+      wn += is_rising - is_falling;
+    }
+
+    auto& s_on_boundary = *reinterpret_cast<bool*>(temp_storage);
+
+    if (threadIdx.x == 0) {
+      s_on_boundary = false;
+    }
+    __syncthreads();
+    if (on_boundary) {
+      s_on_boundary = true;
+    }
+    __syncthreads();
+    if (s_on_boundary) {
+      return PointLocation::kBoundary;
+    }
+    auto total_wn =
+        cub::BlockReduce<int, MAX_BLOCK_SIZE>(*temp_storage).Sum(wn, blockDim.x);
+    __syncthreads();
+    auto& s_total_wn = *reinterpret_cast<int*>(temp_storage);
+    if (threadIdx.x == 0) {
+      s_total_wn = total_wn;
+    }
+    __syncthreads();
+
+    if (s_total_wn == 0) {
+      return PointLocation::kOutside;
+    }
+    return PointLocation::kInside;
+
+    /*
+        if (on_boundary) {
+          // max number of wn will be num_points() - 1
+          // using this negative value to indicate on_boundary
+          wn = -std::numeric_limits<int>::max() / 2;
+        }
+        auto total_wn =
+            cub::BlockReduce<int, MAX_BLOCK_SIZE>(*temp_storage).Sum(wn, blockDim.x);
+        __syncthreads();
+        PointLocation loc = PointLocation::kError;
+        auto& i_loc = *reinterpret_cast<int*>(temp_storage);
+
+        if (threadIdx.x == 0) {
+          // printf("total wn %d\n", total_wn);
+          if (total_wn < -(num_points() - 1)) {
+            loc = PointLocation::kBoundary;
+          } else if (total_wn == 0) {
+            loc = PointLocation::kOutside;
+          } else
+            loc = PointLocation::kInside;
+          i_loc = (int)loc;
+        }
+
+        __syncthreads();
+
+        return (PointLocation)i_loc;
+        */
   }
 
  private:
@@ -286,11 +419,46 @@ class Polygon {
     return rloc;
   }
 
+  template <typename TEST_POINT_T>
+  DEV_INLINE typename std::enable_if<TEST_POINT_T::n_dim == 2, PointLocation>::type
+  locate_point(const TEST_POINT_T& test_point,
+               cub::BlockReduce<int, MAX_BLOCK_SIZE>::TempStorage* temp_storage) const {
+    auto rloc = PointLocation::kOutside;
+
+    for (int i = 0; i < num_rings(); i++) {
+      auto ring = get_ring(i);
+      auto loc = ring.locate_point(test_point, temp_storage);
+
+      if (i == 0) {
+        if (loc == PointLocation::kOutside) {
+          return PointLocation::kOutside;
+        }
+        rloc = loc;
+      } else {
+        if (loc == PointLocation::kInside) {
+          return PointLocation::kOutside;
+        }
+        if (loc == PointLocation::kBoundary) {
+          return PointLocation::kBoundary;
+        }
+      }
+    }
+    return rloc;
+  }
+
   DEV_HOST_INLINE const ArrayView<INDEX_T>& get_prefix_sum_rings() const {
     return prefix_sum_rings_;
   }
 
   DEV_HOST_INLINE const ArrayView<point_t>& get_vertices() const { return vertices_; }
+
+  DEV_HOST_INLINE uint32_t num_vertices() const {
+    uint32_t nv = 0;
+    for (int i = 0; i < num_rings(); i++) {
+      nv += prefix_sum_rings_[i + 1] - prefix_sum_rings_[i];
+    }
+    return nv;
+  }
 
   DEV_HOST_INLINE const box_t& get_mbr() const { return mbr_; }
 
@@ -358,6 +526,28 @@ class PolygonArrayView {
   DEV_HOST_INLINE ArrayView<point_t> get_vertices() const { return vertices_; }
 
   DEV_HOST_INLINE ArrayView<box_t> mbrs() const { return mbrs_; }
+
+  DEV_HOST_INLINE bool locate_vertex(index_t global_vertex_idx, index_t& polygon_idx,
+                                     index_t& ring_idx) const {
+    auto it_ring = thrust::upper_bound(thrust::seq, prefix_sum_rings_.begin(),
+                                       prefix_sum_rings_.end(), global_vertex_idx);
+
+    if (it_ring != prefix_sum_rings_.end()) {
+      // which ring the vertex belongs to
+      auto ring_offset = thrust::distance(prefix_sum_rings_.begin(), it_ring) - 1;
+      auto it_polygon = thrust::upper_bound(thrust::seq, prefix_sum_polygons_.begin(),
+                                            prefix_sum_polygons_.end(), ring_offset);
+      if (it_polygon != prefix_sum_polygons_.end()) {
+        // which polygon the vertex belongs to
+        polygon_idx = thrust::distance(prefix_sum_polygons_.begin(), it_polygon) - 1;
+        // which ring of this polygon the vertex belongs to
+        ring_idx = ring_offset - prefix_sum_polygons_[polygon_idx];
+        return true;
+      }
+    }
+    return false;
+  }
+
 
  private:
   ArrayView<index_t> prefix_sum_polygons_;

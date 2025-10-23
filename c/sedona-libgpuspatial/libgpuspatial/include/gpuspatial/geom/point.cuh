@@ -174,6 +174,9 @@ class Point {
     return covered;
   }
 
+  // For being called by templated methods
+  DEV_HOST_INLINE uint32_t num_vertices() const { return 1; }
+
  private:
   vec_t data_;
 };

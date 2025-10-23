@@ -95,8 +95,9 @@ void RTEngine::Init(const RTConfig& config) {
 
 OptixTraversableHandle RTEngine::BuildAccelCustom(cudaStream_t cuda_stream,
                                                   ArrayView<OptixAabb> aabbs,
-                                                  rmm::device_uvector<char>& out_buf,
-                                                  bool prefer_fast_build, bool compact) {
+                                                  rmm::device_buffer& out_buf,
+                                                  bool prefer_fast_build,
+                                                  bool compact) const {
   OptixTraversableHandle traversable;
   OptixBuildInput build_input = {};
   CUdeviceptr d_aabb = THRUST_TO_CUPTR(aabbs.data());
@@ -116,7 +117,6 @@ OptixTraversableHandle RTEngine::BuildAccelCustom(cudaStream_t cuda_stream,
   build_input.customPrimitiveArray.primitiveIndexOffset = 0;
 
   OptixAccelBuildOptions accelOptions = {};
-  accelOptions.buildFlags = OPTIX_BUILD_FLAG_ALLOW_UPDATE;
 
   if (prefer_fast_build) {
     accelOptions.buildFlags |= OPTIX_BUILD_FLAG_PREFER_FAST_BUILD;
@@ -133,7 +133,7 @@ OptixTraversableHandle RTEngine::BuildAccelCustom(cudaStream_t cuda_stream,
   OPTIX_CHECK(optixAccelComputeMemoryUsage(optix_context_, &accelOptions, &build_input, 1,
                                            &blas_buffer_sizes));
 
-  rmm::device_uvector<char> temp_buf(blas_buffer_sizes.tempSizeInBytes, cuda_stream);
+  rmm::device_buffer temp_buf(blas_buffer_sizes.tempSizeInBytes, cuda_stream);
   out_buf.resize(blas_buffer_sizes.outputSizeInBytes, cuda_stream);
 
   if (compact) {
@@ -165,7 +165,7 @@ OptixTraversableHandle RTEngine::BuildAccelCustom(cudaStream_t cuda_stream,
 }
 
 void RTEngine::Render(cudaStream_t cuda_stream, const std::string& id, dim3 dim,
-                      const ArrayView<char>& params) {
+                      const ArrayView<char>& params) const {
   OPTIX_CHECK(optixLaunch(resources_.at(id).pipeline, cuda_stream,
                           reinterpret_cast<CUdeviceptr>(params.data()), params.size(),
                           &resources_.at(id).sbt, dim.x, dim.y, dim.z));
@@ -174,7 +174,7 @@ void RTEngine::Render(cudaStream_t cuda_stream, const std::string& id, dim3 dim,
 OptixDeviceContext RTEngine::get_context() const { return optix_context_; }
 
 size_t RTEngine::EstimateMemoryUsageForAABB(size_t num_aabbs, bool prefer_fast_build,
-                                            bool compact) {
+                                            bool compact) const {
   OptixBuildInput build_input = {};
   uint32_t build_input_flags[1] = {OPTIX_GEOMETRY_FLAG_NONE};
 
@@ -188,7 +188,6 @@ size_t RTEngine::EstimateMemoryUsageForAABB(size_t num_aabbs, bool prefer_fast_b
   build_input.customPrimitiveArray.primitiveIndexOffset = 0;
 
   OptixAccelBuildOptions accelOptions = {};
-  accelOptions.buildFlags = OPTIX_BUILD_FLAG_ALLOW_UPDATE;
   if (prefer_fast_build) {
     accelOptions.buildFlags |= OPTIX_BUILD_FLAG_PREFER_FAST_BUILD;
   } else {
