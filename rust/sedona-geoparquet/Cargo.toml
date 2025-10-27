@@ -46,7 +46,7 @@ chrono = { workspace = true }
 datafusion = { workspace = true, features = ["parquet"] }
 datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true }
-datafusion-datasource-parquet = "50.2.0"
+datafusion-datasource-parquet = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-expr = { workspace = true }
