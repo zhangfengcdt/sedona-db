@@ -252,8 +252,7 @@ impl<'a> DisplayTable<'a> {
             }
         }
 
-        // TODO: set_truncation_indicator method was removed in comfy_table 7.x
-        // table.set_truncation_indicator(self.truncation_indicator());
+        table.set_truncation_indicator(self.truncation_indicator());
 
         let mut columns = self
             .columns
