@@ -495,6 +495,8 @@ impl DisplayColumn {
                 arg_fields,
                 number_rows: array.len(),
                 return_field,
+                // TODO: Pipe actual ConfigOptions from SedonaContext instead of using defaults
+                // See: https://github.com/apache/sedona-db/issues/248
                 config_options: Arc::new(ConfigOptions::default()),
             };
 

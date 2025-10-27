@@ -404,6 +404,8 @@ impl ScalarUdfTester {
             arg_fields: self.arg_fields(),
             number_rows,
             return_field: self.return_type()?.to_storage_field("", true)?.into(),
+            // TODO: Consider piping actual ConfigOptions for more realistic testing
+            // See: https://github.com/apache/sedona-db/issues/248
             config_options: Arc::new(ConfigOptions::default()),
         };
 

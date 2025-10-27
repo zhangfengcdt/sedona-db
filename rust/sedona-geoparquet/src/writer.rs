@@ -227,6 +227,8 @@ fn project_bboxes(
             column.return_field(&input_schema)?.as_ref(),
         )?) {
             let bbox_field_name = bbox_column_name(f.name());
+            // TODO: Pipe actual ConfigOptions from session instead of using defaults
+            // See: https://github.com/apache/sedona-db/issues/248
             let expr = Arc::new(ScalarFunctionExpr::new(
                 bbox_udf_name,
                 bbox_udf.clone(),
