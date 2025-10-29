@@ -360,7 +360,9 @@ impl IterGeo for ArrayRef {
             SedonaType::WkbView(_, _) => iter_wkb_binary(as_binary_view_array(self)?, func),
             // Handle plain Binary/BinaryView from Datafusion Comet
             SedonaType::Arrow(DataType::Binary) => iter_wkb_binary(as_binary_array(self)?, func),
-            SedonaType::Arrow(DataType::BinaryView) => iter_wkb_binary(as_binary_view_array(self)?, func),
+            SedonaType::Arrow(DataType::BinaryView) => {
+                iter_wkb_binary(as_binary_view_array(self)?, func)
+            }
             _ => {
                 // We could cast here as a fallback, iterate and cast per-element, or
                 // implement iter_as_something_else()/supports_iter_xxx() when more geo array types

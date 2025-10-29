@@ -315,9 +315,7 @@ impl TypeMatcher for IsGeometry {
             }
             // Accept plain Binary/BinaryView from Datafusion Comet
             // This allows geometry columns to be represented as Binary with extension metadata
-            SedonaType::Arrow(DataType::Binary) | SedonaType::Arrow(DataType::BinaryView) => {
-                true
-            }
+            SedonaType::Arrow(DataType::Binary) | SedonaType::Arrow(DataType::BinaryView) => true,
             _ => false,
         }
     }
