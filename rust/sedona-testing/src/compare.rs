@@ -105,8 +105,21 @@ pub fn assert_array_equal(actual: &ArrayRef, expected: &ArrayRef) {
 /// arrays where the default failure message would otherwise be uninformative.
 pub fn assert_scalar_equal_wkb_geometry(actual: &ScalarValue, expected_wkt: Option<&str>) {
     let expected = create_scalar(expected_wkt, &WKB_GEOMETRY);
-    assert_eq!(actual.data_type(), DataType::Binary);
-    assert_wkb_scalar_equal(actual, &expected, false);
+
+    // Handle Struct{"geoarrow.wkb": Binary} wrapper (for Spark/Comet compatibility)
+    let actual_binary = match actual {
+        ScalarValue::Struct(struct_array) => {
+            // Extract the inner binary field from the struct
+            let inner_array = struct_array.column(0);
+            ScalarValue::try_from_array(inner_array, 0).unwrap()
+        }
+        _ => {
+            assert_eq!(actual.data_type(), DataType::Binary);
+            actual.clone()
+        }
+    };
+
+    assert_wkb_scalar_equal(&actual_binary, &expected, false);
 }
 
 /// Assert a [`ScalarValue`] is a WKB_GEOMETRY scalar corresponding to the given WKT. This function
@@ -121,8 +134,21 @@ pub fn assert_scalar_equal_wkb_geometry_topologically(
     expected_wkt: Option<&str>,
 ) {
     let expected = create_scalar(expected_wkt, &WKB_GEOMETRY);
-    assert_eq!(actual.data_type(), DataType::Binary);
-    assert_wkb_scalar_equal(actual, &expected, true);
+
+    // Handle Struct{"geoarrow.wkb": Binary} wrapper (for Spark/Comet compatibility)
+    let actual_binary = match actual {
+        ScalarValue::Struct(struct_array) => {
+            // Extract the inner binary field from the struct
+            let inner_array = struct_array.column(0);
+            ScalarValue::try_from_array(inner_array, 0).unwrap()
+        }
+        _ => {
+            assert_eq!(actual.data_type(), DataType::Binary);
+            actual.clone()
+        }
+    };
+
+    assert_wkb_scalar_equal(&actual_binary, &expected, true);
 }
 
 /// Assert two [`ScalarValue`]s are equal

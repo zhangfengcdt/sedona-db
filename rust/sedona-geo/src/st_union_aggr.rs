@@ -258,7 +258,15 @@ mod test {
         udaf.add_kernel(st_union_aggr_impl());
 
         let tester = AggregateUdfTester::new(udaf.into(), vec![sedona_type.clone()]);
-        assert_eq!(tester.return_type().unwrap(), WKB_GEOMETRY);
+
+        // Expected return type: Struct{"geoarrow.wkb": Binary} for Spark/Comet compatibility
+        let mut expected_field = Field::new("geoarrow.wkb", DataType::Binary, true);
+        expected_field.set_metadata(HashMap::from([
+            ("ARROW:extension:name".to_string(), "geoarrow.wkb".to_string()),
+            ("ARROW:extension:metadata".to_string(), "{}".to_string()),
+        ]));
+        let expected_return_type = SedonaType::Arrow(DataType::Struct(vec![expected_field].into()));
+        assert_eq!(tester.return_type().unwrap(), expected_return_type);
 
         // Basic polygon union
         let batches = vec![
