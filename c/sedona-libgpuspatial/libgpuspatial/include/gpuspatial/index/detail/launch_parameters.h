@@ -1,13 +1,13 @@
 #ifndef GPUSPATIAL_INDEX_SHADERS_LAUNCH_PARAMETERS_H
 #define GPUSPATIAL_INDEX_SHADERS_LAUNCH_PARAMETERS_H
+#include <thrust/pair.h>
 #include "gpuspatial/geom/box.cuh"
+#include "gpuspatial/geom/multi_polygon.cuh"
 #include "gpuspatial/geom/point.cuh"
 #include "gpuspatial/geom/polygon.cuh"
-#include "gpuspatial/geom/multi_polygon.cuh"
+#include "gpuspatial/geom/ray_crossing_counter.cuh"
 #include "gpuspatial/utils/array_view.h"
 #include "gpuspatial/utils/queue_view.h"
-
-#include <thrust/pair.h>
 
 namespace gpuspatial {
 namespace detail {
@@ -46,14 +46,13 @@ struct LaunchParamsBoxQuery {
   QueueView<thrust::pair<uint32_t, uint32_t>> ids;
 };
 
-
-template<typename POINT_T, typename INDEX_T>
+template <typename POINT_T, typename INDEX_T>
 struct LaunchParamsPolygonPointQuery {
   using point_t = POINT_T;
   using index_t = INDEX_T;
   PolygonArrayView<point_t, index_t> polygons;
   PointArrayView<point_t, index_t> points;
-  ArrayView<index_t> polygon_ids; // sorted
+  ArrayView<index_t> polygon_ids;  // sorted
   ArrayView<thrust::pair<index_t, index_t>> ids;
   ArrayView<index_t> seg_begins;
   ArrayView<index_t> seg_polygon_ids;
@@ -61,6 +60,22 @@ struct LaunchParamsPolygonPointQuery {
   ArrayView<PointLocation> locations;
 };
 
+template <typename POINT_T, typename INDEX_T>
+struct LaunchParamsMultiPolygonPointQuery {
+  using point_t = POINT_T;
+  using index_t = INDEX_T;
+  using scalar_t = typename POINT_T::scalar_t;
+  MultiPolygonArrayView<point_t, index_t> multi_polygons;
+  PointArrayView<point_t, index_t> points;
+  ArrayView<index_t> multi_polygon_ids;  // sorted
+  ArrayView<thrust::pair<index_t, index_t>> ids;
+  ArrayView<index_t> seg_begins;
+  ArrayView<index_t> seg_multi_polygon_ids;
+  ArrayView<index_t> part_begins;
+  // each query point has n elements of part_min_y and part_locations, n is # of parts
+  ArrayView<PointLocation> locations;  // location of each part
+  OptixTraversableHandle handle;
+};
 
 }  // namespace detail
 

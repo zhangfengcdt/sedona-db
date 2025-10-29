@@ -81,6 +81,12 @@ class RelateEngine {
                                   rmm::device_uvector<INDEX_T>& seg_polygon_ids,
                                   rmm::device_buffer& buffer);
 
+  OptixTraversableHandle BuildBVH(
+      const rmm::cuda_stream_view& stream,
+      const MultiPolygonArrayView<POINT_T, INDEX_T>& multi_polygons,
+      ArrayView<uint32_t> multi_polygon_ids, rmm::device_uvector<INDEX_T>& seg_begins,
+      rmm::device_uvector<INDEX_T>& seg_multi_polygon_ids, rmm::device_buffer& buffer);
+
  private:
   const DeviceGeometries<POINT_T, INDEX_T>* geoms1_;
   const details::RTEngine* rt_engine_;

@@ -8,9 +8,9 @@
 
 namespace gpuspatial {
 enum class PointLocation {
+  kOutside,
   kInside,
   kBoundary,
-  kOutside,
   kError,
 };
 
@@ -159,6 +159,10 @@ class Point {
     }
     return result;
   }
+
+  DEV_HOST_INLINE scalar_t& operator[](int dim) { return (&data_.x)[dim]; }
+
+  DEV_HOST_INLINE const scalar_t& operator[](int dim) const { return (&data_.x)[dim]; }
 
   DEV_HOST_INLINE Box<point_t> get_mbr() const { return {*this, *this}; }
 

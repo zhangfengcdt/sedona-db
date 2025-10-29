@@ -7,17 +7,12 @@
 
 #include "gpuspatial/geom/box.cuh"
 #include "gpuspatial/geom/line_string.cuh"
+#include "gpuspatial/geom/orientation.cuh"
 #include "gpuspatial/utils/array_view.h"
 #include "gpuspatial/utils/cuda_utils.h"
 #include "gpuspatial/utils/floating_point.h"
 
 namespace gpuspatial {
-
-enum class RingOrientation {
-  kClockwise,
-  kCounterclockwise,
-  kDegenerate,
-};
 
 template <typename POINT_T>
 class LinearRing {
@@ -61,38 +56,11 @@ class LinearRing {
     * A positive result indicates Counter-Clockwise (CCW).
     * A negative result indicates Clockwise (CW).
     * A result near zero indicates a self-intersecting or degenerate polygon.
-
     Formula: Sum( (x_i+1 - x_i) * (y_i+1 + y_i) )
    * @return
    */
-  DEV_HOST_INLINE RingOrientation ring_orientation() const {
-    if (vertices_.size() < 3) {
-      return RingOrientation::kDegenerate;
-    }
-    assert(is_closed());
-    int sum_cross_products = 0;
-    // Note: We iterate through all segments. If the ring is closed (first point == last
-    // point), we stop before the last point, as the loop handles the segment back to the
-    // start. If the list is V1, V2, V3, V1, we calculate (V1->V2), (V2->V3), (V3->V1).
-    // Since the input format in the example repeats the first vertex, we use
-    // range(len(ring) - 1) to cover all segments.
-    for (int i = 0; i < vertices_.size() - 1; i++) {
-      auto& v1 = vertices_[i];
-      auto& v2 = vertices_[i + 1];
-      auto x1 = v1.get_coordinate(0);
-      auto y1 = v1.get_coordinate(1);
-      auto x2 = v2.get_coordinate(0);
-      auto y2 = v2.get_coordinate(1);
-      // Cross product variant: (x2 - x1) * (y1 + y2)
-      sum_cross_products += (x2 - x1) * (y1 + y2);
-    }
-
-    if (sum_cross_products > 0)
-      return RingOrientation::kCounterclockwise;
-    else if (sum_cross_products < 0)
-      return RingOrientation::kClockwise;
-    else
-      return RingOrientation::kDegenerate;
+  DEV_HOST_INLINE bool IsCounterClockwise() const {
+    return Orientation<point_t>::IsCounterClockwise(vertices_);
   }
 
   DEV_HOST_INLINE PointLocation locate_point(const point_t& p) const {
@@ -547,7 +515,6 @@ class PolygonArrayView {
     }
     return false;
   }
-
 
  private:
   ArrayView<index_t> prefix_sum_polygons_;

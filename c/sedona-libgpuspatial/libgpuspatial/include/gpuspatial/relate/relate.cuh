@@ -739,7 +739,41 @@ DEV_HOST_INLINE int32_t relate(const POINT_T& geom1,
     p1 = {ArrayView<POINT_T>(const_cast<POINT_T*>(&geom1), 1), geom1.get_mbr()};
   }
   return relate(p1, geom2);
-  return 0;
+}
+
+template <typename POINT_T, typename INDEX_T>
+DEV_HOST_INLINE int32_t relate(const POINT_T& geom1,
+                               const MultiPolygon<POINT_T, INDEX_T>& geom2,
+                               ArrayView<PointLocation> locations) {
+  assert(geom2.num_polygons() == locations.size());
+  if (geom2.empty()) return IM__INTER_EXTER_0D | IM__EXTER_EXTER_2D;
+  int32_t retval = IM__EXTER_EXTER_2D;
+  bool matched = false;
+
+  for (int j = 0; j < geom2.num_polygons(); j++) {
+    retval |= IM__EXTER_INTER_2D | IM__EXTER_BOUND_1D;
+
+    /* dive into the polygon */
+    switch (locations[j]) {
+      case PointLocation::kInside: {
+        matched = true;
+        retval |= IM__INTER_INTER_0D;
+        break;
+      }
+      case PointLocation::kBoundary: {
+        matched = true;
+        retval |= IM__INTER_BOUND_0D;
+        break;
+      }
+      case PointLocation::kOutside: {
+        break;
+      }
+      default:
+        return -1; /* error */
+    }
+  }
+  if (!matched) retval |= IM__INTER_EXTER_0D;
+  return retval;
 }
 
 template <typename POINT_T>
@@ -1452,6 +1486,12 @@ template <typename POINT_T, typename INDEX_T>
 DEV_HOST_INLINE int32_t relate(const MultiPolygon<POINT_T, INDEX_T>& geom1,
                                const POINT_T& geom2) {
   return IM__TWIST(relate(geom2, geom1));
+}
+
+template <typename POINT_T, typename INDEX_T>
+DEV_HOST_INLINE int32_t relate(const MultiPolygon<POINT_T, INDEX_T>& geom1,
+                               const POINT_T& geom2, ArrayView<PointLocation> locations) {
+  return IM__TWIST(relate(geom2, geom1, locations));
 }
 
 template <typename POINT_T, typename INDEX_T>

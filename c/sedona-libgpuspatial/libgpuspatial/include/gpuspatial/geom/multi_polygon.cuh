@@ -134,7 +134,7 @@ class MultiPolygonArrayView {
   DEV_HOST_INLINE ArrayView<box_t> get_mbrs() const { return mbrs_; }
 
   DEV_HOST_INLINE bool locate_vertex(uint32_t vertex_idx, uint32_t& geom_idx,
-                                     uint32_t& part_idx, uint32_t& ring_idx) {
+                                     uint32_t& part_idx, uint32_t& ring_idx) const {
     auto it_ring = thrust::upper_bound(thrust::seq, prefix_sum_rings_.begin(),
                                        prefix_sum_rings_.end(), vertex_idx);
 

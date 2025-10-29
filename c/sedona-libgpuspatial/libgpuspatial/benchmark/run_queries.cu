@@ -406,30 +406,29 @@ void RunQueries(BenchmarkConfig& config) {
 
   sw.start();
   for (size_t i = 0; i < record_batches.size(); i++) {
-    fut_results.emplace_back(pool.enqueue(
-        [&](size_t batch_idx, int64_t array_index_offset) -> QueryResult {
-          nanoarrow::UniqueArray unique_array;
-          nanoarrow::UniqueSchema unique_schema;
-          auto ctx = joiner->CreateContext();
-          auto& array = record_batches[batch_idx];
-          Stopwatch sw;
+    auto fn = [&](size_t batch_idx, int64_t array_index_offset) -> QueryResult {
+      nanoarrow::UniqueArray unique_array;
+      nanoarrow::UniqueSchema unique_schema;
+      auto ctx = joiner->CreateContext();
+      auto& array = record_batches[batch_idx];
+      Stopwatch sw;
 
-          ARROW_THROW_NOT_OK(
-              arrow::ExportArray(*array, unique_array.get(), unique_schema.get()));
-          QueryResult query_result;
-          sw.start();
-          joiner->PushStream(ctx.get(), &tmp_schema, unique_array.get(), 0,
-                             array->length(), Predicate::kContains,
-                             query_result.build_indices.get(),
-                             query_result.stream_indices.get(), array_index_offset);
-          sw.stop();
-          query_result.json_query["time"] = sw.ms();
-          query_result.json_query["record_batch_idx"] = batch_idx;
-          query_result.json_query["query_size"] = unique_array->length;
-          query_result.json_query["result_size"] = query_result.build_indices->size();
-          return query_result;
-        },
-        i, array_index_offset));
+      ARROW_THROW_NOT_OK(
+          arrow::ExportArray(*array, unique_array.get(), unique_schema.get()));
+      QueryResult query_result;
+      sw.start();
+      joiner->PushStream(ctx.get(), &tmp_schema, unique_array.get(), 0, array->length(),
+                         Predicate::kContains, query_result.build_indices.get(),
+                         query_result.stream_indices.get(), array_index_offset);
+      sw.stop();
+      query_result.json_query["time"] = sw.ms();
+      query_result.json_query["record_batch_idx"] = batch_idx;
+      query_result.json_query["query_size"] = unique_array->length;
+      query_result.json_query["result_size"] = query_result.build_indices->size();
+      return query_result;
+    };
+    fn(i, array_index_offset);
+    // fut_results.emplace_back(pool.enqueue(fn, i, array_index_offset));
     array_index_offset += record_batches[i]->length();
   }
 

@@ -1,3 +1,4 @@
+#include "gpuspatial/geom/polygon_ring_encoder.cuh"
 #include "gpuspatial/index/detail/launch_parameters.h"
 #include "gpuspatial/index/geometry_grouper.hpp"
 #include "gpuspatial/index/relate_engine.cuh"
@@ -13,6 +14,8 @@
 #include "gpuspatial/utils/stopwatch.h"
 #include "index/shaders/shader_id.hpp"
 
+#include <thrust/device_vector.h>
+#include <thrust/host_vector.h>
 #include <thrust/partition.h>
 #include <thrust/remove.h>
 #include <thrust/sort.h>
@@ -154,14 +157,14 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
     // }
     case GeometryType::kPolygon: {
       using geom1_array_view_t = PolygonArrayView<POINT_T, INDEX_T>;
-      Evaluate(stream, geoms1_->template GetGeometryArrayView<geom1_array_view_t>(),
-               geom_array2, predicate, ids);
+      // Evaluate(stream, geoms1_->template GetGeometryArrayView<geom1_array_view_t>(),
+      // geom_array2, predicate, ids);
       break;
     }
     case GeometryType::kMultiPolygon: {
       using geom1_array_view_t = MultiPolygonArrayView<POINT_T, INDEX_T>;
-      // Evaluate(stream, geoms1_->template GetGeometryArrayView<geom1_array_view_t>(),
-      // geom_array2, predicate, ids);
+      Evaluate(stream, geoms1_->template GetGeometryArrayView<geom1_array_view_t>(),
+               geom_array2, predicate, ids);
       break;
     }
     default:
@@ -327,7 +330,6 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
         return pair == invalid_pair;
       });
   ids.set_size(stream, end - ids.data());
-  // EvaluatePolygonPointLB(stream, geom_array1, geom_array2, predicate, ids);
 }
 
 template <typename POINT_T, typename INDEX_T>
@@ -336,7 +338,170 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
     const MultiPolygonArrayView<POINT_T, INDEX_T>& geom_array1,
     const PointArrayView<POINT_T, INDEX_T>& geom_array2, Predicate predicate,
     Queue<thrust::pair<uint32_t, uint32_t>>& ids) {
-  EvaluatePolygonPointLB(stream, geom_array1, geom_array2, predicate, ids);
+  thrust::host_vector<INDEX_T> h_geom =
+      thrust::device_vector<INDEX_T>(geom_array1.get_prefix_sum_geoms().begin(),
+                                     geom_array1.get_prefix_sum_geoms().end());
+  thrust::host_vector<INDEX_T> h_part =
+      thrust::device_vector<INDEX_T>(geom_array1.get_prefix_sum_parts().begin(),
+                                     geom_array1.get_prefix_sum_parts().end());
+  thrust::host_vector<INDEX_T> h_ring =
+      thrust::device_vector<INDEX_T>(geom_array1.get_prefix_sum_rings().begin(),
+                                     geom_array1.get_prefix_sum_rings().end());
+  thrust::host_vector<Box<POINT_T>> h_mbrs = thrust::device_vector<Box<POINT_T>>(
+      geom_array1.get_mbrs().begin(), geom_array1.get_mbrs().end());
+  ArrayView<INDEX_T> v_geom(h_geom);
+  ArrayView<INDEX_T> v_part(h_part);
+  ArrayView<INDEX_T> v_ring(h_ring);
+  ArrayView<Box<POINT_T>> v_mbrs(h_mbrs);
+  MultiPolygonArrayView<POINT_T, INDEX_T> marray(v_geom, v_part, v_ring,
+                                                 ArrayView<POINT_T>(), v_mbrs);
+  uint32_t geom_idx, part_idx, ring_idx;
+  uint32_t v_idx = 0;
+  uint32_t n_multi = marray.size();
+  // for (int geom = 0; geom < n_multi; geom++) {
+  //   const auto& polys = marray[geom];
+  //   for (int part = 0; part < polys.num_polygons(); part++) {
+  //     auto poly = polys.get_polygon(part);
+  //     for (int ring = 0; ring < poly.num_rings(); ring++) {
+  //       for (int v = 0; v < poly.get_ring(ring).num_points(); v++) {
+  //         assert(marray.locate_vertex(v_idx++, geom_idx, part_idx, ring_idx));
+  //         assert(geom == geom_idx);
+  //         assert(part == part_idx);
+  //         assert(ring == ring_idx);
+  //       }
+  //     }
+  //   }
+  // }
+
+  int poly_id = 18326;
+  auto part_begin = h_geom[poly_id];
+  auto part_end = h_geom[poly_id + 1];
+  auto ring_begin = h_part[part_begin];
+  auto ring_end = h_part[part_begin + 1];
+  printf("part begin end %u %u\n", part_begin, part_end);
+  printf("ring begin end %u %u\n", ring_begin, ring_end);
+  for (int i = ring_begin; i < ring_end; i++) {
+    auto v_begin = h_ring[i];
+    auto v_end = h_ring[i + 1];
+    printf("ring i %u, v begin %u, end %u\n", i, v_begin, v_end);
+  }
+
+  auto ids_size = ids.size(stream);
+
+  if (ids_size == 0) {
+    return;
+  }
+  // sort by polygon id
+
+  rmm::device_uvector<uint32_t> geom1_ids(ids_size, stream);
+
+  thrust::transform(
+      rmm::exec_policy_nosync(stream), ids.data(), ids.data() + ids_size,
+      geom1_ids.data(),
+      [] __device__(const thrust::pair<uint32_t, uint32_t>& pair) { return pair.first; });
+
+  thrust::sort(rmm::exec_policy_nosync(stream), geom1_ids.begin(), geom1_ids.end());
+
+  auto geom1_ids_end =
+      thrust::unique(rmm::exec_policy_nosync(stream), geom1_ids.begin(), geom1_ids.end());
+  geom1_ids.resize(thrust::distance(geom1_ids.begin(), geom1_ids_end), stream);
+  geom1_ids.shrink_to_fit(stream);
+
+  // printf("start query polygons %lu, ids %u\n", geom1_ids.size(), ids_size);
+
+  // number of polygons in each multipolygon
+  rmm::device_uvector<uint32_t> num_parts(ids_size, stream);
+  rmm::device_uvector<uint32_t> part_begins(num_parts.size() + 1, stream);
+
+  thrust::transform(rmm::exec_policy_nosync(stream), ids.data(), ids.data() + ids_size,
+                    num_parts.begin(),
+                    [=] __device__(const thrust::pair<uint32_t, uint32_t>& pair) {
+                      auto multi_polygon_idx = pair.first;
+                      return geom_array1[multi_polygon_idx].num_polygons();
+                    });
+
+  part_begins.set_element_to_zero_async(0, stream);
+  thrust::inclusive_scan(rmm::exec_policy_nosync(stream), num_parts.begin(),
+                         num_parts.end(), part_begins.begin() + 1);
+  num_parts.resize(0, stream);
+  num_parts.shrink_to_fit(stream);
+
+  auto n_parts = part_begins.back_element(stream);
+
+  printf("ids %u, total parts %u\n", ids_size, n_parts);
+
+  rmm::device_uvector<PointLocation> part_locations(n_parts, stream);
+
+  // init with outside. if no hit, point is outside by default
+  // aabb id -> vertex begin[polygon] + ith point in this polygon
+
+  rmm::device_uvector<INDEX_T> seg_begins(0, stream);
+  rmm::device_uvector<INDEX_T> seg_multi_polygon_ids(0, stream);
+  rmm::device_buffer bvh_buffer(0, stream);
+  auto handle = BuildBVH(stream, geom_array1, ArrayView<INDEX_T>(geom1_ids), seg_begins,
+                         seg_multi_polygon_ids, bvh_buffer);
+
+  stream.synchronize();
+
+  using params_t = detail::LaunchParamsMultiPolygonPointQuery<POINT_T, INDEX_T>;
+
+  params_t params;
+
+  params.multi_polygons = geom_array1;
+  params.points = geom_array2;
+  params.multi_polygon_ids = ArrayView<INDEX_T>(geom1_ids);
+  params.ids = ArrayView<thrust::pair<uint32_t, uint32_t>>(ids.data(), ids_size);
+  params.seg_begins = ArrayView<INDEX_T>(seg_begins);
+  params.seg_multi_polygon_ids = ArrayView<INDEX_T>(seg_multi_polygon_ids);
+  params.part_begins = ArrayView<INDEX_T>(part_begins);
+  params.locations = ArrayView<PointLocation>(part_locations);
+  params.handle = handle;
+
+  rmm::device_buffer params_buffer(sizeof(params_t), stream);
+
+  CUDA_CHECK(cudaMemcpyAsync(params_buffer.data(), &params, sizeof(params_t),
+                             cudaMemcpyHostToDevice, stream.value()));
+
+  rt_engine_->Render(stream, GetMultiPolygonPointQueryShaderId<POINT_T>(),
+                     dim3{ids_size, 1, 1},
+                     ArrayView<char>((char*)params_buffer.data(), params_buffer.size()));
+  stream.synchronize();
+
+  auto* p_part_locations = part_locations.data();
+  auto* p_part_begins = part_begins.data();
+  auto* p_ids = ids.data();
+
+  auto invalid_pair = thrust::make_pair(std::numeric_limits<uint32_t>::max(),
+                                        std::numeric_limits<uint32_t>::max());
+
+  thrust::transform(
+      rmm::exec_policy_nosync(stream), thrust::make_counting_iterator<uint32_t>(0),
+      thrust::make_counting_iterator<uint32_t>(ids_size), ids.data(),
+      [=] __device__(uint32_t i) {
+        const auto& pair = p_ids[i];
+        auto geom1_id = pair.first;
+        auto geom2_id = pair.second;
+        const auto& geom1 = geom_array1[geom1_id];
+        const auto& geom2 = geom_array2[geom2_id];
+        auto begin = p_part_begins[i];
+
+        auto IM = relate(
+            geom1, geom2,
+            ArrayView<PointLocation>(&p_part_locations[begin], geom1.num_polygons()));
+        if (detail::EvaluatePredicate(predicate, IM)) {
+          return pair;
+        } else {
+          return invalid_pair;
+        }
+      });
+
+  auto end = thrust::remove_if(
+      rmm::exec_policy_nosync(stream), ids.data(), ids.data() + ids_size,
+      [=] __device__(const thrust::pair<uint32_t, uint32_t>& pair) {
+        return pair == invalid_pair;
+      });
+  ids.set_size(stream, end - ids.data());
+  printf("in size %u, filter size %u\n", ids_size, end - ids.data());
 }
 
 template <typename POINT_T, typename INDEX_T>
@@ -632,46 +797,194 @@ OptixTraversableHandle RelateEngine<POINT_T, INDEX_T>::BuildBVH(
   rmm::device_uvector<OptixAabb> aabbs(num_aabbs, stream);
   auto* p_aabbs = aabbs.data();
 
-  thrust::for_each(
-      rmm::exec_policy_nosync(stream), thrust::make_counting_iterator<uint32_t>(0),
-      thrust::make_counting_iterator<uint32_t>(polygon_ids.size()),
-      [=] __device__(uint32_t i) {
-        auto polygon_id = polygon_ids[i];
-        const auto& polygon = polygons[polygon_id];
-        OptixAabb aabb;
+  thrust::for_each(rmm::exec_policy_nosync(stream),
+                   thrust::make_counting_iterator<uint32_t>(0),
+                   thrust::make_counting_iterator<uint32_t>(polygon_ids.size()),
+                   [=] __device__(uint32_t i) {
+                     auto polygon_id = polygon_ids[i];
+                     const auto& polygon = polygons[polygon_id];
+                     OptixAabb aabb;
 
-        aabb.minZ = aabb.maxZ = i;
-        int tail = p_seg_begins[i];
+                     aabb.minZ = aabb.maxZ = i;
+                     int tail = p_seg_begins[i];
 
-        for (int ring_idx = 0; ring_idx < polygon.num_rings(); ring_idx++) {
-          auto ring = polygon.get_ring(ring_idx);
-          for (int seg_idx = 0; seg_idx < ring.num_segments(); seg_idx++) {
-            const auto& seg = ring.get_line_segment(seg_idx);
-            const auto& p1 = seg.get_p1();
-            const auto& p2 = seg.get_p2();
+                     for (int ring_idx = 0; ring_idx < polygon.num_rings(); ring_idx++) {
+                       auto ring = polygon.get_ring(ring_idx);
+                       for (int seg_idx = 0; seg_idx < ring.num_segments(); seg_idx++) {
+                         const auto& seg = ring.get_line_segment(seg_idx);
+                         const auto& p1 = seg.get_p1();
+                         const auto& p2 = seg.get_p2();
 
-            aabb.minX = std::min(p1.x(), p2.x());
-            aabb.maxX = std::max(p1.x(), p2.x());
-            aabb.minY = std::min(p1.y(), p2.y());
-            aabb.maxY = std::max(p1.y(), p2.y());
+                         aabb.minX = std::min(p1.x(), p2.x());
+                         aabb.maxX = std::max(p1.x(), p2.x());
+                         aabb.minY = std::min(p1.y(), p2.y());
+                         aabb.maxY = std::max(p1.y(), p2.y());
 
-            if (std::is_same_v<scalar_t, double>) {
-              aabb.minX = next_float_from_double(aabb.minX, -1, 2);
-              aabb.maxX = next_float_from_double(aabb.maxX, 1, 2);
-              aabb.minY = next_float_from_double(aabb.minY, -1, 2);
-              aabb.maxY = next_float_from_double(aabb.maxY, 1, 2);
-            }
-            p_aabbs[tail] = aabb;
-            p_seg_polygon_ids[tail] = polygon_id;
-            tail++;
-          }
-        }
-      });
+                         if (std::is_same_v<scalar_t, double>) {
+                           aabb.minX = next_float_from_double(aabb.minX, -1, 2);
+                           aabb.maxX = next_float_from_double(aabb.maxX, 1, 2);
+                           aabb.minY = next_float_from_double(aabb.minY, -1, 2);
+                           aabb.maxY = next_float_from_double(aabb.maxY, 1, 2);
+                         }
+                         p_aabbs[tail] = aabb;
+                         p_seg_polygon_ids[tail] = polygon_id;
+                         tail++;
+                       }
+                     }
+                   });
   assert(rt_engine_ != nullptr);
   return rt_engine_->BuildAccelCustom(stream.value(), ArrayView<OptixAabb>(aabbs),
                                       buffer);
 }
 
+template <typename POINT_T, typename INDEX_T>
+OptixTraversableHandle RelateEngine<POINT_T, INDEX_T>::BuildBVH(
+    const rmm::cuda_stream_view& stream,
+    const MultiPolygonArrayView<POINT_T, INDEX_T>& multi_polygons,
+    ArrayView<uint32_t> multi_polygon_ids, rmm::device_uvector<INDEX_T>& seg_begins,
+    rmm::device_uvector<INDEX_T>& seg_multi_polygon_ids, rmm::device_buffer& buffer) {
+  auto n_mult_polygons = multi_polygon_ids.size();
+  rmm::device_uvector<uint32_t> n_segs(n_mult_polygons, stream);
+
+  if (n_mult_polygons >= POLYGON_MASK) {
+    throw std::runtime_error("MultiPolygon ids is out of bound!");
+  }
+
+  thrust::transform(rmm::exec_policy_nosync(stream), multi_polygon_ids.begin(),
+                    multi_polygon_ids.end(), n_segs.begin(),
+                    [=] __device__(const uint32_t& id) -> uint32_t {
+                      const auto& multi_polygon = multi_polygons[id];
+                      uint32_t total_segs = 0;
+
+                      for (int polygon_idx = 0;
+                           polygon_idx < multi_polygon.num_polygons(); polygon_idx++) {
+                        auto polygon = multi_polygon.get_polygon(polygon_idx);
+                        for (int ring = 0; ring < polygon.num_rings(); ring++) {
+                          total_segs += polygon.get_ring(ring).num_points();
+                        }
+                      }
+
+                      return total_segs;
+                    });
+
+  seg_begins = std::move(rmm::device_uvector<INDEX_T>(n_mult_polygons + 1, stream));
+  auto* p_seg_begins = seg_begins.data();
+  seg_begins.set_element_to_zero_async(0, stream);
+
+  thrust::inclusive_scan(rmm::exec_policy_nosync(stream), n_segs.begin(), n_segs.end(),
+                         seg_begins.begin() + 1);
+
+  // each line seg is corresponding to an AABB and each ring includes an empty AABB for an
+  // AABB id-vertex id relationship
+  uint32_t num_aabbs = thrust::transform_reduce(
+      rmm::exec_policy_nosync(stream), multi_polygon_ids.begin(), multi_polygon_ids.end(),
+      [=] __device__(const uint32_t& id) -> uint32_t {
+        const auto& multi_polygon = multi_polygons[id];
+        uint32_t total_vertices = 0;
+
+        for (int polygon_idx = 0; polygon_idx < multi_polygon.num_polygons();
+             polygon_idx++) {
+          auto polygon = multi_polygon.get_polygon(polygon_idx);
+          for (int ring = 0; ring < polygon.num_rings(); ring++) {
+            total_vertices += polygon.get_ring(ring).num_points();
+          }
+        }
+
+        return total_vertices;
+      },
+      0u, thrust::plus<uint32_t>());
+
+  seg_multi_polygon_ids = std::move(rmm::device_uvector<INDEX_T>(num_aabbs, stream));
+  auto* p_seg_multi_polygon_ids = seg_multi_polygon_ids.data();
+
+  rmm::device_uvector<OptixAabb> aabbs(num_aabbs, stream);
+  auto* p_aabbs = aabbs.data();
+
+  thrust::for_each(
+      rmm::exec_policy_nosync(stream), thrust::make_counting_iterator<uint32_t>(0),
+      thrust::make_counting_iterator<uint32_t>(multi_polygon_ids.size()),
+      [=] __device__(uint32_t i) {
+        auto multi_polygon_id = multi_polygon_ids[i];
+        const auto& multi_polygon = multi_polygons[multi_polygon_id];
+        OptixAabb aabb;
+
+        int tail = p_seg_begins[i];
+        auto local_v1 = 0;
+
+        for (int polygon_idx = 0; polygon_idx < multi_polygon.num_polygons();
+             polygon_idx++) {
+          auto polygon = multi_polygon.get_polygon(polygon_idx);
+          if (polygon.num_rings() >= RING_BITS) {
+            printf("Polygon has too many rings! %u\n", polygon.num_rings());
+            assert(false);
+          }
+          for (int ring_idx = 0; ring_idx < polygon.num_rings(); ring_idx++) {
+            auto ring = polygon.get_ring(ring_idx);
+            // i is the renumbered polygon id starting from 0
+            aabb.minZ = aabb.maxZ = i;  // ENCODE_PIP_RT(i, ring_idx);
+
+            for (int seg_idx = 0; seg_idx < ring.num_segments(); seg_idx++) {
+              const auto& seg = ring.get_line_segment(seg_idx);
+              const auto& p1 = seg.get_p1();
+              const auto& p2 = seg.get_p2();
+
+              aabb.minX = std::min(p1.x(), p2.x());
+              aabb.maxX = std::max(p1.x(), p2.x());
+              aabb.minY = std::min(p1.y(), p2.y());
+              aabb.maxY = std::max(p1.y(), p2.y());
+
+              if (std::is_same_v<scalar_t, double>) {
+                aabb.minX = next_float_from_double(aabb.minX, -1, 2);
+                aabb.maxX = next_float_from_double(aabb.maxX, 1, 2);
+                aabb.minY = next_float_from_double(aabb.minY, -1, 2);
+                aabb.maxY = next_float_from_double(aabb.maxY, 1, 2);
+              }
+              p_aabbs[tail] = aabb;
+              p_seg_multi_polygon_ids[tail] = multi_polygon_id;
+
+              uint32_t hit_geom_idx, hit_part_idx, hit_ring_idx;
+
+              // first polygon offset
+              uint32_t part_offset =
+                  multi_polygons.get_prefix_sum_geoms()[multi_polygon_id];
+              // first ring offset of the polygon
+              uint32_t ring_offset = multi_polygons.get_prefix_sum_parts()[part_offset];
+              // first vertex offset of the ring
+              uint32_t v_offset = multi_polygons.get_prefix_sum_rings()[ring_offset];
+
+              auto global_v1 = v_offset + local_v1;
+
+              multi_polygons.locate_vertex(global_v1, hit_geom_idx, hit_part_idx,
+                                           hit_ring_idx);
+              if (hit_geom_idx != multi_polygon_id || hit_part_idx != polygon_idx) {
+                printf(
+                    "global v1 %u, multi %u, part %u, ring %u, hit multi %u, part %u, ring %u\n",
+                    global_v1, multi_polygon_id, polygon_idx, ring_idx, hit_geom_idx,
+                    hit_part_idx, hit_ring_idx);
+              }
+              if (multi_polygon_id == 18308 && seg_idx == 0) {
+                printf("first local_v1 %u\n", local_v1);
+              }
+              if (multi_polygon_id == 18308 && seg_idx == ring.num_segments() - 1) {
+                printf("last local_v1 %u\n", local_v1);
+              }
+              assert(hit_geom_idx == multi_polygon_id);
+              assert(hit_part_idx == polygon_idx);
+              assert(hit_ring_idx == ring_idx);
+              local_v1++;
+              tail++;
+            }
+            p_aabbs[tail++] = OptixAabb{0, 0, 0, 0, 0, 0};
+            // todo
+            local_v1++;
+          }
+        }
+        assert(p_seg_begins[i + 1] == tail);
+      });
+  assert(rt_engine_ != nullptr);
+  return rt_engine_->BuildAccelCustom(stream.value(), ArrayView<OptixAabb>(aabbs),
+                                      buffer);
+}
 // Explicitly instantiate the template for specific types
 template class RelateEngine<Point<double, 2>, uint32_t>;
 }  // namespace gpuspatial
