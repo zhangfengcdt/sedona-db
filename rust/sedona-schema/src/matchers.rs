@@ -313,6 +313,20 @@ impl TypeMatcher for IsGeometry {
             SedonaType::Wkb(edges, _) | SedonaType::WkbView(edges, _) => {
                 matches!(edges, Edges::Planar)
             }
+            // Accept Struct{"geoarrow.wkb": Binary} from Spark/Comet
+            SedonaType::Arrow(DataType::Struct(fields))
+                if fields.len() == 1 && fields[0].name() == "geoarrow.wkb" =>
+            {
+                // Extract and check if inner field is a planar geometry type
+                SedonaType::from_storage_field(&fields[0])
+                    .ok()
+                    .and_then(|t| match t {
+                        SedonaType::Wkb(Edges::Planar, _)
+                        | SedonaType::WkbView(Edges::Planar, _) => Some(true),
+                        _ => None,
+                    })
+                    .unwrap_or(false)
+            }
             _ => false,
         }
     }

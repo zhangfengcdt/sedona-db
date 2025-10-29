@@ -358,6 +358,31 @@ impl IterGeo for ArrayRef {
             }
             SedonaType::Wkb(_, _) => iter_wkb_binary(as_binary_array(self)?, func),
             SedonaType::WkbView(_, _) => iter_wkb_binary(as_binary_view_array(self)?, func),
+            // Handle Struct{"geoarrow.wkb": Binary} from Spark/Comet
+            SedonaType::Arrow(DataType::Struct(fields))
+                if fields.len() == 1 && fields[0].name() == "geoarrow.wkb" =>
+            {
+                use datafusion_common::cast::as_struct_array;
+
+                // Extract the inner Binary/BinaryView field from the Struct
+                let struct_array = as_struct_array(self)?;
+                let inner_array = struct_array.column(0);
+                let inner_field = &fields[0];
+
+                // Determine the inner type and iterate accordingly
+                match inner_field.data_type() {
+                    DataType::Binary | DataType::LargeBinary => {
+                        iter_wkb_binary(as_binary_array(inner_array)?, func)
+                    }
+                    DataType::BinaryView => {
+                        iter_wkb_binary(as_binary_view_array(inner_array)?, func)
+                    }
+                    _ => sedona_internal_err!(
+                        "Expected Binary/BinaryView inside Struct, got {:?}",
+                        inner_field.data_type()
+                    ),
+                }
+            }
             _ => {
                 // We could cast here as a fallback, iterate and cast per-element, or
                 // implement iter_as_something_else()/supports_iter_xxx() when more geo array types

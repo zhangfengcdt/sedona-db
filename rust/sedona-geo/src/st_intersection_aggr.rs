@@ -14,10 +14,10 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use std::{sync::Arc, vec};
+use std::{collections::HashMap, sync::Arc, vec};
 
-use arrow_array::ArrayRef;
-use arrow_schema::FieldRef;
+use arrow_array::{ArrayRef, StructArray};
+use arrow_schema::{DataType, Field, FieldRef};
 use datafusion_common::{
     error::{DataFusionError, Result},
     ScalarValue,
@@ -45,7 +45,17 @@ struct STIntersectionAggr {}
 
 impl SedonaAccumulator for STIntersectionAggr {
     fn return_type(&self, args: &[SedonaType]) -> Result<Option<SedonaType>> {
-        let matcher = ArgMatcher::new(vec![ArgMatcher::is_geometry()], WKB_GEOMETRY);
+        // Return Struct{"geoarrow.wkb": Binary} for compatibility with Spark/Comet
+        let mut field = Field::new("geoarrow.wkb", DataType::Binary, true);
+        field.set_metadata(HashMap::from([
+            (
+                "ARROW:extension:name".to_string(),
+                "geoarrow.wkb".to_string(),
+            ),
+            ("ARROW:extension:metadata".to_string(), "{}".to_string()),
+        ]));
+        let r_type = SedonaType::Arrow(DataType::Struct(vec![field].into()));
+        let matcher = ArgMatcher::new(vec![ArgMatcher::is_geometry()], r_type);
         matcher.match_args(args)
     }
 
@@ -180,7 +190,22 @@ impl Accumulator for IntersectionAccumulator {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let wkb = self.make_wkb_result()?;
-        Ok(ScalarValue::Binary(wkb))
+        // Wrap Binary in Struct{"geoarrow.wkb": Binary} for compatibility with Spark/Comet
+        let binary_scalar = ScalarValue::Binary(wkb);
+
+        let mut field = Field::new("geoarrow.wkb", DataType::Binary, true);
+        field.set_metadata(HashMap::from([
+            (
+                "ARROW:extension:name".to_string(),
+                "geoarrow.wkb".to_string(),
+            ),
+            ("ARROW:extension:metadata".to_string(), "{}".to_string()),
+        ]));
+
+        let binary_array = binary_scalar.to_array()?;
+        let struct_array = StructArray::from(vec![(Arc::new(field), binary_array)]);
+
+        Ok(ScalarValue::Struct(Arc::new(struct_array)))
     }
 
     fn size(&self) -> usize {
