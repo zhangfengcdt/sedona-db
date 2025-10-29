@@ -14,12 +14,12 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use std::{collections::HashMap, sync::Arc, vec};
+use std::{sync::Arc, vec};
 
 use crate::executor::WkbExecutor;
 use crate::st_envelope::write_envelope;
-use arrow_array::{ArrayRef, StructArray};
-use arrow_schema::{DataType, Field, FieldRef};
+use arrow_array::ArrayRef;
+use arrow_schema::FieldRef;
 use datafusion_common::{
     error::{DataFusionError, Result},
     ScalarValue,
@@ -66,17 +66,7 @@ struct STEnvelopeAggr {}
 
 impl SedonaAccumulator for STEnvelopeAggr {
     fn return_type(&self, args: &[SedonaType]) -> Result<Option<SedonaType>> {
-        // Return Struct{"geoarrow.wkb": Binary} for compatibility with Spark/Comet
-        let mut field = Field::new("geoarrow.wkb", DataType::Binary, true);
-        field.set_metadata(HashMap::from([
-            (
-                "ARROW:extension:name".to_string(),
-                "geoarrow.wkb".to_string(),
-            ),
-            ("ARROW:extension:metadata".to_string(), "{}".to_string()),
-        ]));
-        let r_type = SedonaType::Arrow(DataType::Struct(vec![field].into()));
-        let matcher = ArgMatcher::new(vec![ArgMatcher::is_geometry()], r_type);
+        let matcher = ArgMatcher::new(vec![ArgMatcher::is_geometry()], WKB_GEOMETRY);
         matcher.match_args(args)
     }
 
@@ -165,22 +155,7 @@ impl Accumulator for BoundsAccumulator2D {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let wkb = self.make_wkb_result()?;
-        // Wrap Binary in Struct{"geoarrow.wkb": Binary} for compatibility with Spark/Comet
-        let binary_scalar = ScalarValue::Binary(wkb);
-
-        let mut field = Field::new("geoarrow.wkb", DataType::Binary, true);
-        field.set_metadata(HashMap::from([
-            (
-                "ARROW:extension:name".to_string(),
-                "geoarrow.wkb".to_string(),
-            ),
-            ("ARROW:extension:metadata".to_string(), "{}".to_string()),
-        ]));
-
-        let binary_array = binary_scalar.to_array()?;
-        let struct_array = StructArray::from(vec![(Arc::new(field), binary_array)]);
-
-        Ok(ScalarValue::Struct(Arc::new(struct_array)))
+        Ok(ScalarValue::Binary(wkb))
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -223,18 +198,7 @@ mod test {
     fn udf(#[values(WKB_GEOMETRY, WKB_VIEW_GEOMETRY)] sedona_type: SedonaType) {
         let tester =
             AggregateUdfTester::new(st_envelope_aggr_udf().into(), vec![sedona_type.clone()]);
-
-        // Expected return type: Struct{"geoarrow.wkb": Binary} for Spark/Comet compatibility
-        let mut expected_field = Field::new("geoarrow.wkb", DataType::Binary, true);
-        expected_field.set_metadata(HashMap::from([
-            (
-                "ARROW:extension:name".to_string(),
-                "geoarrow.wkb".to_string(),
-            ),
-            ("ARROW:extension:metadata".to_string(), "{}".to_string()),
-        ]));
-        let expected_return_type = SedonaType::Arrow(DataType::Struct(vec![expected_field].into()));
-        assert_eq!(tester.return_type().unwrap(), expected_return_type);
+        assert_eq!(tester.return_type().unwrap(), WKB_GEOMETRY);
 
         // Finite input with nulls
         let batches = vec![
