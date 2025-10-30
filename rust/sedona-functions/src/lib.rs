@@ -47,6 +47,7 @@ mod st_makeline;
 mod st_perimeter;
 mod st_point;
 mod st_pointn;
+mod st_points;
 mod st_pointzm;
 mod st_setsrid;
 mod st_srid;
