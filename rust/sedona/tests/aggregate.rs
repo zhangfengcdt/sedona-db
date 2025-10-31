@@ -259,6 +259,6 @@ mod aggregate_functions {
         assert_eq!(batch.num_columns(), 1);
 
         let result_array = batch.column(0);
-        assert!(result_array.len() > 0, "Expected non-empty result");
+        assert!(!result_array.is_empty(), "Expected non-empty result");
     }
 }
