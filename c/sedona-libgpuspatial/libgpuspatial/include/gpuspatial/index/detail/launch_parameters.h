@@ -75,6 +75,7 @@ struct LaunchParamsMultiPolygonPointQuery {
   ArrayView<PointLocation> locations;  // location of each part
   OptixTraversableHandle handle;
   ArrayView<index_t> aabb_multi_poly_ids, aabb_part_ids, aabb_ring_ids;
+  ArrayView<uint32_t> hit_counters;
 };
 
 }  // namespace detail

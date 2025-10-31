@@ -7,7 +7,7 @@ namespace gpuspatial {
 
 #define SHADER_FUNCTION_SUFFIX "gpuspatial"
 // TODO: Set separated parameters
-#define SHADER_NUM_PAYLOADS (7)
+#define SHADER_NUM_PAYLOADS (8)
 
 #if defined(SHADER_POINT_FLOAT_2D)
 using ShaderPointType = Point<float, 2>;
