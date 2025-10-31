@@ -2,8 +2,8 @@
 #include <optix_device.h>
 #include <cfloat>
 
+#include "gpuspatial/geom/id_encoder.cuh"
 #include "gpuspatial/geom/line_segment.cuh"
-#include "gpuspatial/geom/polygon_ring_encoder.cuh"
 #include "gpuspatial/index/detail/launch_parameters.h"
 #include "gpuspatial/utils/floating_point.h"
 #include "shader_config.h"
@@ -32,8 +32,6 @@ extern "C" __global__ void __intersection__gpuspatial() {
 
   // the seg being hit is not from the query polygon
   if (params.seg_multi_polygon_ids[aabb_id] != multi_polygon_idx) {
-    // printf("return multi poly %u -> seg to multi %u\n", multi_polygon_idx,
-    // params.seg_multi_polygon_ids[aabb_id]);
     return;
   }
 
@@ -42,17 +40,18 @@ extern "C" __global__ void __intersection__gpuspatial() {
   uint32_t global_v2_idx = global_v1_idx + 1;
   uint32_t hit_geom_idx, hit_part_idx, hit_ring_idx;
 
-  bool found = multi_polygons.locate_vertex(global_v1_idx, hit_geom_idx, hit_part_idx,
-                                            hit_ring_idx);
-  assert(found);
+  // bool found = multi_polygons.locate_vertex(global_v1_idx, hit_geom_idx, hit_part_idx,
+                                            // hit_ring_idx);
 
-  if (multi_polygon_idx == 18308 && point_idx == 3054) {
-    // printf(
-    //     "cast for ring %u, hit ring %u, seg %u-%u, np ring0 %u, v_offset %u global v1
-    //     %u\n", ring_idx, hit_ring_idx, local_v1_idx, local_v1_idx + 1,
-    //     multi_polygons[multi_polygon_idx].get_polygon(0).get_ring(0).num_points(),
-    //     v_offset, global_v1_idx);
-  }
+  // assert(params.geom_ids[aabb_id] == hit_geom_idx);
+  // assert(params.part_ids[aabb_id] == hit_part_idx);
+  // assert(params.ring_ids[aabb_id] == hit_ring_idx);
+  // assert(found);
+
+  hit_geom_idx = params.geom_ids[aabb_id];
+  hit_part_idx = params.part_ids[aabb_id];
+  hit_ring_idx = params.ring_ids[aabb_id];
+
   if (hit_geom_idx == multi_polygon_idx && hit_part_idx == part_idx &&
       hit_ring_idx == ring_idx) {
     auto vertices = multi_polygons.get_vertices();
@@ -71,7 +70,7 @@ extern "C" __global__ void __intersection__gpuspatial() {
 extern "C" __global__ void __raygen__gpuspatial() {
   using namespace gpuspatial;
   float tmin = 0;
-  float tmax = 1e10;  // use a very large value
+  float tmax = FLT_MAX;  // use a very large value
   const auto& ids = params.ids;
   using point_t = ShaderPointType;
   const auto& multi_polygons = params.multi_polygons;
@@ -81,10 +80,6 @@ extern "C" __global__ void __raygen__gpuspatial() {
        i += optixGetLaunchDimensions().x) {
     auto multi_polygon_idx = ids[i].first;
     auto point_idx = ids[i].second;
-
-    if (multi_polygon_idx != 18073 || point_idx != 896) {
-      // continue;
-    }
 
     auto it = thrust::lower_bound(thrust::seq, params.multi_polygon_ids.begin(),
                                   params.multi_polygon_ids.end(), multi_polygon_idx);
@@ -99,11 +94,14 @@ extern "C" __global__ void __raygen__gpuspatial() {
     // each polygon takes a z-plane
     origin.x = p.x();
     origin.y = p.y();
-    origin.z = reordered_multi_polygon_idx;
+    // origin.z = reordered_multi_polygon_idx;
     // cast ray toward positive x-axis
     float3 dir = {1, 0, 0};
     auto part_begin = params.part_begins[i];
     const auto& multi_polygon = multi_polygons[multi_polygon_idx];
+    const auto& mbr = multi_polygon.get_mbr();
+    auto width = mbr.get_max().x() - mbr.get_min().x();
+    tmax = 2 * width;
 
     // first polygon offset
     uint32_t part_offset = multi_polygons.get_prefix_sum_geoms()[multi_polygon_idx];
@@ -116,6 +114,9 @@ extern "C" __global__ void __raygen__gpuspatial() {
       auto polygon = multi_polygon.get_polygon(part);
       uint32_t ring = 0;
       locator.Init();
+      uint32_t encoded_z = ENCODE_UINT32_T_3(reordered_multi_polygon_idx, part, ring);
+      origin.z = *reinterpret_cast<float*>(&encoded_z);
+      uint32_t n_hits = 0;
       // test exterior
       optixTrace(params.handle, origin, dir, tmin, tmax, 0, OptixVisibilityMask(255),
                  OPTIX_RAY_FLAG_NONE,            // OPTIX_RAY_FLAG_NONE,
@@ -130,17 +131,16 @@ extern "C" __global__ void __raygen__gpuspatial() {
                  locator.get_crossing_count(),   // 5
                  locator.get_point_on_segment()  // 6
       );
-      if (multi_polygon_idx == 18308 && point_idx == 3054) {
-        printf("crossing number %u\n", locator.get_crossing_count());
-      }
       auto location = locator.location();
       PointLocation final_location = PointLocation::kError;
-
       if (location == PointLocation::kInside) {
         final_location = location;
         // test interior
         for (ring = 1; ring < polygon.num_rings(); ring++) {
+          n_hits = 0;
           locator.Init();
+          encoded_z = ENCODE_UINT32_T_3(reordered_multi_polygon_idx, part, ring);
+          origin.z = *reinterpret_cast<float*>(&encoded_z);
           optixTrace(params.handle, origin, dir, tmin, tmax, 0, OptixVisibilityMask(255),
                      OPTIX_RAY_FLAG_NONE,            // OPTIX_RAY_FLAG_NONE,
                      SURFACE_RAY_TYPE,               // SBT offset
@@ -169,18 +169,18 @@ extern "C" __global__ void __raygen__gpuspatial() {
       }
       assert(final_location != PointLocation::kError);
       params.locations[part_begin + part] = final_location;
+#ifndef NDEBUG
       auto ref_loc =
           multi_polygon.get_polygon(part).locate_point(params.points[point_idx]);
       if (ref_loc != final_location) {
-#if 1
         printf(
             "reorder %u, multi poly %u, point %u (%lf, %lf), num parts %u, num rings %u, part %u, point %u, loc %d, ref loc %d\n",
             reordered_multi_polygon_idx, multi_polygon_idx, point_idx, p.x(), p.y(),
             multi_polygon.num_polygons(), multi_polygon.get_polygon(0).num_rings(), part,
             point_idx, (int)final_location, (int)ref_loc);
-#endif
         assert(false);
       }
+#endif
     }
   }
 }

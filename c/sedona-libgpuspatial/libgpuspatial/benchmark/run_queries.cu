@@ -427,8 +427,8 @@ void RunQueries(BenchmarkConfig& config) {
       query_result.json_query["result_size"] = query_result.build_indices->size();
       return query_result;
     };
-    fn(i, array_index_offset);
-    // fut_results.emplace_back(pool.enqueue(fn, i, array_index_offset));
+    // fn(i, array_index_offset);
+    fut_results.emplace_back(pool.enqueue(fn, i, array_index_offset));
     array_index_offset += record_batches[i]->length();
   }
 

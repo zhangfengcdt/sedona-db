@@ -75,6 +75,7 @@ struct LaunchParamsMultiPolygonPointQuery {
   // each query point has n elements of part_min_y and part_locations, n is # of parts
   ArrayView<PointLocation> locations;  // location of each part
   OptixTraversableHandle handle;
+  ArrayView<index_t> geom_ids, part_ids, ring_ids;
 };
 
 }  // namespace detail

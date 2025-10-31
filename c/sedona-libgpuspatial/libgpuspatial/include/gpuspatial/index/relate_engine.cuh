@@ -85,7 +85,9 @@ class RelateEngine {
       const rmm::cuda_stream_view& stream,
       const MultiPolygonArrayView<POINT_T, INDEX_T>& multi_polygons,
       ArrayView<uint32_t> multi_polygon_ids, rmm::device_uvector<INDEX_T>& seg_begins,
-      rmm::device_uvector<INDEX_T>& seg_multi_polygon_ids, rmm::device_buffer& buffer);
+      rmm::device_uvector<INDEX_T>& seg_multi_polygon_ids, rmm::device_buffer& buffer,
+      rmm::device_uvector<INDEX_T>& geom_ids, rmm::device_uvector<INDEX_T>& part_ids,
+      rmm::device_uvector<INDEX_T>& ring_ids);
 
  private:
   const DeviceGeometries<POINT_T, INDEX_T>* geoms1_;
