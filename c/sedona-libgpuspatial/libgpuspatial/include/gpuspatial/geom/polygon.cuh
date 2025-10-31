@@ -188,34 +188,6 @@ class LinearRing {
       return PointLocation::kOutside;
     }
     return PointLocation::kInside;
-
-    /*
-        if (on_boundary) {
-          // max number of wn will be num_points() - 1
-          // using this negative value to indicate on_boundary
-          wn = -std::numeric_limits<int>::max() / 2;
-        }
-        auto total_wn =
-            cub::BlockReduce<int, MAX_BLOCK_SIZE>(*temp_storage).Sum(wn, blockDim.x);
-        __syncthreads();
-        PointLocation loc = PointLocation::kError;
-        auto& i_loc = *reinterpret_cast<int*>(temp_storage);
-
-        if (threadIdx.x == 0) {
-          // printf("total wn %d\n", total_wn);
-          if (total_wn < -(num_points() - 1)) {
-            loc = PointLocation::kBoundary;
-          } else if (total_wn == 0) {
-            loc = PointLocation::kOutside;
-          } else
-            loc = PointLocation::kInside;
-          i_loc = (int)loc;
-        }
-
-        __syncthreads();
-
-        return (PointLocation)i_loc;
-        */
   }
 
  private:

@@ -5,8 +5,6 @@
 #include "gpuspatial/loader/device_geometries.cuh"
 #include "gpuspatial/relate/predicate.cuh"
 #include "gpuspatial/relate/relate.cuh"
-#include "gpuspatial/relate/relate_block.cuh"
-#include "gpuspatial/relate/relate_warp.cuh"
 #include "gpuspatial/utils/array_view.h"
 #include "gpuspatial/utils/helpers.h"
 #include "gpuspatial/utils/launcher.h"
@@ -14,9 +12,6 @@
 #include "gpuspatial/utils/stopwatch.h"
 #include "index/shaders/shader_id.hpp"
 
-#include <thrust/device_vector.h>
-#include <thrust/host_vector.h>
-#include <thrust/partition.h>
 #include <thrust/remove.h>
 #include <thrust/sort.h>
 #include <thrust/unique.h>
