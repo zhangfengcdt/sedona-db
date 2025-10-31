@@ -55,17 +55,6 @@ class RelateEngine {
                 const MultiPolygonArrayView<POINT_T, INDEX_T>& geom_array2,
                 Predicate predicate, Queue<thrust::pair<uint32_t, uint32_t>>& ids);
 
-  template <typename GEOM1_ARRAY_VIEW_T, typename GEOM2_ARRAY_VIEW_T>
-  void EvaluatePointPolygonLB(const rmm::cuda_stream_view& stream,
-                              const GEOM1_ARRAY_VIEW_T& geom_array1,
-                              const GEOM2_ARRAY_VIEW_T& geom_array2, Predicate predicate,
-                              Queue<thrust::pair<uint32_t, uint32_t>>& ids);
-
-  template <typename GEOM1_ARRAY_VIEW_T, typename GEOM2_ARRAY_VIEW_T>
-  void EvaluatePolygonPointLB(const rmm::cuda_stream_view& stream,
-                              const GEOM1_ARRAY_VIEW_T& geom_array1,
-                              const GEOM2_ARRAY_VIEW_T& geom_array2, Predicate predicate,
-                              Queue<thrust::pair<uint32_t, uint32_t>>& ids);
 
   /**
    * Build BVH for a subset of polygons
@@ -78,15 +67,17 @@ class RelateEngine {
                                   const PolygonArrayView<POINT_T, INDEX_T>& polygons,
                                   ArrayView<uint32_t> polygon_ids,
                                   rmm::device_uvector<INDEX_T>& seg_begins,
-                                  rmm::device_uvector<INDEX_T>& seg_polygon_ids,
-                                  rmm::device_buffer& buffer);
+                                  rmm::device_buffer& buffer,
+                                  rmm::device_uvector<INDEX_T>& aabb_poly_ids,
+                                  rmm::device_uvector<INDEX_T>& aabb_ring_ids);
 
   OptixTraversableHandle BuildBVH(
       const rmm::cuda_stream_view& stream,
-      const MultiPolygonArrayView<POINT_T, INDEX_T>& multi_polygons,
-      ArrayView<uint32_t> multi_polygon_ids, rmm::device_uvector<INDEX_T>& seg_begins,
-      rmm::device_buffer& buffer, rmm::device_uvector<INDEX_T>& geom_ids,
-      rmm::device_uvector<INDEX_T>& part_ids, rmm::device_uvector<INDEX_T>& ring_ids);
+      const MultiPolygonArrayView<POINT_T, INDEX_T>& multi_polys,
+      ArrayView<uint32_t> multi_poly_ids, rmm::device_uvector<INDEX_T>& seg_begins,
+      rmm::device_buffer& buffer, rmm::device_uvector<INDEX_T>& aabb_multi_poly_ids,
+      rmm::device_uvector<INDEX_T>& aabb_part_ids,
+      rmm::device_uvector<INDEX_T>& aabb_ring_ids);
 
  private:
   const DeviceGeometries<POINT_T, INDEX_T>* geoms1_;

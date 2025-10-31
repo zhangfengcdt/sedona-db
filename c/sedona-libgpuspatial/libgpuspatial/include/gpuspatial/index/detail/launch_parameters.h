@@ -55,9 +55,9 @@ struct LaunchParamsPolygonPointQuery {
   ArrayView<index_t> polygon_ids;  // sorted
   ArrayView<thrust::pair<index_t, index_t>> ids;
   ArrayView<index_t> seg_begins;
-  ArrayView<index_t> seg_polygon_ids;
-  OptixTraversableHandle handle;
   ArrayView<PointLocation> locations;
+  OptixTraversableHandle handle;
+  ArrayView<index_t> aabb_poly_ids, aabb_ring_ids;
 };
 
 template <typename POINT_T, typename INDEX_T>
@@ -74,7 +74,7 @@ struct LaunchParamsMultiPolygonPointQuery {
   // each query point has n elements of part_min_y and part_locations, n is # of parts
   ArrayView<PointLocation> locations;  // location of each part
   OptixTraversableHandle handle;
-  ArrayView<index_t> geom_ids, part_ids, ring_ids;
+  ArrayView<index_t> aabb_multi_poly_ids, aabb_part_ids, aabb_ring_ids;
 };
 
 }  // namespace detail

@@ -65,7 +65,6 @@ TEST(JoinerTest, PIP) {
 
   int64_t build_count = 0;
   spatial_joiner.Init(&config);
-  int accumulate_count = 0;
   for (int i = 0; i < n_row_groups; i++) {
     ASSERT_EQ(ArrowArrayStreamGetNext(poly_stream.get(), build_array.get(), &error),
               NANOARROW_OK);
@@ -77,8 +76,6 @@ TEST(JoinerTest, PIP) {
     ASSERT_EQ(ArrowArrayStreamGetSchema(point_stream.get(), stream_schema.get(), &error),
               NANOARROW_OK);
 
-    // printf("start batch %d, acc ount %d\n", i, accumulate_count);
-    // accumulate_count += build_array->length;
 
     spatial_joiner.Clear();
     spatial_joiner.PushBuild(nullptr, build_array.get(), 0, build_array->length);
@@ -154,7 +151,7 @@ TEST(JoinerTest, PIP) {
     array_index_offset += stream_array->length;
   }
 }
-#if 0
+
 TEST(JoinerTest, PIPInverse) {
   SpatialJoiner::SpatialJoinerConfig config;
   std::string ptx_root = TestUtils::GetTestDataPath("shaders_ptx");
@@ -214,11 +211,6 @@ TEST(JoinerTest, PIPInverse) {
               NANOARROW_OK);
     ASSERT_EQ(ArrowArrayStreamGetSchema(point_stream.get(), stream_schema.get(), &error),
               NANOARROW_OK);
-
-    // if (i < 6) {
-    //   continue;
-    // }
-    // printf("Iter %d\n", i);
 
     spatial_joiner.Clear();
     // build with points, stream with polygons
@@ -428,6 +420,5 @@ TEST(JoinerTest, PolygonPolygonContains) {
     array_index_offset += stream_array->length;
   }
 }
-#endif
 
 }  // namespace gpuspatial
