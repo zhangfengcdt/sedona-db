@@ -386,12 +386,11 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
   // aabb id -> vertex begin[polygon] + ith point in this polygon
 
   rmm::device_uvector<INDEX_T> seg_begins(0, stream);
-  rmm::device_uvector<INDEX_T> seg_multi_polygon_ids(0, stream);
   rmm::device_buffer bvh_buffer(0, stream);
   rmm::device_uvector<INDEX_T> geom_ids(0, stream), part_ids(0, stream),
       ring_ids(0, stream);
   auto handle = BuildBVH(stream, geom_array1, ArrayView<INDEX_T>(geom1_ids), seg_begins,
-                         seg_multi_polygon_ids, bvh_buffer, geom_ids, part_ids, ring_ids);
+                         bvh_buffer, geom_ids, part_ids, ring_ids);
 
   stream.synchronize();
   sw.stop();
@@ -406,7 +405,6 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
   params.multi_polygon_ids = ArrayView<INDEX_T>(geom1_ids);
   params.ids = ArrayView<thrust::pair<uint32_t, uint32_t>>(ids.data(), ids_size);
   params.seg_begins = ArrayView<INDEX_T>(seg_begins);
-  params.seg_multi_polygon_ids = ArrayView<INDEX_T>(seg_multi_polygon_ids);
   params.part_begins = ArrayView<INDEX_T>(part_begins);
   params.locations = ArrayView<PointLocation>(part_locations);
   params.handle = handle;
@@ -802,28 +800,39 @@ OptixTraversableHandle RelateEngine<POINT_T, INDEX_T>::BuildBVH(
     const rmm::cuda_stream_view& stream,
     const MultiPolygonArrayView<POINT_T, INDEX_T>& multi_polygons,
     ArrayView<uint32_t> multi_polygon_ids, rmm::device_uvector<INDEX_T>& seg_begins,
-    rmm::device_uvector<INDEX_T>& seg_multi_polygon_ids, rmm::device_buffer& buffer,
-    rmm::device_uvector<INDEX_T>& geom_ids, rmm::device_uvector<INDEX_T>& part_ids,
-    rmm::device_uvector<INDEX_T>& ring_ids) {
+    rmm::device_buffer& buffer, rmm::device_uvector<INDEX_T>& geom_ids,
+    rmm::device_uvector<INDEX_T>& part_ids, rmm::device_uvector<INDEX_T>& ring_ids) {
   auto n_mult_polygons = multi_polygon_ids.size();
   rmm::device_uvector<uint32_t> n_segs(n_mult_polygons, stream);
+  auto* p_nsegs = n_segs.data();
 
-  thrust::transform(rmm::exec_policy_nosync(stream), multi_polygon_ids.begin(),
-                    multi_polygon_ids.end(), n_segs.begin(),
-                    [=] __device__(const uint32_t& id) -> uint32_t {
-                      const auto& multi_polygon = multi_polygons[id];
-                      uint32_t total_segs = 0;
+  LaunchKernel(stream, [=] __device__() {
+    using WarpReduce = cub::WarpReduce<uint32_t>;
+    __shared__ WarpReduce::TempStorage temp_storage[MAX_BLOCK_SIZE / 32];
+    auto lane = threadIdx.x % 32;
+    auto warp_id = threadIdx.x / 32;
+    auto global_warp_id = TID_1D / 32;
+    auto n_warps = TOTAL_THREADS_1D / 32;
 
-                      for (int polygon_idx = 0;
-                           polygon_idx < multi_polygon.num_polygons(); polygon_idx++) {
-                        auto polygon = multi_polygon.get_polygon(polygon_idx);
-                        for (int ring = 0; ring < polygon.num_rings(); ring++) {
-                          total_segs += polygon.get_ring(ring).num_points();
-                        }
-                      }
+    for (auto i = global_warp_id; i < n_mult_polygons; i += n_warps) {
+      auto id = multi_polygon_ids[i];
+      const auto& multi_polygon = multi_polygons[id];
+      uint32_t total_segs = 0;
 
-                      return total_segs;
-                    });
+      for (int polygon_idx = 0; polygon_idx < multi_polygon.num_polygons();
+           polygon_idx++) {
+        auto polygon = multi_polygon.get_polygon(polygon_idx);
+
+        for (auto ring = lane; ring < polygon.num_rings(); ring += 32) {
+          total_segs += polygon.get_ring(ring).num_points();
+        }
+      }
+      total_segs = WarpReduce(temp_storage[warp_id]).Sum(total_segs);
+      if (lane == 0) {
+        p_nsegs[i] = total_segs;
+      }
+    }
+  });
 
   seg_begins = std::move(rmm::device_uvector<INDEX_T>(n_mult_polygons + 1, stream));
   auto* p_seg_begins = seg_begins.data();
@@ -836,7 +845,6 @@ OptixTraversableHandle RelateEngine<POINT_T, INDEX_T>::BuildBVH(
   // AABB id-vertex id relationship
   uint32_t num_aabbs = seg_begins.back_element(stream);
 
-  seg_multi_polygon_ids = std::move(rmm::device_uvector<INDEX_T>(num_aabbs, stream));
   geom_ids = std::move(rmm::device_uvector<INDEX_T>(num_aabbs, stream));
   part_ids = std::move(rmm::device_uvector<uint32_t>(num_aabbs, stream));
   ring_ids = std::move(rmm::device_uvector<uint32_t>(num_aabbs, stream));
@@ -845,59 +853,69 @@ OptixTraversableHandle RelateEngine<POINT_T, INDEX_T>::BuildBVH(
   auto* p_part_ids = part_ids.data();
   auto* p_ring_ids = ring_ids.data();
 
-  auto* p_seg_multi_polygon_ids = seg_multi_polygon_ids.data();
-
   rmm::device_uvector<OptixAabb> aabbs(num_aabbs, stream);
   auto* p_aabbs = aabbs.data();
 
-  thrust::for_each(
-      rmm::exec_policy_nosync(stream), thrust::make_counting_iterator<uint32_t>(0),
-      thrust::make_counting_iterator<uint32_t>(multi_polygon_ids.size()),
-      [=] __device__(uint32_t i) {
-        auto multi_polygon_id = multi_polygon_ids[i];
-        const auto& multi_polygon = multi_polygons[multi_polygon_id];
-        OptixAabb aabb;
-        int tail = p_seg_begins[i];
+  LaunchKernel(stream.value(), [=] __device__() {
+    auto lane = threadIdx.x % 32;
+    auto global_warp_id = TID_1D / 32;
+    auto n_warps = TOTAL_THREADS_1D / 32;
 
-        for (int polygon_idx = 0; polygon_idx < multi_polygon.num_polygons();
-             polygon_idx++) {
-          auto polygon = multi_polygon.get_polygon(polygon_idx);
-          for (int ring_idx = 0; ring_idx < polygon.num_rings(); ring_idx++) {
-            auto ring = polygon.get_ring(ring_idx);
-            // i is the renumbered polygon id starting from 0
-            uint32_t encoded_z = ENCODE_UINT32_T_3(i, polygon_idx, ring_idx);
-            aabb.minZ = aabb.maxZ = *reinterpret_cast<float*>(&encoded_z);
+    // each warp takes a multi polygon
+    // i is the renumbered polygon id starting from 0
+    for (auto i = global_warp_id; i < n_mult_polygons; i += n_warps) {
+      auto multi_polygon_id = multi_polygon_ids[i];
+      const auto& multi_polygon = multi_polygons[multi_polygon_id];
+      auto tail = p_seg_begins[i];
 
-            for (int seg_idx = 0; seg_idx < ring.num_segments(); seg_idx++) {
-              const auto& seg = ring.get_line_segment(seg_idx);
-              const auto& p1 = seg.get_p1();
-              const auto& p2 = seg.get_p2();
+      // entire warp sequentially visit each part
+      for (uint32_t polygon_idx = 0; polygon_idx < multi_polygon.num_polygons();
+           polygon_idx++) {
+        auto polygon = multi_polygon.get_polygon(polygon_idx);
 
-              aabb.minX = std::min(p1.x(), p2.x());
-              aabb.maxX = std::max(p1.x(), p2.x());
-              aabb.minY = std::min(p1.y(), p2.y());
-              aabb.maxY = std::max(p1.y(), p2.y());
+        // entire warp sequentially visit each ring
+        for (uint32_t ring_idx = 0; ring_idx < polygon.num_rings(); ring_idx++) {
+          auto ring = polygon.get_ring(ring_idx);
+          // this is like a hash function, its okay to overflow
+          uint32_t encoded_z = ENCODE_UINT32_T_3(i, polygon_idx, ring_idx);
+          OptixAabb aabb;
+          aabb.minZ = aabb.maxZ = *reinterpret_cast<float*>(&encoded_z);
 
-              if (std::is_same_v<scalar_t, double>) {
-                aabb.minX = next_float_from_double(aabb.minX, -1, 2);
-                aabb.maxX = next_float_from_double(aabb.maxX, 1, 2);
-                aabb.minY = next_float_from_double(aabb.minY, -1, 2);
-                aabb.maxY = next_float_from_double(aabb.maxY, 1, 2);
-              }
-              p_aabbs[tail] = aabb;
-              p_seg_multi_polygon_ids[tail] = multi_polygon_id;
-              p_geom_ids[tail] = multi_polygon_id;
-              p_part_ids[tail] = polygon_idx;
-              p_ring_ids[tail] = ring_idx;
+          // each lane takes a seg
+          for (auto seg_idx = lane; seg_idx < ring.num_segments(); seg_idx += 32) {
+            const auto& seg = ring.get_line_segment(seg_idx);
+            const auto& p1 = seg.get_p1();
+            const auto& p2 = seg.get_p2();
 
-              tail++;
+            aabb.minX = std::min(p1.x(), p2.x());
+            aabb.maxX = std::max(p1.x(), p2.x());
+            aabb.minY = std::min(p1.y(), p2.y());
+            aabb.maxY = std::max(p1.y(), p2.y());
+
+            if (std::is_same_v<scalar_t, double>) {
+              aabb.minX = next_float_from_double(aabb.minX, -1, 2);
+              aabb.maxX = next_float_from_double(aabb.maxX, 1, 2);
+              aabb.minY = next_float_from_double(aabb.minY, -1, 2);
+              aabb.maxY = next_float_from_double(aabb.maxY, 1, 2);
             }
-            p_aabbs[tail++] = OptixAabb{0, 0, 0, 0, 0, 0};
-            // todo implement filling with warps
+            p_aabbs[tail + seg_idx] = aabb;
+            p_geom_ids[tail + seg_idx] = multi_polygon_id;
+            p_part_ids[tail + seg_idx] = polygon_idx;
+            p_ring_ids[tail + seg_idx] = ring_idx;
           }
+          tail += ring.num_segments();
+          // fill a dummy AABB, so we have aabb-vertex one-to-one relationship
+
+          if (lane == 0) {
+            p_aabbs[tail] = OptixAabb{0, 0, 0, 0, 0, 0};
+          }
+          tail++;
         }
-        assert(p_seg_begins[i + 1] == tail);
-      });
+      }
+      assert(p_seg_begins[i + 1] == tail);
+    }
+  });
+
   assert(rt_engine_ != nullptr);
   return rt_engine_->BuildAccelCustom(stream.value(), ArrayView<OptixAabb>(aabbs),
                                       buffer);

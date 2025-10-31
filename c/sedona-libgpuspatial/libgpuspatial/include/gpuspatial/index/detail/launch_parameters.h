@@ -70,7 +70,6 @@ struct LaunchParamsMultiPolygonPointQuery {
   ArrayView<index_t> multi_polygon_ids;  // sorted
   ArrayView<thrust::pair<index_t, index_t>> ids;
   ArrayView<index_t> seg_begins;
-  ArrayView<index_t> seg_multi_polygon_ids;
   ArrayView<index_t> part_begins;
   // each query point has n elements of part_min_y and part_locations, n is # of parts
   ArrayView<PointLocation> locations;  // location of each part

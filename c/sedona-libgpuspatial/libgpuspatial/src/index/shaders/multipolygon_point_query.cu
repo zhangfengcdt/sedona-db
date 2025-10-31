@@ -29,31 +29,19 @@ extern "C" __global__ void __intersection__gpuspatial() {
   const auto& multi_polygons = params.multi_polygons;
   auto multi_polygon_idx = params.ids[query_idx].first;
   auto point_idx = params.ids[query_idx].second;
-
+  auto hit_multipolygon_idx = params.geom_ids[aabb_id];
   // the seg being hit is not from the query polygon
-  if (params.seg_multi_polygon_ids[aabb_id] != multi_polygon_idx) {
+  if (hit_multipolygon_idx != multi_polygon_idx) {
     return;
   }
 
   uint32_t local_v1_idx = aabb_id - params.seg_begins[reordered_multi_polygon_idx];
   uint32_t global_v1_idx = v_offset + local_v1_idx;
   uint32_t global_v2_idx = global_v1_idx + 1;
-  uint32_t hit_geom_idx, hit_part_idx, hit_ring_idx;
+  auto hit_part_idx = params.part_ids[aabb_id];
+  auto hit_ring_idx = params.ring_ids[aabb_id];
 
-  // bool found = multi_polygons.locate_vertex(global_v1_idx, hit_geom_idx, hit_part_idx,
-                                            // hit_ring_idx);
-
-  // assert(params.geom_ids[aabb_id] == hit_geom_idx);
-  // assert(params.part_ids[aabb_id] == hit_part_idx);
-  // assert(params.ring_ids[aabb_id] == hit_ring_idx);
-  // assert(found);
-
-  hit_geom_idx = params.geom_ids[aabb_id];
-  hit_part_idx = params.part_ids[aabb_id];
-  hit_ring_idx = params.ring_ids[aabb_id];
-
-  if (hit_geom_idx == multi_polygon_idx && hit_part_idx == part_idx &&
-      hit_ring_idx == ring_idx) {
+  if (hit_part_idx == part_idx && hit_ring_idx == ring_idx) {
     auto vertices = multi_polygons.get_vertices();
     // segment being hit
     const auto& v1 = vertices[global_v1_idx];
