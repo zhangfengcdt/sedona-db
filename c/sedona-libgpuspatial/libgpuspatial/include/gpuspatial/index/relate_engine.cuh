@@ -55,7 +55,6 @@ class RelateEngine {
                 const MultiPolygonArrayView<POINT_T, INDEX_T>& geom_array2,
                 Predicate predicate, Queue<thrust::pair<uint32_t, uint32_t>>& ids);
 
-
   /**
    * Build BVH for a subset of polygons
    * @param stream
@@ -75,7 +74,8 @@ class RelateEngine {
       const rmm::cuda_stream_view& stream,
       const MultiPolygonArrayView<POINT_T, INDEX_T>& multi_polys,
       ArrayView<uint32_t> multi_poly_ids, rmm::device_uvector<INDEX_T>& seg_begins,
-      rmm::device_buffer& buffer, rmm::device_uvector<INDEX_T>& aabb_multi_poly_ids,
+      rmm::device_uvector<INDEX_T>& part_begins, rmm::device_buffer& buffer,
+      rmm::device_uvector<INDEX_T>& aabb_multi_poly_ids,
       rmm::device_uvector<INDEX_T>& aabb_part_ids,
       rmm::device_uvector<INDEX_T>& aabb_ring_ids);
 

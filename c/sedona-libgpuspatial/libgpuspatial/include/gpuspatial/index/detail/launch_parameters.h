@@ -71,6 +71,7 @@ struct LaunchParamsMultiPolygonPointQuery {
   ArrayView<thrust::pair<index_t, index_t>> ids;
   ArrayView<index_t> seg_begins;
   ArrayView<index_t> part_begins;
+  ArrayView<index_t> uniq_part_begins;
   // each query point has n elements of part_min_y and part_locations, n is # of parts
   ArrayView<PointLocation> locations;  // location of each part
   OptixTraversableHandle handle;

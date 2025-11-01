@@ -2,7 +2,6 @@
 #include <optix_device.h>
 #include <cfloat>
 
-#include "gpuspatial/geom/id_encoder.cuh"
 #include "gpuspatial/geom/line_segment.cuh"
 #include "gpuspatial/index/detail/launch_parameters.h"
 #include "gpuspatial/utils/floating_point.h"
@@ -24,7 +23,7 @@ extern "C" __global__ void __intersection__gpuspatial() {
   auto ring_idx = optixGetPayload_4();
   auto crossing_count = optixGetPayload_5();
   auto point_on_seg = optixGetPayload_6();
-  optixSetPayload_7(optixGetPayload_7() + 1);
+
   const auto& multi_polygons = params.multi_polygons;
   auto multi_polygon_idx = params.ids[query_idx].first;
   auto point_idx = params.ids[query_idx].second;
@@ -33,8 +32,19 @@ extern "C" __global__ void __intersection__gpuspatial() {
   auto hit_ring_idx = params.aabb_ring_ids[aabb_id];
 
   // the seg being hit is not from the query polygon
-  if (hit_multipolygon_idx != multi_polygon_idx || hit_part_idx != part_idx ||
-      hit_ring_idx != ring_idx) {
+  // if (hit_multipolygon_idx != multi_polygon_idx || hit_part_idx != part_idx ||
+  //     hit_ring_idx != ring_idx) {
+  //   return;
+  // }
+  if (hit_multipolygon_idx != multi_polygon_idx) {
+    return;
+  }
+
+  if (hit_part_idx != part_idx) {
+    return;
+  }
+  optixSetPayload_7(optixGetPayload_7() + 1);
+  if (hit_ring_idx != ring_idx) {
     return;
   }
 
@@ -56,8 +66,6 @@ extern "C" __global__ void __intersection__gpuspatial() {
 
 extern "C" __global__ void __raygen__gpuspatial() {
   using namespace gpuspatial;
-  float tmin = 0;
-  float tmax = FLT_MAX;  // use a very large value
   const auto& ids = params.ids;
   const auto& multi_polygons = params.multi_polygons;
   RayCrossingCounter locator;
@@ -81,14 +89,14 @@ extern "C" __global__ void __raygen__gpuspatial() {
     // each polygon takes a z-plane
     origin.x = p.x();
     origin.y = p.y();
-    origin.z = reordered_multi_polygon_idx;
     // cast ray toward positive x-axis
     float3 dir = {1, 0, 0};
     auto part_begin = params.part_begins[i];
     const auto& multi_polygon = multi_polygons[multi_polygon_idx];
     const auto& mbr = multi_polygon.get_mbr();
     auto width = mbr.get_max().x() - mbr.get_min().x();
-    tmax = width;
+    float tmin = 0;
+    float tmax = width;
 
     // first polygon offset
     uint32_t part_offset = multi_polygons.get_prefix_sum_geoms()[multi_polygon_idx];
@@ -101,7 +109,7 @@ extern "C" __global__ void __raygen__gpuspatial() {
       auto polygon = multi_polygon.get_polygon(part);
       uint32_t ring = 0;
       locator.Init();
-
+      origin.z = params.uniq_part_begins[reordered_multi_polygon_idx] + part;
       // test exterior
       optixTrace(params.handle, origin, dir, tmin, tmax, 0, OptixVisibilityMask(255),
                  OPTIX_RAY_FLAG_NONE,             // OPTIX_RAY_FLAG_NONE,

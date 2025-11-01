@@ -1,4 +1,3 @@
-#include "gpuspatial/geom/id_encoder.cuh"
 #include "gpuspatial/index/detail/launch_parameters.h"
 #include "gpuspatial/index/geometry_grouper.hpp"
 #include "gpuspatial/index/relate_engine.cuh"
@@ -339,11 +338,13 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
   // aabb id -> vertex begin[polygon] + ith point in this polygon
 
   rmm::device_uvector<INDEX_T> seg_begins(0, stream);
+  rmm::device_uvector<INDEX_T> uniq_part_begins(0, stream);
   rmm::device_buffer bvh_buffer(0, stream);
   rmm::device_uvector<INDEX_T> aabb_multi_poly_ids(0, stream), aabb_part_ids(0, stream),
       aabb_ring_ids(0, stream);
   auto handle = BuildBVH(stream, geom_array1, ArrayView<INDEX_T>(geom1_ids), seg_begins,
-                         bvh_buffer, aabb_multi_poly_ids, aabb_part_ids, aabb_ring_ids);
+                         uniq_part_begins, bvh_buffer, aabb_multi_poly_ids, aabb_part_ids,
+                         aabb_ring_ids);
 
   using params_t = detail::LaunchParamsMultiPolygonPointQuery<POINT_T, INDEX_T>;
 
@@ -364,6 +365,7 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
   params.ids = ArrayView<thrust::pair<uint32_t, uint32_t>>(ids.data(), ids_size);
   params.seg_begins = ArrayView<INDEX_T>(seg_begins);
   params.part_begins = ArrayView<INDEX_T>(part_begins);
+  params.uniq_part_begins = ArrayView<INDEX_T>(uniq_part_begins);
   params.locations = ArrayView<PointLocation>(part_locations);
   params.handle = handle;
   params.aabb_multi_poly_ids = ArrayView<INDEX_T>(aabb_multi_poly_ids);
@@ -558,7 +560,8 @@ OptixTraversableHandle RelateEngine<POINT_T, INDEX_T>::BuildBVH(
     const rmm::cuda_stream_view& stream,
     const MultiPolygonArrayView<POINT_T, INDEX_T>& multi_polys,
     ArrayView<uint32_t> multi_poly_ids, rmm::device_uvector<INDEX_T>& seg_begins,
-    rmm::device_buffer& buffer, rmm::device_uvector<INDEX_T>& aabb_multi_poly_ids,
+    rmm::device_uvector<INDEX_T>& part_begins, rmm::device_buffer& buffer,
+    rmm::device_uvector<INDEX_T>& aabb_multi_poly_ids,
     rmm::device_uvector<INDEX_T>& aabb_part_ids,
     rmm::device_uvector<INDEX_T>& aabb_ring_ids) {
   auto n_mult_polygons = multi_poly_ids.size();
@@ -620,6 +623,22 @@ OptixTraversableHandle RelateEngine<POINT_T, INDEX_T>::BuildBVH(
   rmm::device_uvector<OptixAabb> aabbs(num_aabbs, stream);
   auto* p_aabbs = aabbs.data();
 
+  rmm::device_uvector<uint32_t> num_parts(n_mult_polygons, stream);
+
+  thrust::transform(rmm::exec_policy_nosync(stream), multi_poly_ids.begin(),
+                    multi_poly_ids.end(), num_parts.begin(), [=] __device__(uint32_t id) {
+                      const auto& multi_polygon = multi_polys[id];
+                      return multi_polygon.num_polygons();
+                    });
+
+  part_begins = std::move(rmm::device_uvector<uint32_t>(n_mult_polygons + 1, stream));
+  auto* p_part_begins = part_begins.data();
+  part_begins.set_element_to_zero_async(0, stream);
+  thrust::inclusive_scan(rmm::exec_policy_nosync(stream), num_parts.begin(),
+                         num_parts.end(), part_begins.begin() + 1);
+  num_parts.resize(0, stream);
+  num_parts.shrink_to_fit(stream);
+
   sw.start();
   LaunchKernel(stream.value(), [=] __device__() {
     auto lane = threadIdx.x % 32;
@@ -642,7 +661,7 @@ OptixTraversableHandle RelateEngine<POINT_T, INDEX_T>::BuildBVH(
           auto ring = polygon.get_ring(ring_idx);
           // this is like a hash function, its okay to overflow
           OptixAabb aabb;
-          aabb.minZ = aabb.maxZ = i;
+          aabb.minZ = aabb.maxZ = p_part_begins[i] + part_idx;
 
           // each lane takes a seg
           for (auto seg_idx = lane; seg_idx < ring.num_segments(); seg_idx += 32) {

@@ -54,7 +54,7 @@ class SpatialJoiner : public StreamingJoiner {
     uint32_t concurrency = 1;
     uint32_t n_geoms_per_aabb = 1;
     float result_buffer_memory_reserve_ratio =
-        0.5;  // reserve a ratio of available memory for result sets
+        0.2;  // reserve a ratio of available memory for result sets
     size_t stack_size_bytes = 3 * 1024;  // this value determines RELATE_MAX_DEPTH
     SpatialJoinerConfig() : ptx_root(nullptr), prefer_fast_build(false), compact(false) {
       concurrency = std::thread::hardware_concurrency();

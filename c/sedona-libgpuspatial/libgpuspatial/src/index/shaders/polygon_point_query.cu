@@ -2,7 +2,6 @@
 #include <optix_device.h>
 #include <cfloat>
 
-#include "gpuspatial/geom/id_encoder.cuh"
 #include "gpuspatial/geom/line_segment.cuh"
 #include "gpuspatial/index/detail/launch_parameters.h"
 #include "shader_config.h"
