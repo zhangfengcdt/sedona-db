@@ -106,18 +106,18 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
     //            predicate, ids);
     //   break;
     // }
-    case GeometryType::kPolygon: {
-      using geom2_array_view_t = PolygonArrayView<POINT_T, INDEX_T>;
-      Evaluate(stream, geoms2.template GetGeometryArrayView<geom2_array_view_t>(),
-               predicate, ids);
-      break;
-    }
-    case GeometryType::kMultiPolygon: {
-      using geom2_array_view_t = MultiPolygonArrayView<POINT_T, INDEX_T>;
-      Evaluate(stream, geoms2.template GetGeometryArrayView<geom2_array_view_t>(),
-               predicate, ids);
-      break;
-    }
+    // case GeometryType::kPolygon: {
+    //   using geom2_array_view_t = PolygonArrayView<POINT_T, INDEX_T>;
+    //   Evaluate(stream, geoms2.template GetGeometryArrayView<geom2_array_view_t>(),
+    //            predicate, ids);
+    //   break;
+    // }
+    // case GeometryType::kMultiPolygon: {
+    //   using geom2_array_view_t = MultiPolygonArrayView<POINT_T, INDEX_T>;
+    //   Evaluate(stream, geoms2.template GetGeometryArrayView<geom2_array_view_t>(),
+    //            predicate, ids);
+    //   break;
+    // }
     default:
       assert(false);
   }
@@ -129,12 +129,12 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
     const rmm::cuda_stream_view& stream, const GEOM2_ARRAY_VIEW_T& geom_array2,
     Predicate predicate, Queue<thrust::pair<uint32_t, uint32_t>>& ids) {
   switch (geoms1_->get_geometry_type()) {
-    case GeometryType::kPoint: {
-      using geom1_array_view_t = PointArrayView<POINT_T, INDEX_T>;
-      Evaluate(stream, geoms1_->template GetGeometryArrayView<geom1_array_view_t>(),
-               geom_array2, predicate, ids);
-      break;
-    }
+    // case GeometryType::kPoint: {
+    //   using geom1_array_view_t = PointArrayView<POINT_T, INDEX_T>;
+    //   Evaluate(stream, geoms1_->template GetGeometryArrayView<geom1_array_view_t>(),
+    //            geom_array2, predicate, ids);
+    //   break;
+    // }
     // case GeometryType::kMultiPoint: {
     //   using geom1_array_view_t = MultiPointArrayView<POINT_T, INDEX_T>;
     //   Evaluate(stream, geoms1_->template GetGeometryArrayView<geom1_array_view_t>(),
@@ -289,6 +289,8 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
     const MultiPolygonArrayView<POINT_T, INDEX_T>& geom_array1,
     const PointArrayView<POINT_T, INDEX_T>& geom_array2, Predicate predicate,
     Queue<thrust::pair<uint32_t, uint32_t>>& ids) {
+  Stopwatch sw;
+  sw.start();
   auto ids_size = ids.size(stream);
 
   if (ids_size == 0) {
@@ -348,6 +350,10 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
 
   thrust::fill(rmm::exec_policy_nosync(stream), hit_counters.begin(), hit_counters.end(),
                0);
+  stream.synchronize();
+  sw.stop();
+
+  printf("prepare time %lf\n", sw.ms());
 
   params_t params;
 
@@ -370,7 +376,7 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
                              cudaMemcpyHostToDevice, stream.value()));
 
   stream.synchronize();
-  Stopwatch sw;
+
   sw.start();
   rt_engine_->Render(stream, GetMultiPolygonPointQueryShaderId<POINT_T>(),
                      dim3{ids_size, 1, 1},
@@ -381,7 +387,8 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
   auto total_hits = thrust::reduce(rmm::exec_policy_nosync(stream), hit_counters.begin(),
                                    hit_counters.end(), 0ul, thrust::plus<uint32_t>());
 
-  printf("trace time %f, total hits %lu\n", sw.ms(), total_hits);
+  printf("trace time %f, total hits %lu, avg hits %lu\n", sw.ms(), total_hits,
+         total_hits / ids_size);
   auto* p_part_locations = part_locations.data();
   auto* p_part_begins = part_begins.data();
   auto* p_ids = ids.data();
@@ -505,9 +512,8 @@ OptixTraversableHandle RelateEngine<POINT_T, INDEX_T>::BuildBVH(
       for (uint32_t ring_idx = 0; ring_idx < polygon.num_rings(); ring_idx++) {
         auto ring = polygon.get_ring(ring_idx);
         // this is like a hash function, its okay to overflow
-        uint32_t encoded_z = ENCODE_UINT32_T_2(i, ring_idx);
         OptixAabb aabb;
-        aabb.minZ = aabb.maxZ = *reinterpret_cast<float*>(&encoded_z);
+        aabb.minZ = aabb.maxZ = i;
 
         // each lane takes a seg
         for (auto seg_idx = lane; seg_idx < ring.num_segments(); seg_idx += 32) {
@@ -556,12 +562,10 @@ OptixTraversableHandle RelateEngine<POINT_T, INDEX_T>::BuildBVH(
   auto n_mult_polygons = multi_poly_ids.size();
   rmm::device_uvector<uint32_t> n_segs(n_mult_polygons, stream);
   auto* p_nsegs = n_segs.data();
+  Stopwatch sw;
+  double count_time, fill_time, build_time;
 
-  rmm::device_scalar<uint32_t> max_polygons(stream), max_rings(stream);
-  auto *p_max_polygons = max_polygons.data(), *p_max_rings = max_rings.data();
-  max_polygons.set_value_to_zero_async(stream);
-  max_rings.set_value_to_zero_async(stream);
-
+  sw.start();
   LaunchKernel(stream, [=] __device__() {
     using WarpReduce = cub::WarpReduce<uint32_t>;
     __shared__ WarpReduce::TempStorage temp_storage[MAX_BLOCK_SIZE / 32];
@@ -575,10 +579,8 @@ OptixTraversableHandle RelateEngine<POINT_T, INDEX_T>::BuildBVH(
       const auto& multi_polygon = multi_polys[id];
       uint32_t total_segs = 0;
 
-      atomicMax(p_max_polygons, multi_polygon.num_polygons());
       for (int part_idx = 0; part_idx < multi_polygon.num_polygons(); part_idx++) {
         auto polygon = multi_polygon.get_polygon(part_idx);
-        atomicMax(p_max_rings, polygon.num_rings());
         for (auto ring = lane; ring < polygon.num_rings(); ring += 32) {
           total_segs += polygon.get_ring(ring).num_points();
         }
@@ -589,8 +591,9 @@ OptixTraversableHandle RelateEngine<POINT_T, INDEX_T>::BuildBVH(
       }
     }
   });
-  printf("max polygons %u, max rings %u\n", max_polygons.value(stream),
-         max_rings.value(stream));
+  stream.synchronize();
+  sw.stop();
+  count_time = sw.ms();
 
   seg_begins = std::move(rmm::device_uvector<INDEX_T>(n_mult_polygons + 1, stream));
   auto* p_seg_begins = seg_begins.data();
@@ -615,6 +618,7 @@ OptixTraversableHandle RelateEngine<POINT_T, INDEX_T>::BuildBVH(
   rmm::device_uvector<OptixAabb> aabbs(num_aabbs, stream);
   auto* p_aabbs = aabbs.data();
 
+  sw.start();
   LaunchKernel(stream.value(), [=] __device__() {
     auto lane = threadIdx.x % 32;
     auto global_warp_id = TID_1D / 32;
@@ -635,9 +639,8 @@ OptixTraversableHandle RelateEngine<POINT_T, INDEX_T>::BuildBVH(
         for (uint32_t ring_idx = 0; ring_idx < polygon.num_rings(); ring_idx++) {
           auto ring = polygon.get_ring(ring_idx);
           // this is like a hash function, its okay to overflow
-          uint32_t encoded_z = ENCODE_UINT32_T_3(i, part_idx, ring_idx);
           OptixAabb aabb;
-          aabb.minZ = aabb.maxZ = *reinterpret_cast<float*>(&encoded_z);
+          aabb.minZ = aabb.maxZ = i;
 
           // each lane takes a seg
           for (auto seg_idx = lane; seg_idx < ring.num_segments(); seg_idx += 32) {
@@ -672,10 +675,19 @@ OptixTraversableHandle RelateEngine<POINT_T, INDEX_T>::BuildBVH(
       assert(p_seg_begins[i + 1] == tail);
     }
   });
+  stream.synchronize();
+  sw.stop();
+  fill_time = sw.ms();
 
   assert(rt_engine_ != nullptr);
-  return rt_engine_->BuildAccelCustom(stream.value(), ArrayView<OptixAabb>(aabbs), buffer,
+  sw.start();
+  auto handle = rt_engine_->BuildAccelCustom(stream.value(), ArrayView<OptixAabb>(aabbs), buffer,
                                       false /*fast build*/, true /*compact*/);
+  stream.synchronize();
+  sw.stop();
+  build_time = sw.ms();
+  printf("count %lf, fill %lf, build %lf\n", count_time, fill_time, build_time);
+  return handle;
 }
 // Explicitly instantiate the template for specific types
 template class RelateEngine<Point<double, 2>, uint32_t>;

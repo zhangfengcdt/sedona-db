@@ -73,6 +73,7 @@ extern "C" __global__ void __raygen__gpuspatial() {
     // each polygon takes a z-plane
     origin.x = p.x();
     origin.y = p.y();
+    origin.z = reordered_polygon_idx;
     // cast ray toward positive x-axis
     float3 dir = {1, 0, 0};
     const auto& polygon = polygons[polygon_idx];
@@ -87,8 +88,7 @@ extern "C" __global__ void __raygen__gpuspatial() {
 
     uint32_t ring = 0;
     locator.Init();
-    uint32_t encoded_z = ENCODE_UINT32_T_2(reordered_polygon_idx, ring);
-    origin.z = *reinterpret_cast<float*>(&encoded_z);
+
     // test exterior
     optixTrace(params.handle, origin, dir, tmin, tmax, 0, OptixVisibilityMask(255),
                OPTIX_RAY_FLAG_NONE,            // OPTIX_RAY_FLAG_NONE,
@@ -109,8 +109,6 @@ extern "C" __global__ void __raygen__gpuspatial() {
       // test interior
       for (ring = 1; ring < polygon.num_rings(); ring++) {
         locator.Init();
-        encoded_z = ENCODE_UINT32_T_2(reordered_polygon_idx, ring);
-        origin.z = *reinterpret_cast<float*>(&encoded_z);
         optixTrace(params.handle, origin, dir, tmin, tmax, 0, OptixVisibilityMask(255),
                    OPTIX_RAY_FLAG_NONE,            // OPTIX_RAY_FLAG_NONE,
                    SURFACE_RAY_TYPE,               // SBT offset
