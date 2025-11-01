@@ -311,7 +311,8 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
   geom1_ids.resize(thrust::distance(geom1_ids.begin(), geom1_ids_end), stream);
   geom1_ids.shrink_to_fit(stream);
 
-  printf("ids %u, multipoly %lu\n", ids_size, geom1_ids.size());
+  printf("<multipoly,point> pairs %u, unique multipoly %lu\n", ids_size,
+         geom1_ids.size());
 
   // number of polygons in each multipolygon
   rmm::device_uvector<uint32_t> num_parts(ids_size, stream);
@@ -353,7 +354,7 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
   stream.synchronize();
   sw.stop();
 
-  printf("prepare time %lf\n", sw.ms());
+  printf("prepare time %lf ms\n", sw.ms());
 
   params_t params;
 
@@ -387,7 +388,7 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
   auto total_hits = thrust::reduce(rmm::exec_policy_nosync(stream), hit_counters.begin(),
                                    hit_counters.end(), 0ul, thrust::plus<uint32_t>());
 
-  printf("trace time %f, total hits %lu, avg hits %lu\n", sw.ms(), total_hits,
+  printf("trace time %f ms, total hits %lu, avg hits %lu\n", sw.ms(), total_hits,
          total_hits / ids_size);
   auto* p_part_locations = part_locations.data();
   auto* p_part_begins = part_begins.data();
@@ -423,6 +424,7 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
         return pair == invalid_pair;
       });
   ids.set_size(stream, end - ids.data());
+  printf("Result size %u\n", end - ids.data());
 }
 
 template <typename POINT_T, typename INDEX_T>
@@ -681,12 +683,14 @@ OptixTraversableHandle RelateEngine<POINT_T, INDEX_T>::BuildBVH(
 
   assert(rt_engine_ != nullptr);
   sw.start();
-  auto handle = rt_engine_->BuildAccelCustom(stream.value(), ArrayView<OptixAabb>(aabbs), buffer,
-                                      false /*fast build*/, true /*compact*/);
+  auto handle =
+      rt_engine_->BuildAccelCustom(stream.value(), ArrayView<OptixAabb>(aabbs), buffer,
+                                   false /*fast build*/, true /*compact*/);
   stream.synchronize();
   sw.stop();
   build_time = sw.ms();
-  printf("count %lf, fill %lf, build %lf\n", count_time, fill_time, build_time);
+  printf("count line segs %lf ms, fill AABBs %lf ms, build BVH %lf ms\n", count_time,
+         fill_time, build_time);
   return handle;
 }
 // Explicitly instantiate the template for specific types
