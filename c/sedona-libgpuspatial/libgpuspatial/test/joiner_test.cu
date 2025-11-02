@@ -65,7 +65,6 @@ TEST(JoinerTest, PIP) {
 
   int64_t build_count = 0;
   spatial_joiner.Init(&config);
-  printf("begin\n");
   for (int i = 0; i < n_row_groups; i++) {
     ASSERT_EQ(ArrowArrayStreamGetNext(poly_stream.get(), build_array.get(), &error),
               NANOARROW_OK);
@@ -77,6 +76,7 @@ TEST(JoinerTest, PIP) {
     ASSERT_EQ(ArrowArrayStreamGetSchema(point_stream.get(), stream_schema.get(), &error),
               NANOARROW_OK);
 
+
     spatial_joiner.Clear();
     spatial_joiner.PushBuild(nullptr, build_array.get(), 0, build_array->length);
     auto context = spatial_joiner.CreateContext();
@@ -84,7 +84,6 @@ TEST(JoinerTest, PIP) {
     build_indices.clear();
     array_indices.clear();
     spatial_joiner.FinishBuilding();
-    printf("group %d\n", i);
     spatial_joiner.PushStream(context.get(), nullptr, stream_array.get(), 0,
                               stream_array->length, Predicate::kContains, &build_indices,
                               &array_indices, array_index_offset);
@@ -212,11 +211,6 @@ TEST(JoinerTest, PIPInverse) {
               NANOARROW_OK);
     ASSERT_EQ(ArrowArrayStreamGetSchema(point_stream.get(), stream_schema.get(), &error),
               NANOARROW_OK);
-
-    // if (i < 6) {
-    //   continue;
-    // }
-    // printf("Iter %d\n", i);
 
     spatial_joiner.Clear();
     // build with points, stream with polygons

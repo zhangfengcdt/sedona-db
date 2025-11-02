@@ -132,17 +132,17 @@ class RTEngine {
 
   OptixTraversableHandle BuildAccelCustom(cudaStream_t cuda_stream,
                                           ArrayView<OptixAabb> aabbs,
-                                          rmm::device_uvector<char>& out_buf,
+                                          rmm::device_buffer& out_buf,
                                           bool prefer_fast_build = false,
-                                          bool compact = false);
+                                          bool compact = false) const;
 
   void Render(cudaStream_t cuda_stream, const std::string& id, dim3 dim,
-              const ArrayView<char>& params);
+              const ArrayView<char>& params) const;
 
   OptixDeviceContext get_context() const;
 
   size_t EstimateMemoryUsageForAABB(size_t num_aabbs, bool prefer_fast_build,
-                                    bool compact);
+                                    bool compact) const;
 
  private:
   void initOptix(const RTConfig& config);

@@ -8,9 +8,9 @@
 
 namespace gpuspatial {
 enum class PointLocation {
+  kOutside,
   kInside,
   kBoundary,
-  kOutside,
   kError,
 };
 
@@ -160,6 +160,10 @@ class Point {
     return result;
   }
 
+  DEV_HOST_INLINE scalar_t& operator[](int dim) { return (&data_.x)[dim]; }
+
+  DEV_HOST_INLINE const scalar_t& operator[](int dim) const { return (&data_.x)[dim]; }
+
   DEV_HOST_INLINE Box<point_t> get_mbr() const { return {*this, *this}; }
 
   DEV_HOST_INLINE bool covered_by(const OptixAabb& aabb) const {
@@ -173,6 +177,9 @@ class Point {
     }
     return covered;
   }
+
+  // For being called by templated methods
+  DEV_HOST_INLINE uint32_t num_vertices() const { return 1; }
 
  private:
   vec_t data_;

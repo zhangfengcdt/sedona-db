@@ -6,12 +6,6 @@
 #include "gpuspatial/utils/floating_point.h"
 
 namespace gpuspatial {
-enum class PointLineSegmentLocation {
-  kLeft,
-  kBoundary,
-  kRight,
-};
-
 template <typename POINT_T>
 class LineSegment {
   using point_t = POINT_T;

@@ -370,6 +370,18 @@ TYPED_TEST(WKBLoaderTest, PolygonWKBLoaderWithHoles) {
   ASSERT_FALSE(poly4.Contains(point_t{45, 70}));
   ASSERT_FALSE(poly4.Contains(point_t{55, 35}));
   // ASSERT_FALSE(poly4.Contains(point_t{52, 23}));
+
+  index_t polygon_idx, ring_idx;
+  uint32_t v_idx = 0;
+  for (int polygon = 0; polygon < polygon_array.size(); polygon++) {
+    for (int ring = 0; ring < polygon_array[polygon].num_rings(); ring++) {
+      for (int v = 0; v < polygon_array[polygon].get_ring(ring).num_points(); v++) {
+        ASSERT_TRUE(polygon_array.locate_vertex(v_idx++, polygon_idx, ring_idx));
+        ASSERT_EQ(polygon_idx, polygon);
+        ASSERT_EQ(ring_idx, ring);
+      }
+    }
+  }
 }
 
 TYPED_TEST(WKBLoaderTest, PolygonWKBLoaderMultipolygon) {
@@ -454,6 +466,94 @@ TYPED_TEST(WKBLoaderTest, PolygonWKBLoaderMultipolygon) {
   ASSERT_EQ(polygon.num_rings(), 1);
   polygon = multi_polygon_array[7].get_polygon(2);
   ASSERT_EQ(polygon.num_rings(), 1);
+
+  uint32_t geom_idx, part_idx, ring_idx;
+  uint32_t v_idx = 0;
+  for (int geom = 0; geom < multi_polygon_array.size(); geom++) {
+    const auto& polys = multi_polygon_array[geom];
+    for (int part = 0; part < polys.num_polygons(); part++) {
+      auto poly = polys.get_polygon(part);
+      for (int ring = 0; ring < poly.num_rings(); ring++) {
+        for (int v = 0; v < poly.get_ring(ring).num_points(); v++) {
+          ASSERT_TRUE(
+              multi_polygon_array.locate_vertex(v_idx++, geom_idx, part_idx, ring_idx));
+          ASSERT_EQ(geom, geom_idx);
+          ASSERT_EQ(part, part_idx);
+          ASSERT_EQ(ring, ring_idx);
+        }
+      }
+    }
+  }
+}
+
+TYPED_TEST(WKBLoaderTest, PolygonWKBLoaderMultipolygonLocate) {
+  using point_t = typename TypeParam::first_type;
+  using index_t = typename TypeParam::second_type;
+  nanoarrow::UniqueArrayStream stream;
+  ArrayStreamFromWKT(
+      {{"POLYGON ((30 10, 40 40, 20 40, 10 20, 30 10))",
+        "POLYGON ((35 10, 45 45, 15 40, 10 20, 35 10), (20 30, 35 35, 30 20, 20 30))",
+        "POLYGON ((0 0, 10 0, 10 10, 0 10, 0 0), (2 2, 3 2, 3 3, 2 3, 2 2), (6 6, 8 6, 8 8, 6 8, 6 6))",
+        "MULTIPOLYGON (((0 0, 0 1, 1 1, 1 0, 0 0)), EMPTY, ((2 2, 2 3, 3 3, 3 2, 2 2)))",
+        "POLYGON ((30 0, 60 20, 50 50, 10 50, 0 20, 30 0), EMPTY, (20 30, 25 40, 15 40, 20 30), (30 30, 35 40, 25 40, 30 30), (40 30, 45 40, 35 40, 40 30))",
+        "POLYGON EMPTY",
+        "MULTIPOLYGON (((40 40, 20 45, 45 30, 40 40)), EMPTY, ((20 35, 10 30, 10 10, 30 5, 45 20, 20 35), (30 20, 20 15, 20 25, 30 20)))",
+        "POLYGON EMPTY",
+        "POLYGON ((40 0, 50 30, 80 20, 90 70, 60 90, 30 80, 20 40, 40 0), (50 20, 65 30, 60 50, 45 40, 50 20), (30 60, 50 70, 45 80, 30 60))",
+        "MULTIPOLYGON (((-1 0, 0 1, 1 0, 0 -1, -1 0)), ((2 2, 2 3, 3 3, 3 2, 2 2)), ((0 4, 1 5, 2 4, 0 4)))"}},
+      GEOARROW_TYPE_WKB, stream.get());
+
+  nanoarrow::UniqueArray array;
+  ArrowError error;
+  ArrowErrorSet(&error, "Failed to get next array from stream");
+
+  WKBLoader<point_t> loader;
+  rmm::cuda_stream cuda_stream;
+
+  ASSERT_EQ(ArrowArrayStreamGetNext(stream.get(), array.get(), &error), NANOARROW_OK);
+
+  auto seg = std::make_shared<MultiPolygonSegment<point_t, index_t>>();
+
+  loader.Load(array.get(), 0, array->length, *seg);
+  auto geometries =
+      MultiPolygonSegment<point_t, index_t>::LoadOnDevice(cuda_stream, {seg});
+  const auto& offsets = geometries->get_offsets();
+  auto points = TestUtils::ToVector(cuda_stream, geometries->get_points());
+  auto prefix_sum_geoms =
+      TestUtils::ToVector(cuda_stream, *offsets.multi_polygon_offsets.prefix_sum_geoms);
+  auto prefix_sum_parts =
+      TestUtils::ToVector(cuda_stream, *offsets.multi_polygon_offsets.prefix_sum_parts);
+  auto prefix_sum_rings =
+      TestUtils::ToVector(cuda_stream, *offsets.multi_polygon_offsets.prefix_sum_rings);
+  auto mbrs = TestUtils::ToVector(cuda_stream, geometries->get_mbrs());
+  cuda_stream.synchronize();
+
+  ArrayView<index_t> v_prefix_sum_geoms(prefix_sum_geoms);
+  ArrayView<index_t> v_prefix_sum_parts(prefix_sum_parts);
+  ArrayView<index_t> v_prefix_sum_rings(prefix_sum_rings);
+  ArrayView<point_t> v_points(points);
+  ArrayView<Box<point_t>> v_mbrs(mbrs.data(), mbrs.size());
+
+  MultiPolygonArrayView<point_t, index_t> multi_polygon_array(
+      v_prefix_sum_geoms, v_prefix_sum_parts, v_prefix_sum_rings, v_points, v_mbrs);
+
+  uint32_t geom_idx, part_idx, ring_idx;
+  uint32_t v_idx = 0;
+  for (int geom = 0; geom < multi_polygon_array.size(); geom++) {
+    const auto& polys = multi_polygon_array[geom];
+    for (int part = 0; part < polys.num_polygons(); part++) {
+      auto poly = polys.get_polygon(part);
+      for (int ring = 0; ring < poly.num_rings(); ring++) {
+        for (int v = 0; v < poly.get_ring(ring).num_points(); v++) {
+          ASSERT_TRUE(
+              multi_polygon_array.locate_vertex(v_idx++, geom_idx, part_idx, ring_idx));
+          ASSERT_EQ(geom, geom_idx);
+          ASSERT_EQ(part, part_idx);
+          ASSERT_EQ(ring, ring_idx);
+        }
+      }
+    }
+  }
 }
 
 TEST(WKBLoaderTest, GeoCollectionWKBLoader) {

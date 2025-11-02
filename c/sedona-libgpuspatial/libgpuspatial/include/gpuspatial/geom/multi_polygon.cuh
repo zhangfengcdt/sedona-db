@@ -54,6 +54,15 @@ class MultiPolygon {
 
   DEV_HOST_INLINE const box_t& get_mbr() const { return mbr_; }
 
+  DEV_HOST_INLINE uint32_t num_vertices() const {
+    uint32_t nv = 0;
+    for (int i = 0; i < num_polygons(); i++) {
+      const auto& poly = get_polygon(i);
+      nv += poly.num_vertices();
+    }
+    return nv;
+  }
+
  private:
   ArrayView<INDEX_T> prefix_sum_parts_;
   ArrayView<INDEX_T> prefix_sum_rings_;
@@ -108,15 +117,48 @@ class MultiPolygonArrayView {
     return {prefix_sum_parts, prefix_sum_rings_, vertices_, mbrs_[i]};
   }
 
-  DEV_HOST_INLINE ArrayView<INDEX_T> get_prefix_sum_geoms() const { return prefix_sum_geoms_; }
+  DEV_HOST_INLINE ArrayView<INDEX_T> get_prefix_sum_geoms() const {
+    return prefix_sum_geoms_;
+  }
 
-  DEV_HOST_INLINE ArrayView<INDEX_T> get_prefix_sum_parts() const { return prefix_sum_parts_; }
+  DEV_HOST_INLINE ArrayView<INDEX_T> get_prefix_sum_parts() const {
+    return prefix_sum_parts_;
+  }
 
-  DEV_HOST_INLINE ArrayView<INDEX_T> get_prefix_sum_rings() const { return prefix_sum_rings_; }
+  DEV_HOST_INLINE ArrayView<INDEX_T> get_prefix_sum_rings() const {
+    return prefix_sum_rings_;
+  }
 
   DEV_HOST_INLINE ArrayView<point_t> get_vertices() const { return vertices_; }
 
   DEV_HOST_INLINE ArrayView<box_t> get_mbrs() const { return mbrs_; }
+
+  DEV_HOST_INLINE bool locate_vertex(uint32_t vertex_idx, uint32_t& geom_idx,
+                                     uint32_t& part_idx, uint32_t& ring_idx) const {
+    auto it_ring = thrust::upper_bound(thrust::seq, prefix_sum_rings_.begin(),
+                                       prefix_sum_rings_.end(), vertex_idx);
+
+    if (it_ring != prefix_sum_rings_.end()) {
+      // which ring the vertex belongs to
+      auto ring_offset = thrust::distance(prefix_sum_rings_.begin(), it_ring) - 1;
+      auto it_part = thrust::upper_bound(thrust::seq, prefix_sum_parts_.begin(),
+                                         prefix_sum_parts_.end(), ring_offset);
+      if (it_part != prefix_sum_parts_.end()) {
+        // which polygon the vertex belongs to
+        auto part_offset = thrust::distance(prefix_sum_parts_.begin(), it_part) - 1;
+        auto it_geom = thrust::upper_bound(thrust::seq, prefix_sum_geoms_.begin(),
+                                           prefix_sum_geoms_.end(), part_offset);
+
+        if (it_geom != prefix_sum_geoms_.end()) {
+          geom_idx = thrust::distance(prefix_sum_geoms_.begin(), it_geom) - 1;
+          part_idx = part_offset - prefix_sum_geoms_[geom_idx];
+          ring_idx = ring_offset - prefix_sum_parts_[part_offset];
+          return true;
+        }
+      }
+    }
+    return false;
+  }
 
  private:
   ArrayView<INDEX_T> prefix_sum_geoms_;
