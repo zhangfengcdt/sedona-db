@@ -11,6 +11,8 @@ namespace gpuspatial {
 template <typename POINT_T, typename INDEX_T>
 class RelateEngine {
   using scalar_t = typename POINT_T::scalar_t;
+  static constexpr bool bvh_fast_build = false;
+  static constexpr bool bvh_fast_compact = true;
 
  public:
   RelateEngine() = default;
@@ -78,6 +80,14 @@ class RelateEngine {
       rmm::device_uvector<INDEX_T>& aabb_multi_poly_ids,
       rmm::device_uvector<INDEX_T>& aabb_part_ids,
       rmm::device_uvector<INDEX_T>& aabb_ring_ids);
+
+  size_t EstimateBVHSize(const rmm::cuda_stream_view& stream,
+                         const PolygonArrayView<POINT_T, INDEX_T>& polys,
+                         ArrayView<uint32_t> poly_ids);
+
+  size_t EstimateBVHSize(const rmm::cuda_stream_view& stream,
+                         const MultiPolygonArrayView<POINT_T, INDEX_T>& multi_polys,
+                         ArrayView<uint32_t> multi_poly_ids);
 
  private:
   const DeviceGeometries<POINT_T, INDEX_T>* geoms1_;

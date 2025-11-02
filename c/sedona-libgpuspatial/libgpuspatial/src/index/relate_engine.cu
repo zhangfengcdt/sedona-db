@@ -203,77 +203,104 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
   if (ids_size == 0) {
     return;
   }
-  // sort by polygon id
+  // Sort by polygon id
+  thrust::sort(rmm::exec_policy_nosync(stream), ids.data(), ids.data() + ids_size,
+               [] __device__(const thrust::pair<uint32_t, uint32_t>& pair1,
+                             const thrust::pair<uint32_t, uint32_t>& pair2) {
+                 return pair1.first < pair2.first;
+               });
+
   rmm::device_uvector<uint32_t> geom1_ids(ids_size, stream);
 
   thrust::transform(
       rmm::exec_policy_nosync(stream), ids.data(), ids.data() + ids_size,
       geom1_ids.data(),
       [] __device__(const thrust::pair<uint32_t, uint32_t>& pair) { return pair.first; });
-
-  thrust::sort(rmm::exec_policy_nosync(stream), geom1_ids.begin(), geom1_ids.end());
-
   auto geom1_ids_end =
       thrust::unique(rmm::exec_policy_nosync(stream), geom1_ids.begin(), geom1_ids.end());
   geom1_ids.resize(thrust::distance(geom1_ids.begin(), geom1_ids_end), stream);
   geom1_ids.shrink_to_fit(stream);
 
-  rmm::device_uvector<INDEX_T> seg_begins(0, stream);
-  rmm::device_buffer bvh_buffer(0, stream);
-  rmm::device_uvector<PointLocation> locations(ids_size, stream);
-  rmm::device_uvector<INDEX_T> aabb_poly_ids(0, stream), aabb_ring_ids(0, stream);
-
-  // aabb id -> vertex begin[polygon] + ith point in this polygon
-  auto handle = BuildBVH(stream, geom_array1, ArrayView<INDEX_T>(geom1_ids), seg_begins,
-                         bvh_buffer, aabb_poly_ids, aabb_ring_ids);
-
-  using params_t = detail::LaunchParamsPolygonPointQuery<POINT_T, INDEX_T>;
-
-  params_t params;
-
-  params.polygons = geom_array1;
-  params.points = geom_array2;
-  params.polygon_ids = ArrayView<INDEX_T>(geom1_ids);
-  params.ids = ArrayView<thrust::pair<uint32_t, uint32_t>>(ids.data(), ids_size);
-  params.seg_begins = ArrayView<INDEX_T>(seg_begins);
-  params.locations = ArrayView<PointLocation>(locations);
-  params.handle = handle;
-  params.aabb_poly_ids = ArrayView<INDEX_T>(aabb_poly_ids);
-  params.aabb_ring_ids = ArrayView<INDEX_T>(aabb_ring_ids);
-
-  rmm::device_buffer params_buffer(sizeof(params_t), stream);
-
-  CUDA_CHECK(cudaMemcpyAsync(params_buffer.data(), &params, sizeof(params_t),
-                             cudaMemcpyHostToDevice, stream.value()));
-
-  rt_engine_->Render(stream, GetPolygonPointQueryShaderId<POINT_T>(),
-                     dim3{ids_size, 1, 1},
-                     ArrayView<char>((char*)params_buffer.data(), params_buffer.size()));
-
-  auto* p_locations = locations.data();
-  auto* p_ids = ids.data();
-
+  auto bvh_bytes = EstimateBVHSize(stream, geom_array1, ArrayView<uint32_t>(geom1_ids));
+  int n_batches = bvh_bytes / rmm::available_device_memory().first + 1;
+  auto batch_size = (ids_size + n_batches - 1) / n_batches;
   auto invalid_pair = thrust::make_pair(std::numeric_limits<uint32_t>::max(),
                                         std::numeric_limits<uint32_t>::max());
+  rmm::device_buffer bvh_buffer(0, stream);
 
-  thrust::transform(rmm::exec_policy_nosync(stream),
-                    thrust::make_counting_iterator<uint32_t>(0),
-                    thrust::make_counting_iterator<uint32_t>(ids_size), ids.data(),
-                    [=] __device__(uint32_t i) {
-                      const auto& pair = p_ids[i];
-                      auto geom1_id = pair.first;
-                      auto geom2_id = pair.second;
-                      const auto& geom1 = geom_array1[geom1_id];
-                      const auto& geom2 = geom_array2[geom2_id];
+  for (int batch = 0; batch < n_batches; batch++) {
+    auto ids_begin = batch * batch_size;
+    auto ids_end = std::min(ids_begin + batch_size, ids_size);
+    auto ids_size_batch = ids_end - ids_begin;
 
-                      auto IM = relate(geom1, geom2, p_locations[i]);
-                      if (detail::EvaluatePredicate(predicate, IM)) {
-                        return pair;
-                      } else {
-                        return invalid_pair;
-                      }
-                    });
+    geom1_ids.resize(ids_size_batch, stream);
+    thrust::transform(rmm::exec_policy_nosync(stream), ids.data() + ids_begin,
+                      ids.data() + ids_end, geom1_ids.data(),
+                      [] __device__(const thrust::pair<uint32_t, uint32_t>& pair) {
+                        return pair.first;
+                      });
 
+    // ids is sorted
+    geom1_ids_end = thrust::unique(rmm::exec_policy_nosync(stream), geom1_ids.begin(),
+                                   geom1_ids.end());
+
+    geom1_ids.resize(thrust::distance(geom1_ids.begin(), geom1_ids_end), stream);
+    geom1_ids.shrink_to_fit(stream);
+
+    rmm::device_uvector<INDEX_T> seg_begins(0, stream);
+
+    rmm::device_uvector<PointLocation> locations(ids_size_batch, stream);
+    rmm::device_uvector<INDEX_T> aabb_poly_ids(0, stream), aabb_ring_ids(0, stream);
+
+    // aabb id -> vertex begin[polygon] + ith point in this polygon
+    auto handle = BuildBVH(stream, geom_array1, ArrayView<INDEX_T>(geom1_ids), seg_begins,
+                           bvh_buffer, aabb_poly_ids, aabb_ring_ids);
+
+    using params_t = detail::LaunchParamsPolygonPointQuery<POINT_T, INDEX_T>;
+
+    params_t params;
+
+    params.polygons = geom_array1;
+    params.points = geom_array2;
+    params.polygon_ids = ArrayView<INDEX_T>(geom1_ids);
+    params.ids = ArrayView<thrust::pair<uint32_t, uint32_t>>(ids.data() + ids_begin,
+                                                             ids_size_batch);
+    params.seg_begins = ArrayView<INDEX_T>(seg_begins);
+    params.locations = ArrayView<PointLocation>(locations);
+    params.handle = handle;
+    params.aabb_poly_ids = ArrayView<INDEX_T>(aabb_poly_ids);
+    params.aabb_ring_ids = ArrayView<INDEX_T>(aabb_ring_ids);
+
+    rmm::device_buffer params_buffer(sizeof(params_t), stream);
+
+    CUDA_CHECK(cudaMemcpyAsync(params_buffer.data(), &params, sizeof(params_t),
+                               cudaMemcpyHostToDevice, stream.value()));
+
+    rt_engine_->Render(
+        stream, GetPolygonPointQueryShaderId<POINT_T>(), dim3{ids_size_batch, 1, 1},
+        ArrayView<char>((char*)params_buffer.data(), params_buffer.size()));
+
+    auto* p_locations = locations.data();
+    auto* p_ids = ids.data();
+
+    thrust::transform(rmm::exec_policy_nosync(stream),
+                      thrust::make_counting_iterator<uint32_t>(0),
+                      thrust::make_counting_iterator<uint32_t>(ids_size_batch),
+                      ids.data(), [=] __device__(uint32_t i) {
+                        const auto& pair = p_ids[ids_begin + i];
+                        auto geom1_id = pair.first;
+                        auto geom2_id = pair.second;
+                        const auto& geom1 = geom_array1[geom1_id];
+                        const auto& geom2 = geom_array2[geom2_id];
+
+                        auto IM = relate(geom1, geom2, p_locations[i]);
+                        if (detail::EvaluatePredicate(predicate, IM)) {
+                          return pair;
+                        } else {
+                          return invalid_pair;
+                        }
+                      });
+  }
   auto end = thrust::remove_if(
       rmm::exec_policy_nosync(stream), ids.data(), ids.data() + ids_size,
       [=] __device__(const thrust::pair<uint32_t, uint32_t>& pair) {
@@ -295,130 +322,159 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
   if (ids_size == 0) {
     return;
   }
-  // sort by polygon id
+  // Sort by multi polygon id
+  thrust::sort(rmm::exec_policy_nosync(stream), ids.data(), ids.data() + ids_size,
+               [] __device__(const thrust::pair<uint32_t, uint32_t>& pair1,
+                             const thrust::pair<uint32_t, uint32_t>& pair2) {
+                 return pair1.first < pair2.first;
+               });
+
   rmm::device_uvector<uint32_t> geom1_ids(ids_size, stream);
 
   thrust::transform(
       rmm::exec_policy_nosync(stream), ids.data(), ids.data() + ids_size,
       geom1_ids.data(),
       [] __device__(const thrust::pair<uint32_t, uint32_t>& pair) { return pair.first; });
-
-  thrust::sort(rmm::exec_policy_nosync(stream), geom1_ids.begin(), geom1_ids.end());
-
   auto geom1_ids_end =
       thrust::unique(rmm::exec_policy_nosync(stream), geom1_ids.begin(), geom1_ids.end());
   geom1_ids.resize(thrust::distance(geom1_ids.begin(), geom1_ids_end), stream);
   geom1_ids.shrink_to_fit(stream);
 
-  printf("<multipoly,point> pairs %u, unique multipoly %lu\n", ids_size,
-         geom1_ids.size());
-
-  // number of polygons in each multipolygon
-  rmm::device_uvector<uint32_t> num_parts(ids_size, stream);
-  rmm::device_uvector<uint32_t> part_begins(num_parts.size() + 1, stream);
-
-  thrust::transform(rmm::exec_policy_nosync(stream), ids.data(), ids.data() + ids_size,
-                    num_parts.begin(),
-                    [=] __device__(const thrust::pair<uint32_t, uint32_t>& pair) {
-                      auto multi_polygon_idx = pair.first;
-                      return geom_array1[multi_polygon_idx].num_polygons();
-                    });
-
-  part_begins.set_element_to_zero_async(0, stream);
-  thrust::inclusive_scan(rmm::exec_policy_nosync(stream), num_parts.begin(),
-                         num_parts.end(), part_begins.begin() + 1);
-  num_parts.resize(0, stream);
-  num_parts.shrink_to_fit(stream);
-
-  auto n_parts = part_begins.back_element(stream);
-
-  rmm::device_uvector<PointLocation> part_locations(n_parts, stream);
-
-  // init with outside. if no hit, point is outside by default
-  // aabb id -> vertex begin[polygon] + ith point in this polygon
-
-  rmm::device_uvector<INDEX_T> seg_begins(0, stream);
-  rmm::device_uvector<INDEX_T> uniq_part_begins(0, stream);
-  rmm::device_buffer bvh_buffer(0, stream);
-  rmm::device_uvector<INDEX_T> aabb_multi_poly_ids(0, stream), aabb_part_ids(0, stream),
-      aabb_ring_ids(0, stream);
-  auto handle = BuildBVH(stream, geom_array1, ArrayView<INDEX_T>(geom1_ids), seg_begins,
-                         uniq_part_begins, bvh_buffer, aabb_multi_poly_ids, aabb_part_ids,
-                         aabb_ring_ids);
-
-  using params_t = detail::LaunchParamsMultiPolygonPointQuery<POINT_T, INDEX_T>;
-
-  rmm::device_uvector<uint32_t> hit_counters(ids_size, stream);
-
-  thrust::fill(rmm::exec_policy_nosync(stream), hit_counters.begin(), hit_counters.end(),
-               0);
-  stream.synchronize();
-  sw.stop();
-
-  printf("prepare time %lf ms\n", sw.ms());
-
-  params_t params;
-
-  params.multi_polygons = geom_array1;
-  params.points = geom_array2;
-  params.multi_polygon_ids = ArrayView<INDEX_T>(geom1_ids);
-  params.ids = ArrayView<thrust::pair<uint32_t, uint32_t>>(ids.data(), ids_size);
-  params.seg_begins = ArrayView<INDEX_T>(seg_begins);
-  params.part_begins = ArrayView<INDEX_T>(part_begins);
-  params.uniq_part_begins = ArrayView<INDEX_T>(uniq_part_begins);
-  params.locations = ArrayView<PointLocation>(part_locations);
-  params.handle = handle;
-  params.aabb_multi_poly_ids = ArrayView<INDEX_T>(aabb_multi_poly_ids);
-  params.aabb_part_ids = ArrayView<INDEX_T>(aabb_part_ids);
-  params.aabb_ring_ids = ArrayView<INDEX_T>(aabb_ring_ids);
-  params.hit_counters = ArrayView<uint32_t>(hit_counters);
-
-  rmm::device_buffer params_buffer(sizeof(params_t), stream);
-
-  CUDA_CHECK(cudaMemcpyAsync(params_buffer.data(), &params, sizeof(params_t),
-                             cudaMemcpyHostToDevice, stream.value()));
-
-  stream.synchronize();
-
-  sw.start();
-  rt_engine_->Render(stream, GetMultiPolygonPointQueryShaderId<POINT_T>(),
-                     dim3{ids_size, 1, 1},
-                     ArrayView<char>((char*)params_buffer.data(), params_buffer.size()));
-  stream.synchronize();
-  sw.stop();
-
-  auto total_hits = thrust::reduce(rmm::exec_policy_nosync(stream), hit_counters.begin(),
-                                   hit_counters.end(), 0ul, thrust::plus<uint32_t>());
-
-  printf("trace time %f ms, total hits %lu, avg hits %lu\n", sw.ms(), total_hits,
-         total_hits / ids_size);
-  auto* p_part_locations = part_locations.data();
-  auto* p_part_begins = part_begins.data();
-  auto* p_ids = ids.data();
-
+  auto bvh_bytes = EstimateBVHSize(stream, geom_array1, ArrayView<uint32_t>(geom1_ids));
+  int n_batches = bvh_bytes / rmm::available_device_memory().first + 1;
+  auto batch_size = (ids_size + n_batches - 1) / n_batches;
   auto invalid_pair = thrust::make_pair(std::numeric_limits<uint32_t>::max(),
                                         std::numeric_limits<uint32_t>::max());
+  rmm::device_buffer bvh_buffer(0, stream);
 
-  thrust::transform(
-      rmm::exec_policy_nosync(stream), thrust::make_counting_iterator<uint32_t>(0),
-      thrust::make_counting_iterator<uint32_t>(ids_size), ids.data(),
-      [=] __device__(uint32_t i) {
-        const auto& pair = p_ids[i];
-        auto geom1_id = pair.first;
-        auto geom2_id = pair.second;
-        const auto& geom1 = geom_array1[geom1_id];
-        const auto& geom2 = geom_array2[geom2_id];
-        auto begin = p_part_begins[i];
+  for (int batch = 0; batch < n_batches; batch++) {
+    auto ids_begin = batch * batch_size;
+    auto ids_end = std::min(ids_begin + batch_size, ids_size);
+    auto ids_size_batch = ids_end - ids_begin;
 
-        auto IM = relate(
-            geom1, geom2,
-            ArrayView<PointLocation>(&p_part_locations[begin], geom1.num_polygons()));
-        if (detail::EvaluatePredicate(predicate, IM)) {
-          return pair;
-        } else {
-          return invalid_pair;
-        }
-      });
+    geom1_ids.resize(ids_size_batch, stream);
+
+    thrust::transform(rmm::exec_policy_nosync(stream), ids.data() + ids_begin,
+                      ids.data() + ids_end, geom1_ids.data(),
+                      [] __device__(const thrust::pair<uint32_t, uint32_t>& pair) {
+                        return pair.first;
+                      });
+
+    // ids is sorted
+    geom1_ids_end = thrust::unique(rmm::exec_policy_nosync(stream), geom1_ids.begin(),
+                                   geom1_ids.end());
+    geom1_ids.resize(thrust::distance(geom1_ids.begin(), geom1_ids_end), stream);
+    geom1_ids.shrink_to_fit(stream);
+
+    printf("<multipoly,point> pairs %u, unique multipoly %lu\n", ids_size_batch,
+           geom1_ids.size());
+
+    // number of polygons in each multipolygon
+    rmm::device_uvector<uint32_t> num_parts(ids_size_batch, stream);
+    rmm::device_uvector<uint32_t> part_begins(num_parts.size() + 1, stream);
+
+    thrust::transform(rmm::exec_policy_nosync(stream), ids.data() + ids_begin,
+                      ids.data() + ids_end, num_parts.begin(),
+                      [=] __device__(const thrust::pair<uint32_t, uint32_t>& pair) {
+                        auto multi_polygon_idx = pair.first;
+                        return geom_array1[multi_polygon_idx].num_polygons();
+                      });
+
+    part_begins.set_element_to_zero_async(0, stream);
+    thrust::inclusive_scan(rmm::exec_policy_nosync(stream), num_parts.begin(),
+                           num_parts.end(), part_begins.begin() + 1);
+    num_parts.resize(0, stream);
+    num_parts.shrink_to_fit(stream);
+
+    auto n_parts = part_begins.back_element(stream);
+
+    rmm::device_uvector<PointLocation> part_locations(n_parts, stream);
+
+    // init with outside. if no hit, point is outside by default
+    // aabb id -> vertex begin[polygon] + ith point in this polygon
+
+    rmm::device_uvector<INDEX_T> seg_begins(0, stream);
+    rmm::device_uvector<INDEX_T> uniq_part_begins(0, stream);
+
+    rmm::device_uvector<INDEX_T> aabb_multi_poly_ids(0, stream), aabb_part_ids(0, stream),
+        aabb_ring_ids(0, stream);
+    auto handle = BuildBVH(stream, geom_array1, ArrayView<INDEX_T>(geom1_ids), seg_begins,
+                           uniq_part_begins, bvh_buffer, aabb_multi_poly_ids,
+                           aabb_part_ids, aabb_ring_ids);
+
+    using params_t = detail::LaunchParamsMultiPolygonPointQuery<POINT_T, INDEX_T>;
+
+    rmm::device_uvector<uint32_t> hit_counters(ids_size_batch, stream);
+
+    thrust::fill(rmm::exec_policy_nosync(stream), hit_counters.begin(),
+                 hit_counters.end(), 0);
+    stream.synchronize();
+    sw.stop();
+
+    printf("prepare time %lf ms\n", sw.ms());
+
+    params_t params;
+
+    params.multi_polygons = geom_array1;
+    params.points = geom_array2;
+    params.multi_polygon_ids = ArrayView<INDEX_T>(geom1_ids);
+    params.ids = ArrayView<thrust::pair<uint32_t, uint32_t>>(ids.data() + ids_begin,
+                                                             ids_size_batch);
+    params.seg_begins = ArrayView<INDEX_T>(seg_begins);
+    params.part_begins = ArrayView<INDEX_T>(part_begins);
+    params.uniq_part_begins = ArrayView<INDEX_T>(uniq_part_begins);
+    params.locations = ArrayView<PointLocation>(part_locations);
+    params.handle = handle;
+    params.aabb_multi_poly_ids = ArrayView<INDEX_T>(aabb_multi_poly_ids);
+    params.aabb_part_ids = ArrayView<INDEX_T>(aabb_part_ids);
+    params.aabb_ring_ids = ArrayView<INDEX_T>(aabb_ring_ids);
+    params.hit_counters = ArrayView<uint32_t>(hit_counters);
+
+    rmm::device_buffer params_buffer(sizeof(params_t), stream);
+
+    CUDA_CHECK(cudaMemcpyAsync(params_buffer.data(), &params, sizeof(params_t),
+                               cudaMemcpyHostToDevice, stream.value()));
+
+    stream.synchronize();
+
+    sw.start();
+    rt_engine_->Render(
+        stream, GetMultiPolygonPointQueryShaderId<POINT_T>(), dim3{ids_size_batch, 1, 1},
+        ArrayView<char>((char*)params_buffer.data(), params_buffer.size()));
+    stream.synchronize();
+    sw.stop();
+
+    auto total_hits =
+        thrust::reduce(rmm::exec_policy_nosync(stream), hit_counters.begin(),
+                       hit_counters.end(), 0ul, thrust::plus<uint32_t>());
+
+    printf("trace time %f ms, total hits %lu, avg hits %lu\n", sw.ms(), total_hits,
+           total_hits / ids_size_batch);
+    auto* p_part_locations = part_locations.data();
+    auto* p_part_begins = part_begins.data();
+    auto* p_ids = ids.data();
+
+    thrust::transform(
+        rmm::exec_policy_nosync(stream), thrust::make_counting_iterator<uint32_t>(0),
+        thrust::make_counting_iterator<uint32_t>(ids_size_batch), ids.data() + ids_begin,
+        [=] __device__(uint32_t i) {
+          const auto& pair = p_ids[ids_begin + i];
+          auto geom1_id = pair.first;
+          auto geom2_id = pair.second;
+          const auto& geom1 = geom_array1[geom1_id];
+          const auto& geom2 = geom_array2[geom2_id];
+          auto begin = p_part_begins[i];
+
+          auto IM = relate(
+              geom1, geom2,
+              ArrayView<PointLocation>(&p_part_locations[begin], geom1.num_polygons()));
+          if (detail::EvaluatePredicate(predicate, IM)) {
+            return pair;
+          } else {
+            return invalid_pair;
+          }
+        });
+  }
 
   auto end = thrust::remove_if(
       rmm::exec_policy_nosync(stream), ids.data(), ids.data() + ids_size,
@@ -457,6 +513,88 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
                       return thrust::make_pair(pair.second, pair.first);
                     });
   Evaluate(stream, geom_array2, geom_array1, predicate, ids);
+}
+
+template <typename POINT_T, typename INDEX_T>
+size_t RelateEngine<POINT_T, INDEX_T>::EstimateBVHSize(
+    const rmm::cuda_stream_view& stream, const PolygonArrayView<POINT_T, INDEX_T>& polys,
+    ArrayView<uint32_t> poly_ids) {
+  auto n_polygons = poly_ids.size();
+  rmm::device_uvector<uint32_t> n_segs(n_polygons, stream);
+  auto* p_nsegs = n_segs.data();
+
+  LaunchKernel(stream, [=] __device__() {
+    using WarpReduce = cub::WarpReduce<uint32_t>;
+    __shared__ WarpReduce::TempStorage temp_storage[MAX_BLOCK_SIZE / 32];
+    auto lane = threadIdx.x % 32;
+    auto warp_id = threadIdx.x / 32;
+    auto global_warp_id = TID_1D / 32;
+    auto n_warps = TOTAL_THREADS_1D / 32;
+
+    for (auto i = global_warp_id; i < n_polygons; i += n_warps) {
+      auto id = poly_ids[i];
+      const auto& polygon = polys[id];
+      uint32_t total_segs = 0;
+
+      for (auto ring = lane; ring < polygon.num_rings(); ring += 32) {
+        total_segs += polygon.get_ring(ring).num_points();
+      }
+      total_segs = WarpReduce(temp_storage[warp_id]).Sum(total_segs);
+      if (lane == 0) {
+        p_nsegs[i] = total_segs;
+      }
+    }
+  });
+  auto total_segs =
+      thrust::reduce(rmm::exec_policy_nosync(stream), n_segs.begin(), n_segs.end());
+  if (total_segs == 0) {
+    return 0;
+  }
+  return rt_engine_->EstimateMemoryUsageForAABB(total_segs, bvh_fast_build,
+                                                bvh_fast_compact);
+}
+
+template <typename POINT_T, typename INDEX_T>
+size_t RelateEngine<POINT_T, INDEX_T>::EstimateBVHSize(
+    const rmm::cuda_stream_view& stream,
+    const MultiPolygonArrayView<POINT_T, INDEX_T>& multi_polys,
+    ArrayView<uint32_t> multi_poly_ids) {
+  auto n_mult_polygons = multi_poly_ids.size();
+  rmm::device_uvector<uint32_t> n_segs(n_mult_polygons, stream);
+  auto* p_nsegs = n_segs.data();
+
+  LaunchKernel(stream, [=] __device__() {
+    using WarpReduce = cub::WarpReduce<uint32_t>;
+    __shared__ WarpReduce::TempStorage temp_storage[MAX_BLOCK_SIZE / 32];
+    auto lane = threadIdx.x % 32;
+    auto warp_id = threadIdx.x / 32;
+    auto global_warp_id = TID_1D / 32;
+    auto n_warps = TOTAL_THREADS_1D / 32;
+
+    for (auto i = global_warp_id; i < n_mult_polygons; i += n_warps) {
+      auto id = multi_poly_ids[i];
+      const auto& multi_polygon = multi_polys[id];
+      uint32_t total_segs = 0;
+
+      for (int part_idx = 0; part_idx < multi_polygon.num_polygons(); part_idx++) {
+        auto polygon = multi_polygon.get_polygon(part_idx);
+        for (auto ring = lane; ring < polygon.num_rings(); ring += 32) {
+          total_segs += polygon.get_ring(ring).num_points();
+        }
+      }
+      total_segs = WarpReduce(temp_storage[warp_id]).Sum(total_segs);
+      if (lane == 0) {
+        p_nsegs[i] = total_segs;
+      }
+    }
+  });
+  auto total_segs =
+      thrust::reduce(rmm::exec_policy_nosync(stream), n_segs.begin(), n_segs.end());
+  if (total_segs == 0) {
+    return 0;
+  }
+  return rt_engine_->EstimateMemoryUsageForAABB(total_segs, bvh_fast_build,
+                                                bvh_fast_compact);
 }
 
 template <typename POINT_T, typename INDEX_T>
@@ -552,7 +690,7 @@ OptixTraversableHandle RelateEngine<POINT_T, INDEX_T>::BuildBVH(
   });
   assert(rt_engine_ != nullptr);
   return rt_engine_->BuildAccelCustom(stream.value(), ArrayView<OptixAabb>(aabbs), buffer,
-                                      false /*fast build*/, true /*compact*/);
+                                      bvh_fast_build, bvh_fast_compact);
 }
 
 template <typename POINT_T, typename INDEX_T>
@@ -702,9 +840,8 @@ OptixTraversableHandle RelateEngine<POINT_T, INDEX_T>::BuildBVH(
 
   assert(rt_engine_ != nullptr);
   sw.start();
-  auto handle =
-      rt_engine_->BuildAccelCustom(stream.value(), ArrayView<OptixAabb>(aabbs), buffer,
-                                   false /*fast build*/, true /*compact*/);
+  auto handle = rt_engine_->BuildAccelCustom(stream.value(), ArrayView<OptixAabb>(aabbs),
+                                             buffer, bvh_fast_build, bvh_fast_compact);
   stream.synchronize();
   sw.stop();
   build_time = sw.ms();
