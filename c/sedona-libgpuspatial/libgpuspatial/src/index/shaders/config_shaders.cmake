@@ -69,6 +69,44 @@ function(CONFIG_SHADERS SHADER_PTX_FILES)
                 "-D${POINT_TYPE}"
         )
         list(APPEND ALL_GENERATED_FILES ${PROGRAM_MODULES})
+
+        NVCUDA_COMPILE_MODULE(
+                SOURCES "${PROJECT_SOURCE_DIR}/src/index/shaders/polygon_point_query.cu"
+                DEPENDENCIES ${SHADERS_DEPS}
+                TARGET_PATH "${OUTPUT_DIR}"
+                PREFIX "${POINT_TYPE}_"
+                EXTENSION "${OPTIX_MODULE_EXTENSION}"
+                GENERATED_FILES PROGRAM_MODULES
+                NVCC_OPTIONS "${OPTIX_PROGRAM_TARGET}"
+                "--gpu-architecture=compute_75"
+                "--relocatable-device-code=true"
+                "--expt-relaxed-constexpr"
+                "-Wno-deprecated-gpu-targets"
+                "-std=c++17"
+                "-I${optix_SOURCE_DIR}/include"
+                "-I${PROJECT_SOURCE_DIR}/include"
+                "-D${POINT_TYPE}"
+        )
+        list(APPEND ALL_GENERATED_FILES ${PROGRAM_MODULES})
+
+        NVCUDA_COMPILE_MODULE(
+                SOURCES "${PROJECT_SOURCE_DIR}/src/index/shaders/multipolygon_point_query.cu"
+                DEPENDENCIES ${SHADERS_DEPS}
+                TARGET_PATH "${OUTPUT_DIR}"
+                PREFIX "${POINT_TYPE}_"
+                EXTENSION "${OPTIX_MODULE_EXTENSION}"
+                GENERATED_FILES PROGRAM_MODULES
+                NVCC_OPTIONS "${OPTIX_PROGRAM_TARGET}"
+                "--gpu-architecture=compute_75"
+                "--relocatable-device-code=true"
+                "--expt-relaxed-constexpr"
+                "-Wno-deprecated-gpu-targets"
+                "-std=c++17"
+                "-I${optix_SOURCE_DIR}/include"
+                "-I${PROJECT_SOURCE_DIR}/include"
+                "-D${POINT_TYPE}"
+        )
+        list(APPEND ALL_GENERATED_FILES ${PROGRAM_MODULES})
     endforeach ()
     set(${SHADER_PTX_FILES} ${ALL_GENERATED_FILES} PARENT_SCOPE)
 endfunction()

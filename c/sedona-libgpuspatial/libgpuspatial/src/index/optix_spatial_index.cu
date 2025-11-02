@@ -161,12 +161,12 @@ void OptixSpatialIndex<POINT_T, INDEX_T>::PushStream(
 template <typename POINT_T, typename INDEX_T>
 OptixTraversableHandle OptixSpatialIndex<POINT_T, INDEX_T>::buildBVH(
     const rmm::cuda_stream_view& stream, const ArrayView<OptixAabb>& aabbs,
-    std::unique_ptr<rmm::device_uvector<char>>& buffer) {
+    std::unique_ptr<rmm::device_buffer>& buffer) {
   if (buffer == nullptr) {
     auto buffer_size_bytes = rt_engine_.EstimateMemoryUsageForAABB(
         aabbs.size(), config_.prefer_fast_build, config_.compact);
 
-    buffer = std::make_unique<rmm::device_uvector<char>>(buffer_size_bytes, stream);
+    buffer = std::make_unique<rmm::device_buffer>(buffer_size_bytes, stream);
   }
 
   return rt_engine_.BuildAccelCustom(stream, aabbs, *buffer, config_.prefer_fast_build,

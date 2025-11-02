@@ -127,7 +127,7 @@ void SpatialJoiner::FinishBuilding() {
   geometry_grouper_.Group(stream, *build_geometries_, config_.n_geoms_per_aabb);
   // TODO: The BVH for build is not necessary if build is point and stream is not point
   handle_ = buildBVH(stream, geometry_grouper_.get_aabbs(), bvh_buffer_);
-  relate_engine_ = RelateEngine(build_geometries_.get());
+  relate_engine_ = RelateEngine(build_geometries_.get(), &rt_engine_);
 }
 
 void SpatialJoiner::PushStream(Context* base_ctx, const ArrowSchema* schema,
@@ -374,12 +374,12 @@ void SpatialJoiner::handleBuildBoxStreamBox(SpatialJoinerContext* ctx,
 
 OptixTraversableHandle SpatialJoiner::buildBVH(
     const rmm::cuda_stream_view& stream, const ArrayView<OptixAabb>& aabbs,
-    std::unique_ptr<rmm::device_uvector<char>>& buffer) {
+    std::unique_ptr<rmm::device_buffer>& buffer) {
   auto buffer_size_bytes = rt_engine_.EstimateMemoryUsageForAABB(
       aabbs.size(), config_.prefer_fast_build, config_.compact);
 
   if (buffer == nullptr || buffer->size() < buffer_size_bytes) {
-    buffer = std::make_unique<rmm::device_uvector<char>>(buffer_size_bytes, stream);
+    buffer = std::make_unique<rmm::device_buffer>(buffer_size_bytes, stream);
   }
 
   return rt_engine_.BuildAccelCustom(stream, aabbs, *buffer, config_.prefer_fast_build,

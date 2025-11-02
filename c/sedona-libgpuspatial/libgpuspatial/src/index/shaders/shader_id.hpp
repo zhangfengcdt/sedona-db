@@ -67,5 +67,15 @@ template <typename POINT_T>
 inline std::string GetBoxQueryBackwardShaderId() {
   return detail::GetShaderPointTypeId<POINT_T>() + "_box_query_backward.ptx";
 }
+
+template <typename POINT_T>
+inline std::string GetPolygonPointQueryShaderId() {
+  return detail::GetShaderPointTypeId<POINT_T>() + "_polygon_point_query.ptx";
+}
+
+template <typename POINT_T>
+inline std::string GetMultiPolygonPointQueryShaderId() {
+  return detail::GetShaderPointTypeId<POINT_T>() + "_multipolygon_point_query.ptx";
+}
 }  // namespace gpuspatial
 #endif  //  GPUSPATIAL_INDEX_DETAIL_SHADER_NAME_HPP

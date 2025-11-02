@@ -54,7 +54,7 @@ class SpatialJoiner : public StreamingJoiner {
     uint32_t concurrency = 1;
     uint32_t n_geoms_per_aabb = 1;
     float result_buffer_memory_reserve_ratio =
-        0.9;  // reserve a ratio of available memory for result sets
+        0.2;  // reserve a ratio of available memory for result sets
     size_t stack_size_bytes = 3 * 1024;  // this value determines RELATE_MAX_DEPTH
     SpatialJoinerConfig() : ptx_root(nullptr), prefer_fast_build(false), compact(false) {
       concurrency = std::thread::hardware_concurrency();
@@ -67,7 +67,7 @@ class SpatialJoiner : public StreamingJoiner {
     std::unique_ptr<WKBLoader<point_t>> stream_wkb_loader;
     std::shared_ptr<GeometrySegment> stream_seg;
     std::shared_ptr<dev_geometries_t> stream_geometries;
-    std::unique_ptr<rmm::device_uvector<char>> bvh_buffer;
+    std::unique_ptr<rmm::device_buffer> bvh_buffer;
     OptixTraversableHandle handle;
     std::vector<char> h_launch_params_buffer;
     std::unique_ptr<rmm::device_buffer> launch_params_buffer;
@@ -134,7 +134,7 @@ class SpatialJoiner : public StreamingJoiner {
   SpatialJoinerConfig config_;
   std::unique_ptr<rmm::cuda_stream_pool> stream_pool_;
   details::RTEngine rt_engine_;
-  std::unique_ptr<rmm::device_uvector<char>> bvh_buffer_;
+  std::unique_ptr<rmm::device_buffer> bvh_buffer_;
   GeometryType build_type_;
   WKBLoader<point_t> build_wkb_loader_;
 
@@ -148,7 +148,7 @@ class SpatialJoiner : public StreamingJoiner {
 
   OptixTraversableHandle buildBVH(const rmm::cuda_stream_view& stream,
                                   const ArrayView<OptixAabb>& aabbs,
-                                  std::unique_ptr<rmm::device_uvector<char>>& buffer);
+                                  std::unique_ptr<rmm::device_buffer>& buffer);
 
   void allocateResultBuffer(SpatialJoinerContext* ctx);
 

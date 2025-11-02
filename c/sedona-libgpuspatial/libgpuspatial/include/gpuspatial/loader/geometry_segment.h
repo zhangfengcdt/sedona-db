@@ -11,9 +11,13 @@
 #include "gpuspatial/utils/markers.hpp"
 #include "gpuspatial/utils/mem_utils.hpp"
 #include "gpuspatial/utils/pinned_vector.h"
-#include "rmm/cuda_stream_view.hpp"
-#include "rmm/device_uvector.hpp"
-#include "rmm/exec_policy.hpp"
+
+#include <thrust/scan.h>
+
+#include <rmm/cuda_stream_view.hpp>
+#include <rmm/device_uvector.hpp>
+#include <rmm/exec_policy.hpp>
+
 
 namespace gpuspatial {
 namespace detail {
@@ -1003,7 +1007,6 @@ class MultiPolygonSegment : public GeometrySegment {
     }
 
     // visit points in the ring
-    assert(ring_node->size > 0);
     for (uint32_t j = 0; j < ring_node->size; j++) {
       point_t point;
 
