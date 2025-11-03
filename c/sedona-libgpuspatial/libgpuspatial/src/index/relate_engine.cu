@@ -486,23 +486,31 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
   // Debug: Find max indices to detect out-of-range values
   auto result_size = end - ids.data();
   if (result_size > 0) {
-    auto max_build = thrust::max_element(rmm::exec_policy_nosync(stream), ids.data(), end,
-      [] __device__(const thrust::pair<uint32_t, uint32_t>& a, const thrust::pair<uint32_t, uint32_t>& b) {
-        return a.first < b.first;
-      });
-    auto max_stream = thrust::max_element(rmm::exec_policy_nosync(stream), ids.data(), end,
-      [] __device__(const thrust::pair<uint32_t, uint32_t>& a, const thrust::pair<uint32_t, uint32_t>& b) {
-        return a.second < b.second;
-      });
+    auto max_build =
+        thrust::max_element(rmm::exec_policy_nosync(stream), ids.data(), end,
+                            [] __device__(const thrust::pair<uint32_t, uint32_t>& a,
+                                          const thrust::pair<uint32_t, uint32_t>& b) {
+                              return a.first < b.first;
+                            });
+    auto max_stream =
+        thrust::max_element(rmm::exec_policy_nosync(stream), ids.data(), end,
+                            [] __device__(const thrust::pair<uint32_t, uint32_t>& a,
+                                          const thrust::pair<uint32_t, uint32_t>& b) {
+                              return a.second < b.second;
+                            });
     auto max_build_val = thrust::make_pair(0u, 0u);
     auto max_stream_val = thrust::make_pair(0u, 0u);
-    CUDA_CHECK(cudaMemcpyAsync(&max_build_val, max_build, sizeof(thrust::pair<uint32_t, uint32_t>),
+    CUDA_CHECK(cudaMemcpyAsync(&max_build_val, max_build,
+                               sizeof(thrust::pair<uint32_t, uint32_t>),
                                cudaMemcpyDeviceToHost, stream.value()));
-    CUDA_CHECK(cudaMemcpyAsync(&max_stream_val, max_stream, sizeof(thrust::pair<uint32_t, uint32_t>),
+    CUDA_CHECK(cudaMemcpyAsync(&max_stream_val, max_stream,
+                               sizeof(thrust::pair<uint32_t, uint32_t>),
                                cudaMemcpyDeviceToHost, stream.value()));
     stream.synchronize();
-    printf("Result size %u, max build_idx=%u, max stream_idx=%u, geom_array1.size=%lu, geom_array2.size=%lu\n",
-           result_size, max_build_val.first, max_stream_val.second, geom_array1.size(), geom_array2.size());
+    printf(
+        "Result size %u, max build_idx=%u, max stream_idx=%u, geom_array1.size=%lu, geom_array2.size=%lu\n",
+        result_size, max_build_val.first, max_stream_val.second, geom_array1.size(),
+        geom_array2.size());
   } else {
     printf("Result size %u\n", result_size);
   }
@@ -514,13 +522,18 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
     const PointArrayView<POINT_T, INDEX_T>& geom_array1,
     const PolygonArrayView<POINT_T, INDEX_T>& geom_array2, Predicate predicate,
     Queue<thrust::pair<uint32_t, uint32_t>>& ids) {
-  thrust::transform(rmm::exec_policy_nosync(stream), ids.data(),
-                    ids.data() + ids.size(stream), ids.data(),
-                    [] __device__(const thrust::pair<uint32_t, uint32_t>& pair)
-                        -> thrust::pair<uint32_t, uint32_t> {
-                      return thrust::make_pair(pair.second, pair.first);
-                    });
+  // Reuse the polygon-point evaluation by swapping the order
+  thrust::for_each(rmm::exec_policy_nosync(stream), ids.data(),
+                   ids.data() + ids.size(stream),
+                   [] __device__(thrust::pair<uint32_t, uint32_t> & pair) {
+                     thrust::swap(pair.first, pair.second);
+                   });
   Evaluate(stream, geom_array2, geom_array1, predicate, ids);
+  thrust::for_each(rmm::exec_policy_nosync(stream), ids.data(),
+                   ids.data() + ids.size(stream),
+                   [] __device__(thrust::pair<uint32_t, uint32_t> & pair) {
+                     thrust::swap(pair.first, pair.second);
+                   });
 }
 
 template <typename POINT_T, typename INDEX_T>
@@ -529,13 +542,18 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
     const PointArrayView<POINT_T, INDEX_T>& geom_array1,
     const MultiPolygonArrayView<POINT_T, INDEX_T>& geom_array2, Predicate predicate,
     Queue<thrust::pair<uint32_t, uint32_t>>& ids) {
-  thrust::transform(rmm::exec_policy_nosync(stream), ids.data(),
-                    ids.data() + ids.size(stream), ids.data(),
-                    [] __device__(const thrust::pair<uint32_t, uint32_t>& pair)
-                        -> thrust::pair<uint32_t, uint32_t> {
-                      return thrust::make_pair(pair.second, pair.first);
-                    });
+  // Reuse the polygon-point evaluation by swapping the order
+  thrust::for_each(rmm::exec_policy_nosync(stream), ids.data(),
+                   ids.data() + ids.size(stream),
+                   [] __device__(thrust::pair<uint32_t, uint32_t> & pair) {
+                     thrust::swap(pair.first, pair.second);
+                   });
   Evaluate(stream, geom_array2, geom_array1, predicate, ids);
+  thrust::for_each(rmm::exec_policy_nosync(stream), ids.data(),
+                   ids.data() + ids.size(stream),
+                   [] __device__(thrust::pair<uint32_t, uint32_t> & pair) {
+                     thrust::swap(pair.first, pair.second);
+                   });
 }
 
 template <typename POINT_T, typename INDEX_T>

@@ -331,12 +331,11 @@ void SpatialJoiner::handleBuildPointStreamBox(SpatialJoinerContext* ctx,
                              ctx->cuda_stream));
 
   uint32_t dim_x = std::min(OPTIX_MAX_RAYS, build_geometries_->num_features());
-
+  // IMPORTANT: In this case, the BVH is built from stream geometries and points2 are
+  // build geometries, so the result pairs are (stream_id, build_id) instead of (build_id,
+  // stream_id). We need to swap the output buffers to correct this.
   filter(ctx, dim_x, true);
-  // IMPORTANT: In this case, the BVH is built from stream geometries and points2 are build geometries,
-  // so the result pairs are (stream_id, build_id) instead of (build_id, stream_id).
-  // We need to swap the output buffers to correct this.
-  refine(ctx, predicate, stream_indices, build_indices);
+  refine(ctx, predicate, build_indices, stream_indices);
 }
 
 void SpatialJoiner::handleBuildBoxStreamBox(SpatialJoinerContext* ctx,
@@ -499,8 +498,9 @@ void SpatialJoiner::refine(SpatialJoinerContext* ctx, Predicate predicate,
       std::make_unique<rmm::device_uvector<uint32_t>>(n_results, ctx->cuda_stream);
 
   auto prev_size = build_indices->size();
-  printf("DEBUG refine(): prev build_indices size=%lu, n_results=%u, array_index_offset=%u\n",
-         prev_size, n_results, ctx->array_index_offset);
+  printf(
+      "DEBUG refine(): prev build_indices size=%lu, n_results=%u, array_index_offset=%u\n",
+      prev_size, n_results, ctx->array_index_offset);
 
   thrust::transform(
       rmm::exec_policy_nosync(ctx->cuda_stream), ctx->results.data(),
