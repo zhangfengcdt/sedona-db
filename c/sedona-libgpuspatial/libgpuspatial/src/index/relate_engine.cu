@@ -286,7 +286,7 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
     thrust::transform(rmm::exec_policy_nosync(stream),
                       thrust::make_counting_iterator<uint32_t>(0),
                       thrust::make_counting_iterator<uint32_t>(ids_size_batch),
-                      ids.data(), [=] __device__(uint32_t i) {
+                      ids.data() + ids_begin, [=] __device__(uint32_t i) {
                         const auto& pair = p_ids[ids_begin + i];
                         auto geom1_id = pair.first;
                         auto geom2_id = pair.second;
@@ -482,7 +482,30 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
         return pair == invalid_pair;
       });
   ids.set_size(stream, end - ids.data());
-  printf("Result size %u\n", end - ids.data());
+
+  // Debug: Find max indices to detect out-of-range values
+  auto result_size = end - ids.data();
+  if (result_size > 0) {
+    auto max_build = thrust::max_element(rmm::exec_policy_nosync(stream), ids.data(), end,
+      [] __device__(const thrust::pair<uint32_t, uint32_t>& a, const thrust::pair<uint32_t, uint32_t>& b) {
+        return a.first < b.first;
+      });
+    auto max_stream = thrust::max_element(rmm::exec_policy_nosync(stream), ids.data(), end,
+      [] __device__(const thrust::pair<uint32_t, uint32_t>& a, const thrust::pair<uint32_t, uint32_t>& b) {
+        return a.second < b.second;
+      });
+    auto max_build_val = thrust::make_pair(0u, 0u);
+    auto max_stream_val = thrust::make_pair(0u, 0u);
+    CUDA_CHECK(cudaMemcpyAsync(&max_build_val, max_build, sizeof(thrust::pair<uint32_t, uint32_t>),
+                               cudaMemcpyDeviceToHost, stream.value()));
+    CUDA_CHECK(cudaMemcpyAsync(&max_stream_val, max_stream, sizeof(thrust::pair<uint32_t, uint32_t>),
+                               cudaMemcpyDeviceToHost, stream.value()));
+    stream.synchronize();
+    printf("Result size %u, max build_idx=%u, max stream_idx=%u, geom_array1.size=%lu, geom_array2.size=%lu\n",
+           result_size, max_build_val.first, max_stream_val.second, geom_array1.size(), geom_array2.size());
+  } else {
+    printf("Result size %u\n", result_size);
+  }
 }
 
 template <typename POINT_T, typename INDEX_T>

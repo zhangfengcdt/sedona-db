@@ -212,6 +212,20 @@ impl GpuSpatialContext {
             log::info!("DEBUG: Retrieved {} build indices, {} stream indices",
                 build_indices.len(), stream_indices.len());
 
+            // Debug: Print first few and max indices
+            if !build_indices.is_empty() {
+                let max_build = *build_indices.iter().max().unwrap();
+                let min_build = *build_indices.iter().min().unwrap();
+                println!("DEBUG Rust: build_indices len={}, min={}, max={}, first 5={:?}",
+                    build_indices.len(), min_build, max_build, &build_indices[..5.min(build_indices.len())]);
+            }
+            if !stream_indices.is_empty() {
+                let max_stream = *stream_indices.iter().max().unwrap();
+                let min_stream = *stream_indices.iter().min().unwrap();
+                println!("DEBUG Rust: stream_indices len={}, min={}, max={}, first 5={:?}",
+                    stream_indices.len(), min_stream, max_stream, &stream_indices[..5.min(stream_indices.len())]);
+            }
+
             Ok((build_indices, stream_indices))
         }
     }
