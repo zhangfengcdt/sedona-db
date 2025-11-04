@@ -222,11 +222,11 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
   geom1_ids.shrink_to_fit(stream);
 
   auto bvh_bytes = EstimateBVHSize(stream, geom_array1, ArrayView<uint32_t>(geom1_ids));
-  int n_batches = bvh_bytes / rmm::available_device_memory().first + 1;
+  auto avail_bytes = rmm::available_device_memory().first * config_.memory_quota;
+  int n_batches = bvh_bytes / avail_bytes + 1;
   auto batch_size = (ids_size + n_batches - 1) / n_batches;
   auto invalid_pair = thrust::make_pair(std::numeric_limits<uint32_t>::max(),
                                         std::numeric_limits<uint32_t>::max());
-  rmm::device_buffer bvh_buffer(0, stream);
 
   for (int batch = 0; batch < n_batches; batch++) {
     auto ids_begin = batch * batch_size;
@@ -248,8 +248,8 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
     geom1_ids.shrink_to_fit(stream);
 
     rmm::device_uvector<INDEX_T> seg_begins(0, stream);
-
     rmm::device_uvector<PointLocation> locations(ids_size_batch, stream);
+    rmm::device_buffer bvh_buffer(0, stream);
     rmm::device_uvector<INDEX_T> aabb_poly_ids(0, stream), aabb_ring_ids(0, stream);
 
     // aabb id -> vertex begin[polygon] + ith point in this polygon
@@ -341,11 +341,11 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
   geom1_ids.shrink_to_fit(stream);
 
   auto bvh_bytes = EstimateBVHSize(stream, geom_array1, ArrayView<uint32_t>(geom1_ids));
-  int n_batches = bvh_bytes / rmm::available_device_memory().first + 1;
+  auto avail_bytes = rmm::available_device_memory().first * config_.memory_quota;
+  int n_batches = bvh_bytes / avail_bytes + 1;
   auto batch_size = (ids_size + n_batches - 1) / n_batches;
   auto invalid_pair = thrust::make_pair(std::numeric_limits<uint32_t>::max(),
                                         std::numeric_limits<uint32_t>::max());
-  rmm::device_buffer bvh_buffer(0, stream);
 
   for (int batch = 0; batch < n_batches; batch++) {
     auto ids_begin = batch * batch_size;
@@ -366,48 +366,19 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
     geom1_ids.resize(thrust::distance(geom1_ids.begin(), geom1_ids_end), stream);
     geom1_ids.shrink_to_fit(stream);
 
-    printf("<multipoly,point> pairs %u, unique multipoly %lu\n", ids_size_batch,
-           geom1_ids.size());
-
-    // number of polygons in each multipolygon
-    rmm::device_uvector<uint32_t> num_parts(ids_size_batch, stream);
-    rmm::device_uvector<uint32_t> part_begins(num_parts.size() + 1, stream);
-
-    thrust::transform(rmm::exec_policy_nosync(stream), ids.data() + ids_begin,
-                      ids.data() + ids_end, num_parts.begin(),
-                      [=] __device__(const thrust::pair<uint32_t, uint32_t>& pair) {
-                        auto multi_polygon_idx = pair.first;
-                        return geom_array1[multi_polygon_idx].num_polygons();
-                      });
-
-    part_begins.set_element_to_zero_async(0, stream);
-    thrust::inclusive_scan(rmm::exec_policy_nosync(stream), num_parts.begin(),
-                           num_parts.end(), part_begins.begin() + 1);
-    num_parts.resize(0, stream);
-    num_parts.shrink_to_fit(stream);
-
-    auto n_parts = part_begins.back_element(stream);
-
-    rmm::device_uvector<PointLocation> part_locations(n_parts, stream);
-
-    // init with outside. if no hit, point is outside by default
-    // aabb id -> vertex begin[polygon] + ith point in this polygon
-
+    rmm::device_uvector<int> IMs(ids_size_batch, stream);
     rmm::device_uvector<INDEX_T> seg_begins(0, stream);
     rmm::device_uvector<INDEX_T> uniq_part_begins(0, stream);
-
+    rmm::device_buffer bvh_buffer(0, stream);
     rmm::device_uvector<INDEX_T> aabb_multi_poly_ids(0, stream), aabb_part_ids(0, stream),
         aabb_ring_ids(0, stream);
+
     auto handle = BuildBVH(stream, geom_array1, ArrayView<INDEX_T>(geom1_ids), seg_begins,
                            uniq_part_begins, bvh_buffer, aabb_multi_poly_ids,
                            aabb_part_ids, aabb_ring_ids);
 
     using params_t = detail::LaunchParamsMultiPolygonPointQuery<POINT_T, INDEX_T>;
 
-    rmm::device_uvector<uint32_t> hit_counters(ids_size_batch, stream);
-
-    thrust::fill(rmm::exec_policy_nosync(stream), hit_counters.begin(),
-                 hit_counters.end(), 0);
     stream.synchronize();
     sw.stop();
 
@@ -421,14 +392,12 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
     params.ids = ArrayView<thrust::pair<uint32_t, uint32_t>>(ids.data() + ids_begin,
                                                              ids_size_batch);
     params.seg_begins = ArrayView<INDEX_T>(seg_begins);
-    params.part_begins = ArrayView<INDEX_T>(part_begins);
     params.uniq_part_begins = ArrayView<INDEX_T>(uniq_part_begins);
-    params.locations = ArrayView<PointLocation>(part_locations);
+    params.IMs = ArrayView<int>(IMs);
     params.handle = handle;
     params.aabb_multi_poly_ids = ArrayView<INDEX_T>(aabb_multi_poly_ids);
     params.aabb_part_ids = ArrayView<INDEX_T>(aabb_part_ids);
     params.aabb_ring_ids = ArrayView<INDEX_T>(aabb_ring_ids);
-    params.hit_counters = ArrayView<uint32_t>(hit_counters);
 
     rmm::device_buffer params_buffer(sizeof(params_t), stream);
 
@@ -444,36 +413,27 @@ void RelateEngine<POINT_T, INDEX_T>::Evaluate(
     stream.synchronize();
     sw.stop();
 
-    auto total_hits =
-        thrust::reduce(rmm::exec_policy_nosync(stream), hit_counters.begin(),
-                       hit_counters.end(), 0ul, thrust::plus<uint32_t>());
-
-    printf("trace time %f ms, total hits %lu, avg hits %lu\n", sw.ms(), total_hits,
-           total_hits / ids_size_batch);
-    auto* p_part_locations = part_locations.data();
-    auto* p_part_begins = part_begins.data();
+    printf("trace time %f ms\n", sw.ms());
+    auto* p_IMs = IMs.data();
     auto* p_ids = ids.data();
 
-    thrust::transform(
-        rmm::exec_policy_nosync(stream), thrust::make_counting_iterator<uint32_t>(0),
-        thrust::make_counting_iterator<uint32_t>(ids_size_batch), ids.data() + ids_begin,
-        [=] __device__(uint32_t i) {
-          const auto& pair = p_ids[ids_begin + i];
-          auto geom1_id = pair.first;
-          auto geom2_id = pair.second;
-          const auto& geom1 = geom_array1[geom1_id];
-          const auto& geom2 = geom_array2[geom2_id];
-          auto begin = p_part_begins[i];
+    thrust::transform(rmm::exec_policy_nosync(stream),
+                      thrust::make_counting_iterator<uint32_t>(0),
+                      thrust::make_counting_iterator<uint32_t>(ids_size_batch),
+                      ids.data() + ids_begin, [=] __device__(uint32_t i) {
+                        const auto& pair = p_ids[ids_begin + i];
+                        auto geom1_id = pair.first;
+                        auto geom2_id = pair.second;
+                        const auto& geom1 = geom_array1[geom1_id];
+                        const auto& geom2 = geom_array2[geom2_id];
 
-          auto IM = relate(
-              geom1, geom2,
-              ArrayView<PointLocation>(&p_part_locations[begin], geom1.num_polygons()));
-          if (detail::EvaluatePredicate(predicate, IM)) {
-            return pair;
-          } else {
-            return invalid_pair;
-          }
-        });
+                        auto IM = p_IMs[i];
+                        if (detail::EvaluatePredicate(predicate, IM)) {
+                          return pair;
+                        } else {
+                          return invalid_pair;
+                        }
+                      });
   }
 
   auto end = thrust::remove_if(
@@ -591,8 +551,12 @@ size_t RelateEngine<POINT_T, INDEX_T>::EstimateBVHSize(
   if (total_segs == 0) {
     return 0;
   }
-  return rt_engine_->EstimateMemoryUsageForAABB(total_segs, bvh_fast_build,
-                                                bvh_fast_compact);
+  // temporary but still needed to consider this part of memory
+  auto aabb_size = total_segs * sizeof(OptixAabb);
+  auto bvh_bytes = rt_engine_->EstimateMemoryUsageForAABB(
+      total_segs, config_.bvh_fast_build, config_.bvh_fast_compact);
+  // BVH size and aabb_poly_ids, aabb_ring_ids
+  return aabb_size + bvh_bytes + 2 * sizeof(INDEX_T) * total_segs;
 }
 
 template <typename POINT_T, typename INDEX_T>
@@ -634,8 +598,12 @@ size_t RelateEngine<POINT_T, INDEX_T>::EstimateBVHSize(
   if (total_segs == 0) {
     return 0;
   }
-  return rt_engine_->EstimateMemoryUsageForAABB(total_segs, bvh_fast_build,
-                                                bvh_fast_compact);
+  // temporary but still needed to consider this part of memory
+  auto aabb_size = total_segs * sizeof(OptixAabb);
+  auto bvh_bytes = rt_engine_->EstimateMemoryUsageForAABB(
+      total_segs, config_.bvh_fast_build, config_.bvh_fast_compact);
+  // BVH size and aabb_multi_poly_ids, aabb_part_ids, aabb_ring_ids
+  return aabb_size + bvh_bytes + 3 * sizeof(INDEX_T) * total_segs;
 }
 
 template <typename POINT_T, typename INDEX_T>
@@ -731,7 +699,7 @@ OptixTraversableHandle RelateEngine<POINT_T, INDEX_T>::BuildBVH(
   });
   assert(rt_engine_ != nullptr);
   return rt_engine_->BuildAccelCustom(stream.value(), ArrayView<OptixAabb>(aabbs), buffer,
-                                      bvh_fast_build, bvh_fast_compact);
+                                      config_.bvh_fast_build, config_.bvh_fast_compact);
 }
 
 template <typename POINT_T, typename INDEX_T>
@@ -881,8 +849,9 @@ OptixTraversableHandle RelateEngine<POINT_T, INDEX_T>::BuildBVH(
 
   assert(rt_engine_ != nullptr);
   sw.start();
-  auto handle = rt_engine_->BuildAccelCustom(stream.value(), ArrayView<OptixAabb>(aabbs),
-                                             buffer, bvh_fast_build, bvh_fast_compact);
+  auto handle =
+      rt_engine_->BuildAccelCustom(stream.value(), ArrayView<OptixAabb>(aabbs), buffer,
+                                   config_.bvh_fast_build, config_.bvh_fast_compact);
   stream.synchronize();
   sw.stop();
   build_time = sw.ms();

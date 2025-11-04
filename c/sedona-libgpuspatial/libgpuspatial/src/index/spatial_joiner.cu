@@ -128,6 +128,11 @@ void SpatialJoiner::FinishBuilding() {
   // TODO: The BVH for build is not necessary if build is point and stream is not point
   handle_ = buildBVH(stream, geometry_grouper_.get_aabbs(), bvh_buffer_);
   relate_engine_ = RelateEngine(build_geometries_.get(), &rt_engine_);
+  RelateEngine<point_t, index_t>::Config re_config;
+  re_config.memory_quota = config_.relate_engine_memory_quota;
+  re_config.bvh_fast_build = config_.prefer_fast_build;
+  re_config.bvh_fast_compact = config_.compact;
+  relate_engine_.set_config(re_config);
 }
 
 void SpatialJoiner::PushStream(Context* base_ctx, const ArrowSchema* schema,

@@ -70,13 +70,11 @@ struct LaunchParamsMultiPolygonPointQuery {
   ArrayView<index_t> multi_polygon_ids;  // sorted
   ArrayView<thrust::pair<index_t, index_t>> ids;
   ArrayView<index_t> seg_begins;
-  ArrayView<index_t> part_begins;
   ArrayView<index_t> uniq_part_begins;
   // each query point has n elements of part_min_y and part_locations, n is # of parts
-  ArrayView<PointLocation> locations;  // location of each part
+  ArrayView<int> IMs;  // intersection matrices
   OptixTraversableHandle handle;
   ArrayView<index_t> aabb_multi_poly_ids, aabb_part_ids, aabb_ring_ids;
-  ArrayView<uint32_t> hit_counters;
 };
 
 }  // namespace detail

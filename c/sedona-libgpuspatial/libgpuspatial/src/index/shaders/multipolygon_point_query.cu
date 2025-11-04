@@ -4,6 +4,7 @@
 
 #include "gpuspatial/geom/line_segment.cuh"
 #include "gpuspatial/index/detail/launch_parameters.h"
+#include "gpuspatial/relate/relate.cuh"
 #include "gpuspatial/utils/floating_point.h"
 #include "shader_config.h"
 
@@ -32,19 +33,8 @@ extern "C" __global__ void __intersection__gpuspatial() {
   auto hit_ring_idx = params.aabb_ring_ids[aabb_id];
 
   // the seg being hit is not from the query polygon
-  // if (hit_multipolygon_idx != multi_polygon_idx || hit_part_idx != part_idx ||
-  //     hit_ring_idx != ring_idx) {
-  //   return;
-  // }
-  if (hit_multipolygon_idx != multi_polygon_idx) {
-    return;
-  }
-
-  if (hit_part_idx != part_idx) {
-    return;
-  }
-  optixSetPayload_7(optixGetPayload_7() + 1);
-  if (hit_ring_idx != ring_idx) {
+  if (hit_multipolygon_idx != multi_polygon_idx || hit_part_idx != part_idx ||
+      hit_ring_idx != ring_idx) {
     return;
   }
 
@@ -83,7 +73,6 @@ extern "C" __global__ void __raygen__gpuspatial() {
     assert(params.multi_polygon_ids[reordered_multi_polygon_idx] == multi_polygon_idx);
 
     const auto& p = params.points[point_idx];
-    uint32_t n_hits = 0;
 
     float3 origin;
     // each polygon takes a z-plane
@@ -91,7 +80,6 @@ extern "C" __global__ void __raygen__gpuspatial() {
     origin.y = p.y();
     // cast ray toward positive x-axis
     float3 dir = {1, 0, 0};
-    auto part_begin = params.part_begins[i];
     const auto& multi_polygon = multi_polygons[multi_polygon_idx];
     const auto& mbr = multi_polygon.get_mbr();
     auto width = mbr.get_max().x() - mbr.get_min().x();
@@ -104,6 +92,14 @@ extern "C" __global__ void __raygen__gpuspatial() {
     uint32_t ring_offset = multi_polygons.get_prefix_sum_parts()[part_offset];
     // first vertex offset of the ring
     uint32_t v_offset = multi_polygons.get_prefix_sum_rings()[ring_offset];
+    int IM;
+    bool matched = false;
+
+    if (multi_polygon.empty()) {
+      IM = IM__INTER_EXTER_0D | IM__EXTER_EXTER_2D;
+    } else {
+      IM = IM__EXTER_EXTER_2D;
+    }
 
     for (uint32_t part = 0; part < multi_polygon.num_polygons(); part++) {
       auto polygon = multi_polygon.get_polygon(part);
@@ -112,18 +108,18 @@ extern "C" __global__ void __raygen__gpuspatial() {
       origin.z = params.uniq_part_begins[reordered_multi_polygon_idx] + part;
       // test exterior
       optixTrace(params.handle, origin, dir, tmin, tmax, 0, OptixVisibilityMask(255),
-                 OPTIX_RAY_FLAG_NONE,             // OPTIX_RAY_FLAG_NONE,
-                 SURFACE_RAY_TYPE,                // SBT offset
-                 RAY_TYPE_COUNT,                  // SBT stride
-                 SURFACE_RAY_TYPE,                // missSBTIndex
-                 i,                               // 0
-                 reordered_multi_polygon_idx,     // 1
-                 v_offset,                        // 2
-                 part,                            // 3
-                 ring,                            // 4
-                 locator.get_crossing_count(),    // 5
-                 locator.get_point_on_segment(),  // 6
-                 n_hits);
+                 OPTIX_RAY_FLAG_NONE,            // OPTIX_RAY_FLAG_NONE,
+                 SURFACE_RAY_TYPE,               // SBT offset
+                 RAY_TYPE_COUNT,                 // SBT stride
+                 SURFACE_RAY_TYPE,               // missSBTIndex
+                 i,                              // 0
+                 reordered_multi_polygon_idx,    // 1
+                 v_offset,                       // 2
+                 part,                           // 3
+                 ring,                           // 4
+                 locator.get_crossing_count(),   // 5
+                 locator.get_point_on_segment()  // 6
+      );
       auto location = locator.location();
       PointLocation final_location = PointLocation::kError;
       if (location == PointLocation::kInside) {
@@ -132,18 +128,18 @@ extern "C" __global__ void __raygen__gpuspatial() {
         for (ring = 1; ring < polygon.num_rings(); ring++) {
           locator.Init();
           optixTrace(params.handle, origin, dir, tmin, tmax, 0, OptixVisibilityMask(255),
-                     OPTIX_RAY_FLAG_NONE,             // OPTIX_RAY_FLAG_NONE,
-                     SURFACE_RAY_TYPE,                // SBT offset
-                     RAY_TYPE_COUNT,                  // SBT stride
-                     SURFACE_RAY_TYPE,                // missSBTIndex
-                     i,                               // 0
-                     reordered_multi_polygon_idx,     // 1
-                     v_offset,                        // 2
-                     part,                            // 3
-                     ring,                            // 4
-                     locator.get_crossing_count(),    // 5
-                     locator.get_point_on_segment(),  // 6
-                     n_hits);
+                     OPTIX_RAY_FLAG_NONE,            // OPTIX_RAY_FLAG_NONE,
+                     SURFACE_RAY_TYPE,               // SBT offset
+                     RAY_TYPE_COUNT,                 // SBT stride
+                     SURFACE_RAY_TYPE,               // missSBTIndex
+                     i,                              // 0
+                     reordered_multi_polygon_idx,    // 1
+                     v_offset,                       // 2
+                     part,                           // 3
+                     ring,                           // 4
+                     locator.get_crossing_count(),   // 5
+                     locator.get_point_on_segment()  // 6
+          );
           location = locator.location();
           if (location == PointLocation::kBoundary) {
             final_location = PointLocation::kBoundary;
@@ -158,7 +154,27 @@ extern "C" __global__ void __raygen__gpuspatial() {
         final_location = location;
       }
       assert(final_location != PointLocation::kError);
-      params.locations[part_begin + part] = final_location;
+
+      IM |= IM__EXTER_INTER_2D | IM__EXTER_BOUND_1D;
+      switch (final_location) {
+        case PointLocation::kInside: {
+          matched = true;
+          IM |= IM__INTER_INTER_0D;
+          break;
+        }
+        case PointLocation::kBoundary: {
+          matched = true;
+          IM |= IM__INTER_BOUND_0D;
+          break;
+        }
+        case PointLocation::kOutside: {
+          break;
+        }
+        default:
+          assert(false);
+      }
+      // IM cannot be changed, so break once matched
+      if (matched) break;
 #ifndef NDEBUG
       auto ref_loc =
           multi_polygon.get_polygon(part).locate_point(params.points[point_idx]);
@@ -172,6 +188,7 @@ extern "C" __global__ void __raygen__gpuspatial() {
       }
 #endif
     }
-    params.hit_counters[i] = n_hits;
+    if (!matched) IM |= IM__INTER_EXTER_0D;
+    params.IMs[i] = IM;
   }
 }

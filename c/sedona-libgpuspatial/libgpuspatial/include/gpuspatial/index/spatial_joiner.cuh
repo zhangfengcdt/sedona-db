@@ -49,13 +49,19 @@ class SpatialJoiner : public StreamingJoiner {
  public:
   struct SpatialJoinerConfig : Config {
     const char* ptx_root;
+    // Prefer fast build the BVH
     bool prefer_fast_build = false;
+    // Compress the BVH to save memory
     bool compact = true;
+    // How many threads are allowed to call PushStream concurrently
     uint32_t concurrency = 1;
     uint32_t n_geoms_per_aabb = 1;
-    float result_buffer_memory_reserve_ratio =
-        0.2;  // reserve a ratio of available memory for result sets
-    size_t stack_size_bytes = 3 * 1024;  // this value determines RELATE_MAX_DEPTH
+    // reserve a ratio of available memory for result sets
+    float result_buffer_memory_reserve_ratio = 0.2;
+    // the memory quota for relate engine compared to the available memory
+    float relate_engine_memory_quota = 0.8;
+    // this value determines RELATE_MAX_DEPTH
+    size_t stack_size_bytes = 3 * 1024;
     SpatialJoinerConfig() : ptx_root(nullptr), prefer_fast_build(false), compact(false) {
       concurrency = std::thread::hardware_concurrency();
     }

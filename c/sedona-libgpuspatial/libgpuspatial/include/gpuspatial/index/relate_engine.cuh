@@ -11,16 +11,22 @@ namespace gpuspatial {
 template <typename POINT_T, typename INDEX_T>
 class RelateEngine {
   using scalar_t = typename POINT_T::scalar_t;
-  static constexpr bool bvh_fast_build = false;
-  static constexpr bool bvh_fast_compact = true;
 
  public:
+  struct Config {
+    bool bvh_fast_build = false;
+    bool bvh_fast_compact = true;
+    float memory_quota = 0.8;
+  };
+
   RelateEngine() = default;
 
   RelateEngine(const DeviceGeometries<POINT_T, INDEX_T>* geoms1);
 
   RelateEngine(const DeviceGeometries<POINT_T, INDEX_T>* geoms1,
                const details::RTEngine* rt_engine);
+
+  void set_config(const Config& config) { config_ = config; }
 
   void Evaluate(const rmm::cuda_stream_view& stream,
                 const DeviceGeometries<POINT_T, INDEX_T>& geoms2, Predicate predicate,
@@ -90,6 +96,7 @@ class RelateEngine {
                          ArrayView<uint32_t> multi_poly_ids);
 
  private:
+  Config config_;
   const DeviceGeometries<POINT_T, INDEX_T>* geoms1_;
   const details::RTEngine* rt_engine_;
 };
