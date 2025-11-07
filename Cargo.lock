@@ -4894,6 +4894,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "sedona-datasource"
+version = "0.2.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "datafusion",
+ "datafusion-catalog",
+ "datafusion-common",
+ "datafusion-execution",
+ "datafusion-physical-expr",
+ "datafusion-physical-plan",
+ "futures",
+ "object_store",
+ "sedona-common",
+ "sedona-expr",
+ "sedona-schema",
+ "tempfile",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "sedona-expr"
 version = "0.2.0"
 dependencies = [
