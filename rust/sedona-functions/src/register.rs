@@ -68,6 +68,7 @@ pub fn default_function_set() -> FunctionSet {
         crate::st_buffer::st_buffer_udf,
         crate::st_centroid::st_centroid_udf,
         crate::st_dimension::st_dimension_udf,
+        crate::st_dump::st_dump_udf,
         crate::st_dwithin::st_dwithin_udf,
         crate::st_envelope::st_envelope_udf,
         crate::st_flipcoordinates::st_flipcoordinates_udf,
@@ -122,6 +123,7 @@ pub fn default_function_set() -> FunctionSet {
         crate::st_collect::st_collect_udf,
         crate::st_envelope_aggr::st_envelope_aggr_udf,
         crate::st_intersection_aggr::st_intersection_aggr_udf,
+        crate::st_polygonize_agg::st_polygonize_agg_udf,
         crate::st_union_aggr::st_union_aggr_udf,
     );
 

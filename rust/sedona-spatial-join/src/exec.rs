@@ -35,12 +35,12 @@ use datafusion_physical_plan::{
 use parking_lot::Mutex;
 
 use crate::{
-    index::{build_index, build_index_sync, SpatialIndex, SpatialJoinBuildMetrics},
-    once_fut::OnceAsync,
+    build_index::{build_index, build_index_sync},
+    index::SpatialIndex,
     spatial_predicate::{KNNPredicate, SpatialPredicate},
     stream::{SpatialJoinProbeMetrics, SpatialJoinStream},
-    utils::{asymmetric_join_output_partitioning, boundedness_from_children},
-    // Re-export from sedona-common
+    utils::join_utils::{asymmetric_join_output_partitioning, boundedness_from_children},
+    utils::once_fut::OnceAsync,
     SedonaOptions,
 };
 
@@ -143,7 +143,7 @@ pub struct SpatialJoinExec {
 }
 
 impl SpatialJoinExec {
-    // Try to create a new [`SpatialJoinExec`]
+    /// Try to create a new [`SpatialJoinExec`]
     pub fn try_new(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -476,69 +476,65 @@ impl ExecutionPlan for SpatialJoinExec {
                     if self.disable_index_sharing {
                         // Create a fresh OnceAsync for this partition only (not shared)
                         eprintln!("[INDEX_TIMING] Partition {} starting index build setup", partition);
-                        let per_partition_once_async = OnceAsync::default();
-                        let once_fut = per_partition_once_async.try_once(|| {
-                            let build_side = build_plan;
-
-                            let num_partitions = build_side.output_partitioning().partition_count();
-                            let mut build_streams = Vec::with_capacity(num_partitions);
-                            let mut build_metrics = Vec::with_capacity(num_partitions);
-                            for k in 0..num_partitions {
-                                let stream = build_side.execute(k, Arc::clone(&context))?;
-                                build_streams.push(stream);
-                                build_metrics.push(SpatialJoinBuildMetrics::new(k, &self.metrics));
-                            }
-
-                            let probe_thread_count =
-                                self.right.output_partitioning().partition_count();
-
-                            // Use build_index_sync to avoid JoinSet::spawn() which requires a runtime
-                            let future = build_index_sync(
-                                build_side.schema(),
-                                build_streams,
-                                self.on.clone(),
-                                sedona_options.spatial_join.clone(),
-                                build_metrics,
-                                Arc::clone(context.memory_pool()),
-                                self.join_type,
-                                probe_thread_count,
-                            );
-                            Ok(future)
-                        })?;
-                        (once_fut, Some(Arc::new(Mutex::new(Some(per_partition_once_async)))))
-                    } else {
-                        eprintln!("[INDEX_TIMING] Partition {} using shared index (will be built once)", partition);
-                        let mut once_async = self.once_async_spatial_index.lock();
-                        let once_fut = once_async
-                            .get_or_insert(OnceAsync::default())
+                        let per_partition_once_async = Arc::new(Mutex::new(Some(OnceAsync::default())));
+                        let mut guard = per_partition_once_async.lock();
+                        let once_fut = guard
+                            .as_mut()
+                            .unwrap()
                             .try_once(|| {
-                                eprintln!("[INDEX_TIMING] First partition building shared index");
                                 let build_side = build_plan;
 
                                 let num_partitions = build_side.output_partitioning().partition_count();
                                 let mut build_streams = Vec::with_capacity(num_partitions);
-                                let mut build_metrics = Vec::with_capacity(num_partitions);
                                 for k in 0..num_partitions {
                                     let stream = build_side.execute(k, Arc::clone(&context))?;
                                     build_streams.push(stream);
-                                    build_metrics.push(SpatialJoinBuildMetrics::new(k, &self.metrics));
                                 }
 
                                 let probe_thread_count =
                                     self.right.output_partitioning().partition_count();
 
                                 // Use build_index_sync to avoid JoinSet::spawn() which requires a runtime
-                                let future = build_index_sync(
+                                Ok(build_index_sync(
+                                    Arc::clone(&context),
                                     build_side.schema(),
                                     build_streams,
                                     self.on.clone(),
-                                    sedona_options.spatial_join.clone(),
-                                    build_metrics,
-                                    Arc::clone(context.memory_pool()),
                                     self.join_type,
                                     probe_thread_count,
-                                );
-                                Ok(future)
+                                    self.metrics.clone(),
+                                ))
+                            })?;
+                        drop(guard);
+                        (once_fut, Some(per_partition_once_async))
+                    } else {
+                        // Use the shared OnceAsync
+                        let mut once_async = self.once_async_spatial_index.lock();
+                        let once_fut = once_async
+                            .get_or_insert(OnceAsync::default())
+                            .try_once(|| {
+                                let build_side = build_plan;
+
+                                let num_partitions = build_side.output_partitioning().partition_count();
+                                let mut build_streams = Vec::with_capacity(num_partitions);
+                                for k in 0..num_partitions {
+                                    let stream = build_side.execute(k, Arc::clone(&context))?;
+                                    build_streams.push(stream);
+                                }
+
+                                let probe_thread_count =
+                                    self.right.output_partitioning().partition_count();
+
+                                // Use build_index_sync to avoid JoinSet::spawn() which requires a runtime
+                                Ok(build_index_sync(
+                                    Arc::clone(&context),
+                                    build_side.schema(),
+                                    build_streams,
+                                    self.on.clone(),
+                                    self.join_type,
+                                    probe_thread_count,
+                                    self.metrics.clone(),
+                                ))
                             })?;
                         (once_fut, None)
                     }
@@ -622,24 +618,21 @@ impl SpatialJoinExec {
 
                     let num_partitions = build_side.output_partitioning().partition_count();
                     let mut build_streams = Vec::with_capacity(num_partitions);
-                    let mut build_metrics = Vec::with_capacity(num_partitions);
                     for k in 0..num_partitions {
                         let stream = build_side.execute(k, Arc::clone(&context))?;
                         build_streams.push(stream);
-                        build_metrics.push(SpatialJoinBuildMetrics::new(k, &self.metrics));
                     }
 
-                    let probe_thread_count = self.right.output_partitioning().partition_count();
+                    let probe_thread_count = probe_plan.output_partitioning().partition_count();
 
                     Ok(build_index(
+                        Arc::clone(&context),
                         build_side.schema(),
                         build_streams,
                         self.on.clone(),
-                        sedona_options.spatial_join.clone(),
-                        build_metrics,
-                        Arc::clone(context.memory_pool()),
                         self.join_type,
                         probe_thread_count,
+                        self.metrics.clone(),
                     ))
                 })?
         };
