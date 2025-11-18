@@ -35,7 +35,7 @@ use datafusion_physical_plan::{
 use parking_lot::Mutex;
 
 use crate::{
-    index::{build_index, SpatialIndex, SpatialJoinBuildMetrics},
+    index::{build_index, build_index_sync, SpatialIndex, SpatialJoinBuildMetrics},
     once_fut::OnceAsync,
     spatial_predicate::{KNNPredicate, SpatialPredicate},
     stream::{SpatialJoinProbeMetrics, SpatialJoinStream},
@@ -475,6 +475,7 @@ impl ExecutionPlan for SpatialJoinExec {
                 let (once_fut_spatial_index, per_partition_once_async) = {
                     if self.disable_index_sharing {
                         // Create a fresh OnceAsync for this partition only (not shared)
+                        eprintln!("[INDEX_TIMING] Partition {} starting index build setup", partition);
                         let per_partition_once_async = OnceAsync::default();
                         let once_fut = per_partition_once_async.try_once(|| {
                             let build_side = build_plan;
@@ -491,7 +492,8 @@ impl ExecutionPlan for SpatialJoinExec {
                             let probe_thread_count =
                                 self.right.output_partitioning().partition_count();
 
-                            let future = build_index(
+                            // Use build_index_sync to avoid JoinSet::spawn() which requires a runtime
+                            let future = build_index_sync(
                                 build_side.schema(),
                                 build_streams,
                                 self.on.clone(),
@@ -505,10 +507,12 @@ impl ExecutionPlan for SpatialJoinExec {
                         })?;
                         (once_fut, Some(Arc::new(Mutex::new(Some(per_partition_once_async)))))
                     } else {
+                        eprintln!("[INDEX_TIMING] Partition {} using shared index (will be built once)", partition);
                         let mut once_async = self.once_async_spatial_index.lock();
                         let once_fut = once_async
                             .get_or_insert(OnceAsync::default())
                             .try_once(|| {
+                                eprintln!("[INDEX_TIMING] First partition building shared index");
                                 let build_side = build_plan;
 
                                 let num_partitions = build_side.output_partitioning().partition_count();
@@ -523,7 +527,8 @@ impl ExecutionPlan for SpatialJoinExec {
                                 let probe_thread_count =
                                     self.right.output_partitioning().partition_count();
 
-                                let future = build_index(
+                                // Use build_index_sync to avoid JoinSet::spawn() which requires a runtime
+                                let future = build_index_sync(
                                     build_side.schema(),
                                     build_streams,
                                     self.on.clone(),

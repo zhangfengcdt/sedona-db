@@ -804,10 +804,13 @@ pub async fn build_index_sync(
     let evaluator = create_operand_evaluator(&spatial_predicate, options.clone());
 
     // Collect all partitions sequentially (no task spawning)
+    let start_time = std::time::Instant::now();
+    eprintln!("[INDEX_TIMING] Starting sequential partition collection");
     let mut all_batches = Vec::new();
     let collect_statistics = matches!(options.execution_mode, ExecutionMode::Speculative(_));
 
     for (partition, (stream, part_metrics)) in build_streams.into_iter().zip(metrics_vec).enumerate() {
+        let partition_start = std::time::Instant::now();
         let consumer = MemoryConsumer::new(format!("SpatialJoinFetchBuild[{partition}]"));
         let reservation = consumer.register(&memory_pool);
 
@@ -819,10 +822,13 @@ pub async fn build_index_sync(
             reservation,
         ).await?;
 
+        eprintln!("[INDEX_TIMING] Partition {} collection took {:?}", partition, partition_start.elapsed());
         all_batches.push(partition_result);
     }
+    eprintln!("[INDEX_TIMING] All partitions collected in {:?}", start_time.elapsed());
 
     // Build the index from collected batches - same pattern as build_index
+    let index_build_start = std::time::Instant::now();
     let mut builder = SpatialIndexBuilder::new(
         spatial_predicate,
         options,
@@ -840,9 +846,12 @@ pub async fn build_index_sync(
         builder.with_stats(build_partition.stats);
         // build_partition.reservation will be dropped here.
     }
+    eprintln!("[INDEX_TIMING] Index structure building took {:?}", index_build_start.elapsed());
 
     // Finish building the index
-    builder.finish(build_schema)
+    let result = builder.finish(build_schema);
+    eprintln!("[INDEX_TIMING] Total build_index_sync time: {:?}", start_time.elapsed());
+    result
 }
 
 #[allow(clippy::too_many_arguments)]
