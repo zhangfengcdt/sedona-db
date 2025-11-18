@@ -231,30 +231,23 @@ impl SpatialJoinStream {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
         loop {
-            eprintln!("[STREAM_DEBUG] poll_next_impl: state={:?}", self.state);
             return match &mut self.state {
                 SpatialJoinStreamState::WaitBuildIndex => {
-                    eprintln!("[STREAM_DEBUG] In WaitBuildIndex state");
                     handle_state!(ready!(self.wait_build_index(cx)))
                 }
                 SpatialJoinStreamState::FetchProbeBatch => {
-                    eprintln!("[STREAM_DEBUG] In FetchProbeBatch state");
                     handle_state!(ready!(self.fetch_probe_batch(cx)))
                 }
                 SpatialJoinStreamState::ProcessProbeBatch(_) => {
-                    eprintln!("[STREAM_DEBUG] In ProcessProbeBatch state");
                     handle_state!(ready!(self.process_probe_batch()))
                 }
                 SpatialJoinStreamState::ExhaustedProbeSide => {
-                    eprintln!("[STREAM_DEBUG] In ExhaustedProbeSide state");
                     handle_state!(ready!(self.setup_unmatched_build_batch_processing()))
                 }
                 SpatialJoinStreamState::ProcessUnmatchedBuildBatch(_) => {
-                    eprintln!("[STREAM_DEBUG] In ProcessUnmatchedBuildBatch state");
                     handle_state!(ready!(self.process_unmatched_build_batch()))
                 }
                 SpatialJoinStreamState::Completed => {
-                    eprintln!("[STREAM_DEBUG] In Completed state");
                     Poll::Ready(None)
                 },
             };
@@ -265,11 +258,8 @@ impl SpatialJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
-        eprintln!("[STREAM_DEBUG] wait_build_index: Calling once_fut_spatial_index.get_shared");
         let poll_result = self.once_fut_spatial_index.get_shared(cx);
-        eprintln!("[STREAM_DEBUG] wait_build_index: get_shared returned: is_ready={}", poll_result.is_ready());
         let index = ready!(poll_result)?;
-        eprintln!("[STREAM_DEBUG] wait_build_index: Got spatial index, transitioning to FetchProbeBatch");
         self.spatial_index = Some(index);
         self.state = SpatialJoinStreamState::FetchProbeBatch;
         Poll::Ready(Ok(StatefulStreamResult::Continue))
@@ -279,35 +269,27 @@ impl SpatialJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
-        eprintln!("[STREAM_DEBUG] fetch_probe_batch: calling probe_stream.poll_next_unpin");
         let result = self.probe_stream.poll_next_unpin(cx);
-        eprintln!("[STREAM_DEBUG] fetch_probe_batch: poll_next_unpin returned");
         match result {
             Poll::Ready(Some(Ok(batch))) => {
-                eprintln!("[STREAM_DEBUG] fetch_probe_batch: Got batch with {} rows", batch.num_rows());
                 match self.create_spatial_join_iterator(batch) {
                     Ok(iterator) => {
-                        eprintln!("[STREAM_DEBUG] fetch_probe_batch: Created iterator, transitioning to ProcessProbeBatch");
                         self.state = SpatialJoinStreamState::ProcessProbeBatch(iterator);
                         Poll::Ready(Ok(StatefulStreamResult::Continue))
                     }
                     Err(e) => {
-                        eprintln!("[STREAM_DEBUG] fetch_probe_batch: Error creating iterator: {:?}", e);
                         Poll::Ready(Err(e))
                     }
                 }
             },
             Poll::Ready(Some(Err(e))) => {
-                eprintln!("[STREAM_DEBUG] fetch_probe_batch: Error from probe stream: {:?}", e);
                 Poll::Ready(Err(e))
             },
             Poll::Ready(None) => {
-                eprintln!("[STREAM_DEBUG] fetch_probe_batch: Probe stream exhausted");
                 self.state = SpatialJoinStreamState::ExhaustedProbeSide;
                 Poll::Ready(Ok(StatefulStreamResult::Continue))
             }
             Poll::Pending => {
-                eprintln!("[STREAM_DEBUG] fetch_probe_batch: Poll::Pending");
                 Poll::Pending
             },
         }
