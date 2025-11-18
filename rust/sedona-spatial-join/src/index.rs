@@ -66,7 +66,7 @@ const REFINER_RESERVATION_PREALLOC_SIZE: usize = 10 * 1024 * 1024; // 10MB
 
 /// Metrics for the build phase of the spatial join.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct SpatialJoinBuildMetrics {
+pub struct SpatialJoinBuildMetrics {
     /// Total time for collecting build-side of join
     pub(crate) build_time: metrics::Time,
     /// Number of batches consumed by build-side
@@ -297,7 +297,7 @@ impl SpatialIndexBuilder {
     }
 }
 
-pub(crate) struct SpatialIndex {
+pub struct SpatialIndex {
     schema: SchemaRef,
 
     /// The spatial predicate evaluator for the spatial predicate.
@@ -771,8 +771,82 @@ pub struct IndexQueryResult<'a, 'b> {
     pub position: (i32, i32),
 }
 
+/// Synchronous version of build_index that doesn't spawn tasks
+/// Used in execution contexts without async runtime support (e.g., Spark/Comet JNI)
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn build_index(
+pub async fn build_index_sync(
+    mut build_schema: SchemaRef,
+    build_streams: Vec<SendableRecordBatchStream>,
+    spatial_predicate: SpatialPredicate,
+    options: SpatialJoinOptions,
+    metrics_vec: Vec<SpatialJoinBuildMetrics>,
+    memory_pool: Arc<dyn MemoryPool>,
+    join_type: JoinType,
+    probe_threads_count: usize,
+) -> Result<SpatialIndex> {
+    // Handle empty streams case
+    if build_streams.is_empty() {
+        let consumer = MemoryConsumer::new("SpatialJoinIndex");
+        let reservation = consumer.register(&memory_pool);
+        return Ok(SpatialIndex::empty(
+            spatial_predicate,
+            build_schema,
+            options,
+            AtomicUsize::new(probe_threads_count),
+            reservation,
+            memory_pool,
+        ));
+    }
+
+    // Update schema from the first stream
+    build_schema = build_streams.first().unwrap().schema();
+    let metrics = metrics_vec.first().unwrap().clone();
+    let evaluator = create_operand_evaluator(&spatial_predicate, options.clone());
+
+    // Collect all partitions sequentially (no task spawning)
+    let mut all_batches = Vec::new();
+    let collect_statistics = matches!(options.execution_mode, ExecutionMode::Speculative(_));
+
+    for (partition, (stream, part_metrics)) in build_streams.into_iter().zip(metrics_vec).enumerate() {
+        let consumer = MemoryConsumer::new(format!("SpatialJoinFetchBuild[{partition}]"));
+        let reservation = consumer.register(&memory_pool);
+
+        let partition_result = collect_build_partition_sync(
+            stream,
+            Arc::clone(&evaluator),
+            collect_statistics,
+            part_metrics,
+            reservation,
+        ).await?;
+
+        all_batches.push(partition_result);
+    }
+
+    // Build the index from collected batches - same pattern as build_index
+    let mut builder = SpatialIndexBuilder::new(
+        spatial_predicate,
+        options,
+        join_type,
+        probe_threads_count,
+        memory_pool.clone(),
+        metrics,
+    )?;
+
+    for build_partition in all_batches {
+        // Add each indexed batch to the builder
+        for indexed_batch in build_partition.batches {
+            builder.add_batch(indexed_batch);
+        }
+        builder.with_stats(build_partition.stats);
+        // build_partition.reservation will be dropped here.
+    }
+
+    // Finish building the index
+    builder.finish(build_schema)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn build_index(
     mut build_schema: SchemaRef,
     build_streams: Vec<SendableRecordBatchStream>,
     spatial_predicate: SpatialPredicate,
@@ -809,14 +883,15 @@ pub(crate) async fn build_index(
         let consumer = MemoryConsumer::new(format!("SpatialJoinFetchBuild[{partition}]"));
         let reservation = consumer.register(&memory_pool);
         join_set.spawn(async move {
-            collect_build_partition(
+            let result = collect_build_partition(
                 stream,
                 per_task_evaluator.as_ref(),
                 &metrics,
                 reservation,
                 collect_statistics,
             )
-            .await
+            .await;
+            result
         });
     }
 
@@ -856,6 +931,52 @@ struct BuildPartition {
     /// Cleared on `BuildPartition` drop
     #[allow(dead_code)]
     reservation: MemoryReservation,
+}
+
+/// Synchronous version that doesn't require spawning tasks
+/// Used when collecting partitions sequentially without async coordination
+async fn collect_build_partition_sync(
+    mut stream: SendableRecordBatchStream,
+    evaluator: Arc<dyn OperandEvaluator>,
+    collect_statistics: bool,
+    metrics: SpatialJoinBuildMetrics,
+    mut reservation: MemoryReservation,
+) -> Result<BuildPartition> {
+    use futures::StreamExt;
+
+    let mut batches = Vec::new();
+    let mut analyzer = AnalyzeAccumulator::new(WKB_GEOMETRY, WKB_GEOMETRY);
+
+    while let Some(batch) = stream.next().await {
+        let build_timer = metrics.build_time.timer();
+        let batch = batch?;
+
+        metrics.build_input_rows.add(batch.num_rows());
+        metrics.build_input_batches.add(1);
+
+        let geom_array = evaluator.evaluate_build(&batch)?;
+        let indexed_batch = IndexedBatch { batch, geom_array };
+
+        // Update statistics for each geometry in the batch
+        if collect_statistics {
+            for wkb in indexed_batch.geom_array.wkbs().iter().flatten() {
+                analyzer.update_statistics(wkb, wkb.buf().len())?;
+            }
+        }
+
+        let in_mem_size = indexed_batch.in_mem_size();
+        batches.push(indexed_batch);
+
+        reservation.grow(in_mem_size);
+        metrics.build_mem_used.add(in_mem_size);
+        build_timer.done();
+    }
+
+    Ok(BuildPartition {
+        batches,
+        stats: analyzer.finish(),
+        reservation,
+    })
 }
 
 async fn collect_build_partition(

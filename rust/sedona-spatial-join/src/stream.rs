@@ -118,6 +118,51 @@ impl SpatialJoinStream {
             spatial_predicate: on.clone(),
         }
     }
+
+    /// Create a new SpatialJoinStream with a pre-built spatial index.
+    /// Used when disable_index_sharing=true - index is already built synchronously.
+    #[allow(clippy::too_many_arguments)]
+    #[allow(dead_code)]
+    pub(crate) fn new_with_prebuilt_index(
+        schema: Arc<Schema>,
+        on: &SpatialPredicate,
+        filter: Option<JoinFilter>,
+        join_type: JoinType,
+        probe_stream: SendableRecordBatchStream,
+        column_indices: Vec<ColumnIndex>,
+        probe_side_ordered: bool,
+        join_metrics: SpatialJoinProbeMetrics,
+        options: SpatialJoinOptions,
+        target_output_batch_size: usize,
+        spatial_index: Arc<SpatialIndex>,
+    ) -> Self {
+        use futures::future::pending;
+
+        let evaluator = create_operand_evaluator(on, options.clone());
+        // Create a dummy OnceFut that will never be accessed (since index is pre-built)
+        let dummy_once_fut = OnceFut::new(pending::<Result<SpatialIndex, datafusion_common::DataFusionError>>());
+
+        Self {
+            schema,
+            filter,
+            join_type,
+            probe_stream,
+            column_indices,
+            probe_side_ordered,
+            join_metrics,
+            // Start in FetchProbeBatch state since index is already built
+            state: SpatialJoinStreamState::FetchProbeBatch,
+            options,
+            target_output_batch_size,
+            // Dummy value - won't be used since index is pre-built
+            once_fut_spatial_index: dummy_once_fut,
+            once_async_spatial_index: Arc::new(parking_lot::Mutex::new(None)),
+            // Index is already available
+            spatial_index: Some(spatial_index),
+            evaluator,
+            spatial_predicate: on.clone(),
+        }
+    }
 }
 
 /// Metrics for the probe phase of the spatial join.
@@ -186,23 +231,32 @@ impl SpatialJoinStream {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
         loop {
+            eprintln!("[STREAM_DEBUG] poll_next_impl: state={:?}", self.state);
             return match &mut self.state {
                 SpatialJoinStreamState::WaitBuildIndex => {
+                    eprintln!("[STREAM_DEBUG] In WaitBuildIndex state");
                     handle_state!(ready!(self.wait_build_index(cx)))
                 }
                 SpatialJoinStreamState::FetchProbeBatch => {
+                    eprintln!("[STREAM_DEBUG] In FetchProbeBatch state");
                     handle_state!(ready!(self.fetch_probe_batch(cx)))
                 }
                 SpatialJoinStreamState::ProcessProbeBatch(_) => {
+                    eprintln!("[STREAM_DEBUG] In ProcessProbeBatch state");
                     handle_state!(ready!(self.process_probe_batch()))
                 }
                 SpatialJoinStreamState::ExhaustedProbeSide => {
+                    eprintln!("[STREAM_DEBUG] In ExhaustedProbeSide state");
                     handle_state!(ready!(self.setup_unmatched_build_batch_processing()))
                 }
                 SpatialJoinStreamState::ProcessUnmatchedBuildBatch(_) => {
+                    eprintln!("[STREAM_DEBUG] In ProcessUnmatchedBuildBatch state");
                     handle_state!(ready!(self.process_unmatched_build_batch()))
                 }
-                SpatialJoinStreamState::Completed => Poll::Ready(None),
+                SpatialJoinStreamState::Completed => {
+                    eprintln!("[STREAM_DEBUG] In Completed state");
+                    Poll::Ready(None)
+                },
             };
         }
     }
@@ -211,7 +265,11 @@ impl SpatialJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
-        let index = ready!(self.once_fut_spatial_index.get_shared(cx))?;
+        eprintln!("[STREAM_DEBUG] wait_build_index: Calling once_fut_spatial_index.get_shared");
+        let poll_result = self.once_fut_spatial_index.get_shared(cx);
+        eprintln!("[STREAM_DEBUG] wait_build_index: get_shared returned: is_ready={}", poll_result.is_ready());
+        let index = ready!(poll_result)?;
+        eprintln!("[STREAM_DEBUG] wait_build_index: Got spatial index, transitioning to FetchProbeBatch");
         self.spatial_index = Some(index);
         self.state = SpatialJoinStreamState::FetchProbeBatch;
         Poll::Ready(Ok(StatefulStreamResult::Continue))
@@ -221,21 +279,37 @@ impl SpatialJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
+        eprintln!("[STREAM_DEBUG] fetch_probe_batch: calling probe_stream.poll_next_unpin");
         let result = self.probe_stream.poll_next_unpin(cx);
+        eprintln!("[STREAM_DEBUG] fetch_probe_batch: poll_next_unpin returned");
         match result {
-            Poll::Ready(Some(Ok(batch))) => match self.create_spatial_join_iterator(batch) {
-                Ok(iterator) => {
-                    self.state = SpatialJoinStreamState::ProcessProbeBatch(iterator);
-                    Poll::Ready(Ok(StatefulStreamResult::Continue))
+            Poll::Ready(Some(Ok(batch))) => {
+                eprintln!("[STREAM_DEBUG] fetch_probe_batch: Got batch with {} rows", batch.num_rows());
+                match self.create_spatial_join_iterator(batch) {
+                    Ok(iterator) => {
+                        eprintln!("[STREAM_DEBUG] fetch_probe_batch: Created iterator, transitioning to ProcessProbeBatch");
+                        self.state = SpatialJoinStreamState::ProcessProbeBatch(iterator);
+                        Poll::Ready(Ok(StatefulStreamResult::Continue))
+                    }
+                    Err(e) => {
+                        eprintln!("[STREAM_DEBUG] fetch_probe_batch: Error creating iterator: {:?}", e);
+                        Poll::Ready(Err(e))
+                    }
                 }
-                Err(e) => Poll::Ready(Err(e)),
             },
-            Poll::Ready(Some(Err(e))) => Poll::Ready(Err(e)),
+            Poll::Ready(Some(Err(e))) => {
+                eprintln!("[STREAM_DEBUG] fetch_probe_batch: Error from probe stream: {:?}", e);
+                Poll::Ready(Err(e))
+            },
             Poll::Ready(None) => {
+                eprintln!("[STREAM_DEBUG] fetch_probe_batch: Probe stream exhausted");
                 self.state = SpatialJoinStreamState::ExhaustedProbeSide;
                 Poll::Ready(Ok(StatefulStreamResult::Continue))
             }
-            Poll::Pending => Poll::Pending,
+            Poll::Pending => {
+                eprintln!("[STREAM_DEBUG] fetch_probe_batch: Poll::Pending");
+                Poll::Pending
+            },
         }
     }
 
