@@ -117,7 +117,6 @@ impl SpatialJoinStream {
             spatial_predicate: on.clone(),
         }
     }
-
 }
 
 /// Metrics for the probe phase of the spatial join.
@@ -202,9 +201,7 @@ impl SpatialJoinStream {
                 SpatialJoinStreamState::ProcessUnmatchedBuildBatch(_) => {
                     handle_state!(ready!(self.process_unmatched_build_batch()))
                 }
-                SpatialJoinStreamState::Completed => {
-                    Poll::Ready(None)
-                },
+                SpatialJoinStreamState::Completed => Poll::Ready(None),
             };
         }
     }
@@ -213,8 +210,7 @@ impl SpatialJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
-        let poll_result = self.once_fut_spatial_index.get_shared(cx);
-        let index = ready!(poll_result)?;
+        let index = ready!(self.once_fut_spatial_index.get_shared(cx))?;
         self.spatial_index = Some(index);
         self.state = SpatialJoinStreamState::FetchProbeBatch;
         Poll::Ready(Ok(StatefulStreamResult::Continue))
@@ -226,27 +222,19 @@ impl SpatialJoinStream {
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         let result = self.probe_stream.poll_next_unpin(cx);
         match result {
-            Poll::Ready(Some(Ok(batch))) => {
-                match self.create_spatial_join_iterator(batch) {
-                    Ok(iterator) => {
-                        self.state = SpatialJoinStreamState::ProcessProbeBatch(iterator);
-                        Poll::Ready(Ok(StatefulStreamResult::Continue))
-                    }
-                    Err(e) => {
-                        Poll::Ready(Err(e))
-                    }
+            Poll::Ready(Some(Ok(batch))) => match self.create_spatial_join_iterator(batch) {
+                Ok(iterator) => {
+                    self.state = SpatialJoinStreamState::ProcessProbeBatch(iterator);
+                    Poll::Ready(Ok(StatefulStreamResult::Continue))
                 }
+                Err(e) => Poll::Ready(Err(e)),
             },
-            Poll::Ready(Some(Err(e))) => {
-                Poll::Ready(Err(e))
-            },
+            Poll::Ready(Some(Err(e))) => Poll::Ready(Err(e)),
             Poll::Ready(None) => {
                 self.state = SpatialJoinStreamState::ExhaustedProbeSide;
                 Poll::Ready(Ok(StatefulStreamResult::Continue))
             }
-            Poll::Pending => {
-                Poll::Pending
-            },
+            Poll::Pending => Poll::Pending,
         }
     }
 
