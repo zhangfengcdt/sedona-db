@@ -475,7 +475,6 @@ impl ExecutionPlan for SpatialJoinExec {
                 let (once_fut_spatial_index, per_partition_once_async) = {
                     if self.disable_index_sharing {
                         // Create a fresh OnceAsync for this partition only (not shared)
-                        eprintln!("[INDEX_TIMING] Partition {} starting index build setup", partition);
                         let per_partition_once_async = Arc::new(Mutex::new(Some(OnceAsync::default())));
                         let mut guard = per_partition_once_async.lock();
                         let once_fut = guard

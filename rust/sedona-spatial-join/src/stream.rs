@@ -257,11 +257,8 @@ impl SpatialJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
-        eprintln!("[INDEX_TIMING] Stream waiting for index to be built...");
-        let wait_start = std::time::Instant::now();
         let poll_result = self.once_fut_spatial_index.get_shared(cx);
         let index = ready!(poll_result)?;
-        eprintln!("[INDEX_TIMING] Index ready after {:?}", wait_start.elapsed());
         self.spatial_index = Some(index);
         self.state = SpatialJoinStreamState::FetchProbeBatch;
         Poll::Ready(Ok(StatefulStreamResult::Continue))
@@ -274,7 +271,6 @@ impl SpatialJoinStream {
         let result = self.probe_stream.poll_next_unpin(cx);
         match result {
             Poll::Ready(Some(Ok(batch))) => {
-                eprintln!("[INDEX_TIMING] Fetched probe batch with {} rows", batch.num_rows());
                 match self.create_spatial_join_iterator(batch) {
                     Ok(iterator) => {
                         self.state = SpatialJoinStreamState::ProcessProbeBatch(iterator);
@@ -289,7 +285,6 @@ impl SpatialJoinStream {
                 Poll::Ready(Err(e))
             },
             Poll::Ready(None) => {
-                eprintln!("[INDEX_TIMING] All probe batches exhausted");
                 self.state = SpatialJoinStreamState::ExhaustedProbeSide;
                 Poll::Ready(Ok(StatefulStreamResult::Continue))
             }

@@ -67,30 +67,23 @@ pub async fn build_index_sync(
     }
 
     // Collect partitions sequentially instead of using collect_all which spawns tasks
-    let start_time = std::time::Instant::now();
-    eprintln!("[INDEX_TIMING] Starting sequential partition collection");
     let mut build_partitions = Vec::with_capacity(num_partitions);
 
-    for (partition_idx, ((stream, reservation), metrics)) in build_streams
+    for ((stream, reservation), metrics) in build_streams
         .into_iter()
         .zip(reservations)
         .zip(&collect_metrics_vec)
-        .enumerate()
     {
-        let partition_start = std::time::Instant::now();
         let partition = collector
             .collect(stream, reservation, metrics)
             .await?;
-        eprintln!("[INDEX_TIMING] Partition {} collection took {:?}", partition_idx, partition_start.elapsed());
         build_partitions.push(partition);
     }
-    eprintln!("[INDEX_TIMING] All partitions collected in {:?}", start_time.elapsed());
 
     let contains_external_stream = build_partitions
         .iter()
         .any(|partition| partition.build_side_batch_stream.is_external());
     if !contains_external_stream {
-        let index_build_start = std::time::Instant::now();
         let mut index_builder = SpatialIndexBuilder::new(
             build_schema,
             spatial_predicate,
@@ -101,10 +94,7 @@ pub async fn build_index_sync(
             SpatialJoinBuildMetrics::new(0, &metrics),
         )?;
         index_builder.add_partitions(build_partitions).await?;
-        eprintln!("[INDEX_TIMING] Index structure building took {:?}", index_build_start.elapsed());
-        let result = index_builder.finish();
-        eprintln!("[INDEX_TIMING] Total build_index_sync time: {:?}", start_time.elapsed());
-        result
+        index_builder.finish()
     } else {
         Err(DataFusionError::ResourcesExhausted("Memory limit exceeded while collecting indexed data. External spatial index builder is not yet implemented.".to_string()))
     }
