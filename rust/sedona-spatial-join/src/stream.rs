@@ -118,50 +118,6 @@ impl SpatialJoinStream {
         }
     }
 
-    /// Create a new SpatialJoinStream with a pre-built spatial index.
-    /// Used when disable_index_sharing=true - index is already built synchronously.
-    #[allow(clippy::too_many_arguments)]
-    #[allow(dead_code)]
-    pub(crate) fn new_with_prebuilt_index(
-        schema: Arc<Schema>,
-        on: &SpatialPredicate,
-        filter: Option<JoinFilter>,
-        join_type: JoinType,
-        probe_stream: SendableRecordBatchStream,
-        column_indices: Vec<ColumnIndex>,
-        probe_side_ordered: bool,
-        join_metrics: SpatialJoinProbeMetrics,
-        options: SpatialJoinOptions,
-        target_output_batch_size: usize,
-        spatial_index: Arc<SpatialIndex>,
-    ) -> Self {
-        use futures::future::pending;
-
-        let evaluator = create_operand_evaluator(on, options.clone());
-        // Create a dummy OnceFut that will never be accessed (since index is pre-built)
-        let dummy_once_fut = OnceFut::new(pending::<Result<SpatialIndex, datafusion_common::DataFusionError>>());
-
-        Self {
-            schema,
-            filter,
-            join_type,
-            probe_stream,
-            column_indices,
-            probe_side_ordered,
-            join_metrics,
-            // Start in FetchProbeBatch state since index is already built
-            state: SpatialJoinStreamState::FetchProbeBatch,
-            options,
-            target_output_batch_size,
-            // Dummy value - won't be used since index is pre-built
-            once_fut_spatial_index: dummy_once_fut,
-            once_async_spatial_index: Arc::new(parking_lot::Mutex::new(None)),
-            // Index is already available
-            spatial_index: Some(spatial_index),
-            evaluator,
-            spatial_predicate: on.clone(),
-        }
-    }
 }
 
 /// Metrics for the probe phase of the spatial join.
