@@ -137,9 +137,6 @@ pub struct SpatialJoinExec {
     /// Indicates if this SpatialJoin was converted from a HashJoin
     /// When true, we preserve HashJoin's equivalence properties and partitioning
     converted_from_hash_join: bool,
-    /// When true, disables index sharing across partitions. Each partition builds its own index.
-    /// Useful for broadcast joins or execution contexts without async runtime support (e.g., JNI).
-    disable_index_sharing: bool,
 }
 
 impl SpatialJoinExec {
@@ -164,29 +161,6 @@ impl SpatialJoinExec {
         join_type: &JoinType,
         projection: Option<Vec<usize>>,
         converted_from_hash_join: bool,
-    ) -> Result<Self> {
-        Self::try_new_with_all_options(
-            left,
-            right,
-            on,
-            filter,
-            join_type,
-            projection,
-            converted_from_hash_join,
-            false, // disable_index_sharing defaults to false
-        )
-    }
-
-    /// Create a new SpatialJoinExec with all options including index sharing control
-    pub fn try_new_with_all_options(
-        left: Arc<dyn ExecutionPlan>,
-        right: Arc<dyn ExecutionPlan>,
-        on: SpatialPredicate,
-        filter: Option<JoinFilter>,
-        join_type: &JoinType,
-        projection: Option<Vec<usize>>,
-        converted_from_hash_join: bool,
-        disable_index_sharing: bool,
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
@@ -217,7 +191,6 @@ impl SpatialJoinExec {
             cache,
             once_async_spatial_index: Arc::new(Mutex::new(None)),
             converted_from_hash_join,
-            disable_index_sharing,
         })
     }
 
@@ -438,7 +411,6 @@ impl ExecutionPlan for SpatialJoinExec {
             cache: self.cache.clone(),
             once_async_spatial_index: Arc::new(Mutex::new(None)),
             converted_from_hash_join: self.converted_from_hash_join,
-            disable_index_sharing: self.disable_index_sharing,
         }))
     }
 
@@ -469,75 +441,34 @@ impl ExecutionPlan for SpatialJoinExec {
                 // Regular join semantics: left is build, right is probe
                 let (build_plan, probe_plan) = (&self.left, &self.right);
 
-                // Build the spatial index
-                // When disable_index_sharing=true, create a per-partition OnceAsync (no sharing)
-                // When disable_index_sharing=false, use the shared OnceAsync
-                let (once_fut_spatial_index, per_partition_once_async) = {
-                    if self.disable_index_sharing {
-                        // Create a fresh OnceAsync for this partition only (not shared)
-                        let per_partition_once_async = Arc::new(Mutex::new(Some(OnceAsync::default())));
-                        let mut guard = per_partition_once_async.lock();
-                        let once_fut = guard
-                            .as_mut()
-                            .unwrap()
-                            .try_once(|| {
-                                let build_side = build_plan;
+                // Build the spatial index using shared OnceAsync
+                let mut once_async = self.once_async_spatial_index.lock();
+                let once_fut_spatial_index = once_async
+                    .get_or_insert(OnceAsync::default())
+                    .try_once(|| {
+                        let build_side = build_plan;
 
-                                let num_partitions = build_side.output_partitioning().partition_count();
-                                let mut build_streams = Vec::with_capacity(num_partitions);
-                                for k in 0..num_partitions {
-                                    let stream = build_side.execute(k, Arc::clone(&context))?;
-                                    build_streams.push(stream);
-                                }
+                        let num_partitions = build_side.output_partitioning().partition_count();
+                        let mut build_streams = Vec::with_capacity(num_partitions);
+                        for k in 0..num_partitions {
+                            let stream = build_side.execute(k, Arc::clone(&context))?;
+                            build_streams.push(stream);
+                        }
 
-                                let probe_thread_count =
-                                    self.right.output_partitioning().partition_count();
+                        let probe_thread_count =
+                            self.right.output_partitioning().partition_count();
 
-                                // Use build_index_sync to avoid JoinSet::spawn() which requires a runtime
-                                Ok(build_index_sync(
-                                    Arc::clone(&context),
-                                    build_side.schema(),
-                                    build_streams,
-                                    self.on.clone(),
-                                    self.join_type,
-                                    probe_thread_count,
-                                    self.metrics.clone(),
-                                ))
-                            })?;
-                        drop(guard);
-                        (once_fut, Some(per_partition_once_async))
-                    } else {
-                        // Use the shared OnceAsync
-                        let mut once_async = self.once_async_spatial_index.lock();
-                        let once_fut = once_async
-                            .get_or_insert(OnceAsync::default())
-                            .try_once(|| {
-                                let build_side = build_plan;
-
-                                let num_partitions = build_side.output_partitioning().partition_count();
-                                let mut build_streams = Vec::with_capacity(num_partitions);
-                                for k in 0..num_partitions {
-                                    let stream = build_side.execute(k, Arc::clone(&context))?;
-                                    build_streams.push(stream);
-                                }
-
-                                let probe_thread_count =
-                                    self.right.output_partitioning().partition_count();
-
-                                // Use build_index_sync to avoid JoinSet::spawn() which requires a runtime
-                                Ok(build_index_sync(
-                                    Arc::clone(&context),
-                                    build_side.schema(),
-                                    build_streams,
-                                    self.on.clone(),
-                                    self.join_type,
-                                    probe_thread_count,
-                                    self.metrics.clone(),
-                                ))
-                            })?;
-                        (once_fut, None)
-                    }
-                };
+                        // Use build_index_sync to avoid JoinSet::spawn() which requires a runtime
+                        Ok(build_index_sync(
+                            Arc::clone(&context),
+                            build_side.schema(),
+                            build_streams,
+                            self.on.clone(),
+                            self.join_type,
+                            probe_thread_count,
+                            self.metrics.clone(),
+                        ))
+                    })?;
 
                 // Column indices for regular joins - no swapping needed
                 let column_indices_after_projection = match &self.projection {
@@ -555,10 +486,6 @@ impl ExecutionPlan for SpatialJoinExec {
                 let probe_side_ordered =
                     self.maintains_input_order()[1] && self.right.output_ordering().is_some();
 
-                // Pass per-partition OnceAsync if disable_index_sharing, otherwise use shared
-                let once_async_to_pass = per_partition_once_async
-                    .unwrap_or_else(|| Arc::clone(&self.once_async_spatial_index));
-
                 Ok(Box::pin(SpatialJoinStream::new(
                     self.schema(),
                     &self.on,
@@ -571,7 +498,7 @@ impl ExecutionPlan for SpatialJoinExec {
                     sedona_options.spatial_join,
                     target_output_batch_size,
                     once_fut_spatial_index,
-                    once_async_to_pass,
+                    Arc::clone(&self.once_async_spatial_index),
                 )))
             }
         }
