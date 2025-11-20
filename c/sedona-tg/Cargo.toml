@@ -34,7 +34,7 @@ criterion = { workspace = true }
 rstest = { workspace = true }
 sedona = { path = "../../rust/sedona" }
 sedona-testing = { path = "../../rust/sedona-testing", features = ["criterion"] }
-wkb = { workspace = true }
+wkb = { path = "../../vendor/wkb" }
 geo = { workspace = true }
 
 [dependencies]

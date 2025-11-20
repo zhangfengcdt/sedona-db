@@ -39,6 +39,8 @@ members = [
     "rust/sedona-testing",
     "rust/sedona",
     "sedona-cli",
+    "vendor/geo-index",
+    "vendor/wkb",
 ]
 resolver = "2"
 
@@ -102,9 +104,9 @@ geo-types = "0.7.17"
 geo-traits = "0.3.0"
 geo = "0.31.0"
 
-geo-index = { version = "0.3.1" }
+#geo-index = { version = "0.3.1" }
 
-wkb = "0.9.1"
+#wkb = "0.9.1"
 wkt = "0.14.0"
 
 parking_lot = "0.12"
@@ -125,10 +127,10 @@ tokio = { version = "1.44" }
 url = "2.5.4"
 
 [patch.crates-io]
-# Use main branch of arrow-adbc which supports Arrow 56.x (remove when 0.21.0 is released)
-adbc_core = { git = "https://github.com/apache/arrow-adbc.git", package = "adbc_core" }
-adbc_ffi = { git = "https://github.com/apache/arrow-adbc.git", package = "adbc_ffi" }
+# Pin to specific commit that uses Arrow 56.x (arrow-adbc main has moved to Arrow 57.x)
+adbc_core = { git = "https://github.com/apache/arrow-adbc.git", rev = "d57cc501", package = "adbc_core" }
+adbc_ffi = { git = "https://github.com/apache/arrow-adbc.git", rev = "d57cc501", package = "adbc_ffi" }
 
 # TODO: remove them once changes we made to geo-index and wkb crates are merged to upstream and released
-geo-index = { git = "https://github.com/wherobots/geo-index.git", branch = "main" }
-wkb = { git = "https://github.com/georust/wkb.git", rev = "3158e6295e4a39dc7fd75f3cfebee113c8b844d0" }
+#geo-index = { git = "https://github.com/wherobots/geo-index.git", branch = "main" }
+#wkb = { git = "https://github.com/georust/wkb.git", branch = "main" }

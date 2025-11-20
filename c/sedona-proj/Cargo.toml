@@ -33,7 +33,7 @@ cc = { version = "1" }
 approx = { workspace = true }
 geo-types = { workspace = true }
 rstest = { workspace = true }
-wkb = { workspace = true }
+wkb = { path = "../../vendor/wkb" }
 sedona-testing = { path = "../../rust/sedona-testing", features = ["criterion"] }
 criterion = { workspace = true}
 
@@ -54,7 +54,7 @@ sedona-functions = { path = "../../rust/sedona-functions" }
 sedona-geometry = { path = "../../rust/sedona-geometry" }
 sedona-schema = { path = "../../rust/sedona-schema" }
 thiserror = { workspace = true }
-wkb = { workspace = true }
+wkb = { path = "../../vendor/wkb" }
 
 [[bench]]
 name = "proj-functions"

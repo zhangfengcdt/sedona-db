@@ -28,7 +28,7 @@ rust-version.workspace = true
 geo-traits = { workspace = true }
 geo-types = { workspace = true }
 num-traits = { workspace = true }
-wkb = { workspace = true }
+wkb = { path = "../../vendor/wkb" }
 byteorder ={ workspace = true }
 
 [dev-dependencies]

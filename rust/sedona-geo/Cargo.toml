@@ -48,7 +48,7 @@ sedona-expr = { path = "../sedona-expr" }
 sedona-functions = { path = "../sedona-functions" }
 sedona-geometry = { path = "../sedona-geometry" }
 sedona-schema = { path = "../sedona-schema" }
-wkb = { workspace = true }
+wkb = { path = "../../vendor/wkb" }
 
 [[bench]]
 name = "geo-functions"

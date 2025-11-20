@@ -45,7 +45,7 @@ sedona-common = { path = "../sedona-common" }
 sedona-expr = { path = "../sedona-expr" }
 sedona-geometry = { path = "../sedona-geometry" }
 sedona-schema = { path = "../sedona-schema" }
-wkb = { workspace = true }
+wkb = { path = "../../vendor/wkb" }
 wkt = { workspace = true }
 serde_json = { workspace = true }
 

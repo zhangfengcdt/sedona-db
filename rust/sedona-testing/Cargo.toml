@@ -53,6 +53,6 @@ sedona-geometry = { path = "../sedona-geometry" }
 sedona-expr = { path = "../sedona-expr" }
 sedona-raster = { path = "../sedona-raster" }
 sedona-schema = { path = "../sedona-schema" }
-wkb = { workspace = true }
+wkb = { path = "../../vendor/wkb" }
 wkt = { workspace = true }
 geo = { workspace = true, optional = true }

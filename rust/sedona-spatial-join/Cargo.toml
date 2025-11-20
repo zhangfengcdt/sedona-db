@@ -57,8 +57,8 @@ sedona-geometry = { path = "../sedona-geometry" }
 sedona-schema = { path = "../sedona-schema" }
 sedona-tg = { path = "../../c/sedona-tg" }
 sedona-geos = { path = "../../c/sedona-geos" }
-wkb = { workspace = true }
-geo-index = { workspace = true }
+wkb = { path = "../../vendor/wkb" }
+geo-index = { path = "../../vendor/geo-index" }
 geos = { workspace = true }
 float_next_after = { workspace = true }
 

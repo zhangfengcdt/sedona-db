@@ -45,7 +45,7 @@ sedona-functions = { path = "../../rust/sedona-functions" }
 sedona-geometry = { path = "../../rust/sedona-geometry" }
 sedona-schema = { path = "../../rust/sedona-schema" }
 geo-traits = { workspace = true }
-wkb = { workspace = true }
+wkb = { path = "../../vendor/wkb" }
 byteorder = { workspace = true }
 
 [[bench]]
