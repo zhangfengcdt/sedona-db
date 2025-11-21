@@ -33,6 +33,7 @@ regex = { workspace = true }
 [dev-dependencies]
 criterion = { workspace = true }
 rstest = { workspace = true }
+sedona = { workspace = true }
 sedona-testing = { workspace = true, features = ["criterion"] }
 
 [dependencies]
@@ -42,6 +43,7 @@ datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 errno = { version = "0.3" }
 sedona-expr = { workspace = true }
+sedona-functions = { workspace = true }
 sedona-schema = { workspace = true }
 thiserror = { workspace = true }
 paste = "1.0.15"
