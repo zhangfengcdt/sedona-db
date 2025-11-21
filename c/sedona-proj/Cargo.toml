@@ -34,7 +34,7 @@ approx = { workspace = true }
 geo-types = { workspace = true }
 rstest = { workspace = true }
 wkb = { workspace = true }
-sedona-testing = { workspace = true, features = ["criterion"] }
+sedona-testing = { path = "../../rust/sedona-testing", features = ["criterion"] }
 criterion = { workspace = true}
 
 [features]

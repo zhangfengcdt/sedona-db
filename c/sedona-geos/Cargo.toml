@@ -29,7 +29,7 @@ rust-version.workspace = true
 [dev-dependencies]
 criterion = { workspace = true }
 sedona = { workspace = true }
-sedona-testing = { workspace = true, features = ["criterion"] }
+sedona-testing = { path = "../../rust/sedona-testing", features = ["criterion"] }
 rstest = { workspace = true }
 geo-types = { workspace = true }
 

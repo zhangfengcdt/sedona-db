@@ -65,7 +65,7 @@ float_next_after = { workspace = true }
 [dev-dependencies]
 criterion = { workspace = true }
 rstest = { workspace = true }
-sedona-testing = { workspace = true }
+sedona-testing = { path = "../sedona-testing" }
 wkt = { workspace = true }
 tokio = { workspace = true, features = ["macros"] }
 rand = { workspace = true }

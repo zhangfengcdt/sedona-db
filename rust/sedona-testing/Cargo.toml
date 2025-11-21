@@ -23,6 +23,7 @@ description.workspace = true
 readme.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+publish = false  # This crate is for testing only and not published to crates.io
 
 [lints.clippy]
 result_large_err = "allow"

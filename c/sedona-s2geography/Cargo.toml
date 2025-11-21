@@ -34,7 +34,7 @@ regex = { workspace = true }
 criterion = { workspace = true }
 rstest = { workspace = true }
 sedona = { workspace = true }
-sedona-testing = { workspace = true, features = ["criterion"] }
+sedona-testing = { path = "../../rust/sedona-testing", features = ["criterion"] }
 
 [dependencies]
 arrow-schema = { workspace = true }

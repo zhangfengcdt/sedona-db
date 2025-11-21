@@ -74,7 +74,7 @@ sedona-raster-functions = { workspace = true }
 sedona-schema = { workspace = true }
 sedona-spatial-join = { workspace = true, optional = true }
 sedona-s2geography = { workspace = true, optional = true }
-sedona-testing = { workspace = true }
+sedona-testing = { path = "../sedona-testing" }
 sedona-tg = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
