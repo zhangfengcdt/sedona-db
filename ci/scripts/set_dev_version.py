@@ -88,7 +88,7 @@ def main():
 
     # Update workspace dependencies versions to match the prerelease version
     file_regex_replace(
-        r'(sedona-[a-z\-]+) = \{ version = "([0-9]+\.[0-9]+\.[0-9]+)", path',
+        r'(sedona-[a-z-]+) = \{ version = "([0-9]+\.[0-9]+\.[0-9]+)", path',
         f'\\1 = {{ version = "\\2-alpha{dev_distance}", path',
         src_path("Cargo.toml"),
     )
