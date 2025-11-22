@@ -150,5 +150,5 @@ sedona-s2geography = { version = "0.2.0", path = "c/sedona-s2geography" }
 sedona-tg = { version = "0.2.0", path = "c/sedona-tg" }
 
 [patch.crates-io]
-# TODO: remove them once changes we made to geo-index and wkb crates are merged to upstream and released
+# TODO: remove this once changes we made to the geo-index crate are merged to upstream and released
 geo-index = { git = "https://github.com/wherobots/geo-index.git", branch = "main" }
