@@ -87,9 +87,9 @@ def main():
     )
 
     # Update workspace dependencies versions to match the prerelease version
-    # Matches both 'sedona' and 'sedona-*' packages
+    # Matches both 'sedona' and 'sedona-*' packages (including digits like sedona-s2geography)
     file_regex_replace(
-        r'(sedona(?:-[a-z\-]+)?) = \{ version = "([0-9]+\.[0-9]+\.[0-9]+)", path',
+        r'(sedona(?:-[a-z0-9\-]+)?) = \{ version = "([0-9]+\.[0-9]+\.[0-9]+)", path',
         f'\\1 = {{ version = "\\2-alpha{dev_distance}", path',
         src_path("Cargo.toml"),
     )
