@@ -104,7 +104,7 @@ geo = "0.31.0"
 
 geo-index = { version = "0.3.1" }
 
-wkb = "0.9.1"
+wkb = "0.9.2"
 wkt = "0.14.0"
 
 parking_lot = "0.12"
@@ -152,4 +152,3 @@ sedona-tg = { version = "0.2.0", path = "c/sedona-tg" }
 [patch.crates-io]
 # TODO: remove them once changes we made to geo-index and wkb crates are merged to upstream and released
 geo-index = { git = "https://github.com/wherobots/geo-index.git", branch = "main" }
-wkb = { git = "https://github.com/georust/wkb.git", rev = "3158e6295e4a39dc7fd75f3cfebee113c8b844d0" }
