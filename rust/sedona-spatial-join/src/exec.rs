@@ -199,7 +199,6 @@ impl SpatialJoinExec {
         &self.join_type
     }
 
-
     /// Returns a vector indicating whether the left and right inputs maintain their order.
     /// The first element corresponds to the left input, and the second to the right.
     ///
@@ -424,9 +423,7 @@ impl ExecutionPlan for SpatialJoinExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         match &self.on {
-            SpatialPredicate::KNearestNeighbors(_) => {
-                self.execute_knn(partition, context)
-            }
+            SpatialPredicate::KNearestNeighbors(_) => self.execute_knn(partition, context),
             _ => {
                 // Regular spatial join logic - standard left=build, right=probe semantics
                 let session_config = context.session_config();
@@ -444,7 +441,10 @@ impl ExecutionPlan for SpatialJoinExec {
                 // Build the spatial index using shared OnceAsync
                 // Choose between parallel and sequential index building based on configuration
                 let mut once_async = self.once_async_spatial_index.lock();
-                let once_fut_spatial_index = if sedona_options.spatial_join.use_sequential_index_build {
+                let once_fut_spatial_index = if sedona_options
+                    .spatial_join
+                    .use_sequential_index_build
+                {
                     // Use build_index_sync for JNI/embedded contexts (sequential, no task spawning)
                     once_async
                         .get_or_insert(OnceAsync::default())
@@ -456,7 +456,8 @@ impl ExecutionPlan for SpatialJoinExec {
                                 let stream = build_side.execute(k, Arc::clone(&context))?;
                                 build_streams.push(stream);
                             }
-                            let probe_thread_count = self.right.output_partitioning().partition_count();
+                            let probe_thread_count =
+                                self.right.output_partitioning().partition_count();
                             Ok(build_index_sync(
                                 Arc::clone(&context),
                                 build_side.schema(),
@@ -479,7 +480,8 @@ impl ExecutionPlan for SpatialJoinExec {
                                 let stream = build_side.execute(k, Arc::clone(&context))?;
                                 build_streams.push(stream);
                             }
-                            let probe_thread_count = self.right.output_partitioning().partition_count();
+                            let probe_thread_count =
+                                self.right.output_partitioning().partition_count();
                             Ok(build_index(
                                 Arc::clone(&context),
                                 build_side.schema(),

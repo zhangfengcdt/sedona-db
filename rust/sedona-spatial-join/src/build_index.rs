@@ -74,9 +74,7 @@ pub async fn build_index_sync(
         .zip(reservations)
         .zip(&collect_metrics_vec)
     {
-        let partition = collector
-            .collect(stream, reservation, metrics)
-            .await?;
+        let partition = collector.collect(stream, reservation, metrics).await?;
         build_partitions.push(partition);
     }
 
