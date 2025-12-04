@@ -450,12 +450,14 @@ impl ExecutionPlan for SpatialJoinExec {
                         .get_or_insert(OnceAsync::default())
                         .try_once(|| {
                             let build_side = build_plan;
+
                             let num_partitions = build_side.output_partitioning().partition_count();
                             let mut build_streams = Vec::with_capacity(num_partitions);
                             for k in 0..num_partitions {
                                 let stream = build_side.execute(k, Arc::clone(&context))?;
                                 build_streams.push(stream);
                             }
+
                             let probe_thread_count =
                                 self.right.output_partitioning().partition_count();
                             Ok(build_index_seq(
@@ -474,12 +476,14 @@ impl ExecutionPlan for SpatialJoinExec {
                         .get_or_insert(OnceAsync::default())
                         .try_once(|| {
                             let build_side = build_plan;
+
                             let num_partitions = build_side.output_partitioning().partition_count();
                             let mut build_streams = Vec::with_capacity(num_partitions);
                             for k in 0..num_partitions {
                                 let stream = build_side.execute(k, Arc::clone(&context))?;
                                 build_streams.push(stream);
                             }
+
                             let probe_thread_count =
                                 self.right.output_partitioning().partition_count();
                             Ok(build_index(
@@ -567,12 +571,14 @@ impl SpatialJoinExec {
                 .get_or_insert(OnceAsync::default())
                 .try_once(|| {
                     let build_side = build_plan;
+
                     let num_partitions = build_side.output_partitioning().partition_count();
                     let mut build_streams = Vec::with_capacity(num_partitions);
                     for k in 0..num_partitions {
                         let stream = build_side.execute(k, Arc::clone(&context))?;
                         build_streams.push(stream);
                     }
+
                     let probe_thread_count = probe_plan.output_partitioning().partition_count();
                     Ok(build_index_seq(
                         Arc::clone(&context),
@@ -590,12 +596,14 @@ impl SpatialJoinExec {
                 .get_or_insert(OnceAsync::default())
                 .try_once(|| {
                     let build_side = build_plan;
+
                     let num_partitions = build_side.output_partitioning().partition_count();
                     let mut build_streams = Vec::with_capacity(num_partitions);
                     for k in 0..num_partitions {
                         let stream = build_side.execute(k, Arc::clone(&context))?;
                         build_streams.push(stream);
                     }
+
                     let probe_thread_count = probe_plan.output_partitioning().partition_count();
                     Ok(build_index(
                         Arc::clone(&context),
