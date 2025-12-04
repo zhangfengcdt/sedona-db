@@ -35,7 +35,7 @@ use datafusion_physical_plan::{
 use parking_lot::Mutex;
 
 use crate::{
-    build_index::{build_index, build_index_sync},
+    build_index::{build_index, build_index_seq},
     index::SpatialIndex,
     spatial_predicate::{KNNPredicate, SpatialPredicate},
     stream::{SpatialJoinProbeMetrics, SpatialJoinStream},
@@ -445,7 +445,7 @@ impl ExecutionPlan for SpatialJoinExec {
                     .spatial_join
                     .use_sequential_index_build
                 {
-                    // Use build_index_sync for JNI/embedded contexts (sequential, no task spawning)
+                    // Use build_index_seq for JNI/embedded contexts (sequential, no task spawning)
                     once_async
                         .get_or_insert(OnceAsync::default())
                         .try_once(|| {
@@ -458,7 +458,7 @@ impl ExecutionPlan for SpatialJoinExec {
                             }
                             let probe_thread_count =
                                 self.right.output_partitioning().partition_count();
-                            Ok(build_index_sync(
+                            Ok(build_index_seq(
                                 Arc::clone(&context),
                                 build_side.schema(),
                                 build_streams,
@@ -562,7 +562,7 @@ impl SpatialJoinExec {
         // Choose between parallel and sequential index building based on configuration
         let mut once_async = self.once_async_spatial_index.lock();
         let once_fut_spatial_index = if sedona_options.spatial_join.use_sequential_index_build {
-            // Use build_index_sync for JNI/embedded contexts (sequential, no task spawning)
+            // Use build_index_seq for JNI/embedded contexts (sequential, no task spawning)
             once_async
                 .get_or_insert(OnceAsync::default())
                 .try_once(|| {
@@ -574,7 +574,7 @@ impl SpatialJoinExec {
                         build_streams.push(stream);
                     }
                     let probe_thread_count = probe_plan.output_partitioning().partition_count();
-                    Ok(build_index_sync(
+                    Ok(build_index_seq(
                         Arc::clone(&context),
                         build_side.schema(),
                         build_streams,
