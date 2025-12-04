@@ -14,17 +14,23 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-from sedonadb import _lib
-from sedonadb.context import connect, configure_proj
 
-__version__ = _lib.sedona_python_version()
+[package]
+name = "sedonadb-rust-example"
+version = "0.0.1"
+authors = ["Apache Sedona <dev@sedona.apache.org>"]
+license = "Apache-2.0"
+homepage = "https://github.com/apache/sedona-db"
+repository = "https://github.com/apache/sedona-db"
+description = "Apache SedonaDB Rust API Example"
+readme = "README.md"
+edition = "2021"
+rust-version = "1.86"
 
-__features__ = _lib.sedona_python_features()
+[workspace]
 
-__all__ = ["connect", "options"]
-
-# Attempt to configure PROJ on import. This will warn if PROJ
-# can't be configured but should never error. The auto-configured
-# value can be overridden as long as the call to configure_proj()
-# occurs before actually creating a transform.
-configure_proj("auto")
+[dependencies]
+datafusion = { version = "50.2.0"}
+# When sedona is released on crates.io, this can be a version and not a git repo
+sedona = { git = "https://github.com/apache/sedona-db.git", package = "sedona"}
+tokio = { version = "1.44", features = ["rt-multi-thread"]}

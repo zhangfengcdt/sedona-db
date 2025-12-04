@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
+import sys
 from typing import Any, Mapping
 
 from sedonadb._lib import PyExternalFormat, PyProjectedRecordBatchReader
@@ -133,8 +134,10 @@ class PyogrioFormatSpec(ExternalFormatSpec):
 
         if url.startswith("http://") or url.startswith("https://"):
             ogr_src = f"/vsicurl/{url}"
-        elif url.startswith("file://"):
+        elif url.startswith("file://") and sys.platform != "win32":
             ogr_src = url.removeprefix("file://")
+        elif url.startswith("file:///"):
+            ogr_src = url.removeprefix("file:///")
         else:
             raise ValueError(f"Can't open {url} with OGR")
 
@@ -151,8 +154,11 @@ class PyogrioFormatSpec(ExternalFormatSpec):
 
         if args.filter and args.file_schema is not None:
             geometry_column_indices = args.file_schema.geometry_column_indices
+            file_columns = args.file_schema.names
             if len(geometry_column_indices) == 1:
-                bbox = args.filter.bounding_box(geometry_column_indices[0])
+                bbox = args.filter.bounding_box(
+                    file_columns[geometry_column_indices[0]]
+                )
             else:
                 bbox = None
         else:

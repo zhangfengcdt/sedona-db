@@ -14,10 +14,22 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-pub mod error;
-mod proj;
-mod proj_dyn_bindgen;
-pub mod register;
-pub mod sd_order_lnglat;
-mod st_transform;
-pub mod transform;
+// Because a number of methods only return Err() for not implemented,
+// the compiler doesn't know how to guess which impl RecordBatchReader
+// will be returned. When we implement the methods, we can remove this.
+
+use datafusion::{common::Result, prelude::*};
+use sedona::context::{SedonaContext, SedonaDataFrame};
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let ctx = SedonaContext::new_local_interactive().await?;
+    let url = "https://raw.githubusercontent.com/geoarrow/geoarrow-data/v0.2.0/natural-earth/files/natural-earth_cities_geo.parquet";
+    let df = ctx.read_parquet(url, Default::default()).await?;
+    let output = df
+        .sort_by(vec![col("name")])?
+        .show_sedona(&ctx, Some(5), Default::default())
+        .await?;
+    println!("{output}");
+    Ok(())
+}
