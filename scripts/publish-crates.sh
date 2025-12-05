@@ -100,34 +100,34 @@ CRATES=(
     "rust/sedona-geo-traits-ext"
     "rust/sedona-geo-generic-alg"
 
-    # Tier 2 - C wrapper crates (minimal dependencies)
-    "c/sedona-tg"
-
-    # Tier 3 - Core geometry types
+    # Tier 2 - Core types (no internal deps)
     "rust/sedona-geometry"
-
-    # Tier 4 - Schema and common utilities
-    "rust/sedona-schema"
     "rust/sedona-common"
 
-    # Tier 5 - More C wrappers (depend on geometry)
+    # Tier 3 - Schema (depends on common)
+    "rust/sedona-schema"
+
+    # Tier 4 - Expression (depends on common, geometry, schema)
+    "rust/sedona-expr"
+
+    # Tier 5 - Functions (depends on expr, geometry, schema, common)
+    "rust/sedona-functions"
+
+    # Tier 6 - C wrappers and sedona-geo (all depend on functions)
+    "c/sedona-tg"
     "c/sedona-geos"
     "c/sedona-proj"
     "c/sedona-s2geography"
-
-    # Tier 6 - Core functionality
+    "c/sedona-geoarrow-c"
     "rust/sedona-geo"
-    "rust/sedona-expr"
 
-    # Tier 7 - Functions and features
-    "rust/sedona-functions"
+    # Tier 7 - Higher-level features
     "rust/sedona-geoparquet"
     "rust/sedona-raster"
     "rust/sedona-raster-functions"
     "rust/sedona-spatial-join"
     "rust/sedona-datasource"
     "rust/sedona-adbc"
-    "c/sedona-geoarrow-c"
 
     # Tier 8 - Main library (depends on most crates)
     "rust/sedona"
