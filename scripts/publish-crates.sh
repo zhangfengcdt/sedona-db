@@ -311,8 +311,8 @@ for crate_path in "${CRATES[@]}"; do
             PUBLISHED_CRATES+=("$pkg_name")
 
             # Wait for crates.io to index the new crate
-            echo "    Waiting 60 seconds for crates.io to index..."
-            sleep 60
+            echo "    Waiting 120 seconds for crates.io to index..."
+            sleep 120
         else
             echo -e "    ${RED}Publish failed${NC}"
             FAILED_CRATES+=("$pkg_name")

@@ -4864,6 +4864,7 @@ dependencies = [
  "arrow-schema",
  "datafusion",
  "futures",
+ "sedona",
  "tokio",
 ]
 
