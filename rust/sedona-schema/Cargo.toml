@@ -17,6 +17,7 @@
 [package]
 name = "sedona-schema"
 version.workspace = true
+license.workspace = true
 homepage.workspace = true
 repository.workspace = true
 description.workspace = true
