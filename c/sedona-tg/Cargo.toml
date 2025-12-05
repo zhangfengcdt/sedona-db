@@ -34,7 +34,7 @@ cc = { version = "1" }
 [dev-dependencies]
 criterion = { workspace = true }
 rstest = { workspace = true }
-# sedona = { workspace = true }  # TODO: Uncomment after sedona is published to crates.io
+sedona = { workspace = true }
 sedona-testing = { workspace = true }
 wkb = { workspace = true }
 geo = { workspace = true }

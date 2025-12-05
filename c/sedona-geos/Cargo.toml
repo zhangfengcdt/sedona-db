@@ -30,7 +30,7 @@ rust-version.workspace = true
 
 [dev-dependencies]
 criterion = { workspace = true }
-# sedona = { workspace = true }  # TODO: Uncomment after sedona is published to crates.io
+sedona = { workspace = true }
 sedona-testing = { workspace = true }
 rstest = { workspace = true }
 geo-types = { workspace = true }
