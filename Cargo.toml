@@ -55,6 +55,8 @@ edition = "2021"
 # Same rust-version, arrow, and datafusion dependencies as datafusion-comet
 # https://github.com/apache/datafusion-comet/blob/main/native/Cargo.toml
 rust-version = "1.86"
+keywords = ["geospatial", "gis", "spatial", "datafusion", "arrow"]
+categories = ["science::geo", "database"]
 
 [workspace.dependencies]
 approx = "0.5"
