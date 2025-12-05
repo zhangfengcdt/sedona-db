@@ -34,7 +34,7 @@ result_large_err = "allow"
 default = []
 
 [dev-dependencies]
-sedona-testing = { path = "../sedona-testing" }
+sedona-testing = { workspace = true }
 url = { workspace = true }
 rstest = { workspace = true }
 tempfile = { workspace = true }

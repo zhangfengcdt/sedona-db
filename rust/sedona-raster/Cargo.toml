@@ -38,4 +38,4 @@ sedona-common = { workspace = true }
 sedona-schema = { workspace = true }
 
 [dev-dependencies]
-sedona-testing = { path = "../sedona-testing" }
+sedona-testing = { workspace = true }

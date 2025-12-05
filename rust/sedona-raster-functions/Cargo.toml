@@ -43,7 +43,7 @@ sedona-schema = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
-sedona-testing = { path = "../sedona-testing", features = ["criterion"] }
+sedona-testing = { workspace = true, features = ["criterion"] }
 rstest = { workspace = true }
 
 [[bench]]

@@ -32,7 +32,7 @@ result_large_err = "allow"
 
 [dev-dependencies]
 rstest = { workspace = true }
-sedona-testing = { path = "../sedona-testing" }
+sedona-testing = { workspace = true }
 
 [dependencies]
 arrow-schema = { workspace = true }
