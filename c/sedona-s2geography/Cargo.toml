@@ -35,8 +35,8 @@ regex = { workspace = true }
 [dev-dependencies]
 criterion = { workspace = true }
 rstest = { workspace = true }
-sedona = { workspace = true }
-sedona-testing = { path = "../../rust/sedona-testing", features = ["criterion"] }
+# sedona = { workspace = true }  # TODO: Uncomment after sedona is published to crates.io
+sedona-testing = { path = "../../rust/sedona-testing" }
 
 [dependencies]
 arrow-schema = { workspace = true }

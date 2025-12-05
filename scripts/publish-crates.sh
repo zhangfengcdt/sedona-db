@@ -127,12 +127,12 @@ CRATES=(
     "rust/sedona-raster-functions"
     "rust/sedona-spatial-join"
     "rust/sedona-datasource"
-    "rust/sedona-adbc"
 
     # Tier 8 - Main library (depends on most crates)
     "rust/sedona"
 
-    # Tier 9 - CLI (depends on main library)
+    # Tier 9 - Crates that depend on main library
+    "rust/sedona-adbc"
     "sedona-cli"
 )
 
