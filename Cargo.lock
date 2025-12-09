@@ -4907,6 +4907,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "sedona-extension"
+version = "0.2.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "datafusion-common",
+ "datafusion-expr",
+ "libc",
+ "sedona-common",
+ "sedona-expr",
+ "sedona-schema",
+ "sedona-testing",
+]
+
+[[package]]
 name = "sedona-functions"
 version = "0.3.0"
 dependencies = [
