@@ -439,30 +439,33 @@ impl ExecutionPlan for SpatialJoinExec {
                 let (build_plan, probe_plan) = (&self.left, &self.right);
 
                 // Build the spatial index using shared OnceAsync
-                let mut once_async = self.once_async_spatial_index.lock();
-                let once_fut_spatial_index = once_async
-                    .get_or_insert(OnceAsync::default())
-                    .try_once(|| {
-                        let build_side = build_plan;
+                let once_fut_spatial_index = {
+                    let mut once_async = self.once_async_spatial_index.lock();
+                    once_async
+                        .get_or_insert(OnceAsync::default())
+                        .try_once(|| {
+                            let build_side = build_plan;
 
-                        let num_partitions = build_side.output_partitioning().partition_count();
-                        let mut build_streams = Vec::with_capacity(num_partitions);
-                        for k in 0..num_partitions {
-                            let stream = build_side.execute(k, Arc::clone(&context))?;
-                            build_streams.push(stream);
-                        }
+                            let num_partitions = build_side.output_partitioning().partition_count();
+                            let mut build_streams = Vec::with_capacity(num_partitions);
+                            for k in 0..num_partitions {
+                                let stream = build_side.execute(k, Arc::clone(&context))?;
+                                build_streams.push(stream);
+                            }
 
-                        let probe_thread_count = self.right.output_partitioning().partition_count();
-                        Ok(build_index(
-                            Arc::clone(&context),
-                            build_side.schema(),
-                            build_streams,
-                            self.on.clone(),
-                            self.join_type,
-                            probe_thread_count,
-                            self.metrics.clone(),
-                        ))
-                    })?;
+                            let probe_thread_count =
+                                self.right.output_partitioning().partition_count();
+                            Ok(build_index(
+                                Arc::clone(&context),
+                                build_side.schema(),
+                                build_streams,
+                                self.on.clone(),
+                                self.join_type,
+                                probe_thread_count,
+                                self.metrics.clone(),
+                            ))
+                        })?
+                };
 
                 // Column indices for regular joins - no swapping needed
                 let column_indices_after_projection = match &self.projection {
@@ -529,8 +532,8 @@ impl SpatialJoinExec {
         let actual_probe_plan_is_left = std::ptr::eq(probe_plan.as_ref(), self.left.as_ref());
 
         // Build the spatial index
-        let mut once_async = self.once_async_spatial_index.lock();
-        let once_fut_spatial_index =
+        let once_fut_spatial_index = {
+            let mut once_async = self.once_async_spatial_index.lock();
             once_async
                 .get_or_insert(OnceAsync::default())
                 .try_once(|| {
@@ -553,7 +556,8 @@ impl SpatialJoinExec {
                         probe_thread_count,
                         self.metrics.clone(),
                     ))
-                })?;
+                })?
+        };
 
         // Handle column indices for KNN - need to swap if we swapped execution plans
         let mut column_indices_after_projection = match &self.projection {
