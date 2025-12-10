@@ -35,7 +35,7 @@ use datafusion_physical_plan::{
 use parking_lot::Mutex;
 
 use crate::{
-    build_index::{build_index, build_index_seq},
+    build_index::build_index,
     index::SpatialIndex,
     spatial_predicate::{KNNPredicate, SpatialPredicate},
     stream::{SpatialJoinProbeMetrics, SpatialJoinStream},
@@ -439,64 +439,30 @@ impl ExecutionPlan for SpatialJoinExec {
                 let (build_plan, probe_plan) = (&self.left, &self.right);
 
                 // Build the spatial index using shared OnceAsync
-                // Choose between parallel and sequential index building based on configuration
                 let mut once_async = self.once_async_spatial_index.lock();
-                let once_fut_spatial_index = if sedona_options
-                    .spatial_join
-                    .use_sequential_index_build
-                {
-                    // Use build_index_seq for JNI/embedded contexts (sequential, no task spawning)
-                    once_async
-                        .get_or_insert(OnceAsync::default())
-                        .try_once(|| {
-                            let build_side = build_plan;
+                let once_fut_spatial_index = once_async
+                    .get_or_insert(OnceAsync::default())
+                    .try_once(|| {
+                        let build_side = build_plan;
 
-                            let num_partitions = build_side.output_partitioning().partition_count();
-                            let mut build_streams = Vec::with_capacity(num_partitions);
-                            for k in 0..num_partitions {
-                                let stream = build_side.execute(k, Arc::clone(&context))?;
-                                build_streams.push(stream);
-                            }
+                        let num_partitions = build_side.output_partitioning().partition_count();
+                        let mut build_streams = Vec::with_capacity(num_partitions);
+                        for k in 0..num_partitions {
+                            let stream = build_side.execute(k, Arc::clone(&context))?;
+                            build_streams.push(stream);
+                        }
 
-                            let probe_thread_count =
-                                self.right.output_partitioning().partition_count();
-                            Ok(build_index_seq(
-                                Arc::clone(&context),
-                                build_side.schema(),
-                                build_streams,
-                                self.on.clone(),
-                                self.join_type,
-                                probe_thread_count,
-                                self.metrics.clone(),
-                            ))
-                        })?
-                } else {
-                    // Use build_index for normal contexts (parallel, faster)
-                    once_async
-                        .get_or_insert(OnceAsync::default())
-                        .try_once(|| {
-                            let build_side = build_plan;
-
-                            let num_partitions = build_side.output_partitioning().partition_count();
-                            let mut build_streams = Vec::with_capacity(num_partitions);
-                            for k in 0..num_partitions {
-                                let stream = build_side.execute(k, Arc::clone(&context))?;
-                                build_streams.push(stream);
-                            }
-
-                            let probe_thread_count =
-                                self.right.output_partitioning().partition_count();
-                            Ok(build_index(
-                                Arc::clone(&context),
-                                build_side.schema(),
-                                build_streams,
-                                self.on.clone(),
-                                self.join_type,
-                                probe_thread_count,
-                                self.metrics.clone(),
-                            ))
-                        })?
-                };
+                        let probe_thread_count = self.right.output_partitioning().partition_count();
+                        Ok(build_index(
+                            Arc::clone(&context),
+                            build_side.schema(),
+                            build_streams,
+                            self.on.clone(),
+                            self.join_type,
+                            probe_thread_count,
+                            self.metrics.clone(),
+                        ))
+                    })?;
 
                 // Column indices for regular joins - no swapping needed
                 let column_indices_after_projection = match &self.projection {
@@ -563,35 +529,8 @@ impl SpatialJoinExec {
         let actual_probe_plan_is_left = std::ptr::eq(probe_plan.as_ref(), self.left.as_ref());
 
         // Build the spatial index
-        // Choose between parallel and sequential index building based on configuration
         let mut once_async = self.once_async_spatial_index.lock();
-        let once_fut_spatial_index = if sedona_options.spatial_join.use_sequential_index_build {
-            // Use build_index_seq for JNI/embedded contexts (sequential, no task spawning)
-            once_async
-                .get_or_insert(OnceAsync::default())
-                .try_once(|| {
-                    let build_side = build_plan;
-
-                    let num_partitions = build_side.output_partitioning().partition_count();
-                    let mut build_streams = Vec::with_capacity(num_partitions);
-                    for k in 0..num_partitions {
-                        let stream = build_side.execute(k, Arc::clone(&context))?;
-                        build_streams.push(stream);
-                    }
-
-                    let probe_thread_count = probe_plan.output_partitioning().partition_count();
-                    Ok(build_index_seq(
-                        Arc::clone(&context),
-                        build_side.schema(),
-                        build_streams,
-                        self.on.clone(),
-                        self.join_type,
-                        probe_thread_count,
-                        self.metrics.clone(),
-                    ))
-                })?
-        } else {
-            // Use build_index for normal contexts (parallel, faster)
+        let once_fut_spatial_index =
             once_async
                 .get_or_insert(OnceAsync::default())
                 .try_once(|| {
@@ -614,8 +553,7 @@ impl SpatialJoinExec {
                         probe_thread_count,
                         self.metrics.clone(),
                     ))
-                })?
-        };
+                })?;
 
         // Handle column indices for KNN - need to swap if we swapped execution plans
         let mut column_indices_after_projection = match &self.projection {

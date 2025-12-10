@@ -33,31 +33,12 @@ use crate::{
     spatial_predicate::SpatialPredicate,
 };
 
-/// Sequential version of build_index that doesn't spawn tasks.
-/// Used in execution contexts without async runtime support (e.g., Spark/Comet JNI)
-pub async fn build_index_seq(
-    context: Arc<TaskContext>,
-    build_schema: SchemaRef,
-    build_streams: Vec<SendableRecordBatchStream>,
-    spatial_predicate: SpatialPredicate,
-    join_type: JoinType,
-    probe_threads_count: usize,
-    metrics: ExecutionPlanMetricsSet,
-) -> Result<SpatialIndex> {
-    build_index_impl(
-        context,
-        build_schema,
-        build_streams,
-        spatial_predicate,
-        join_type,
-        probe_threads_count,
-        metrics,
-        false, // concurrent = false
-    )
-    .await
-}
-
-/// Concurrent version of build_index that spawns tasks for parallel collection.
+/// Build a spatial index from the build side streams.
+///
+/// This function reads the `concurrent_build_side_collection` configuration from the context
+/// to determine whether to collect build side partitions concurrently (using spawned tasks)
+/// or sequentially (for JNI/embedded contexts without async runtime support).
+#[allow(clippy::too_many_arguments)]
 pub async fn build_index(
     context: Arc<TaskContext>,
     build_schema: SchemaRef,
@@ -67,35 +48,6 @@ pub async fn build_index(
     probe_threads_count: usize,
     metrics: ExecutionPlanMetricsSet,
 ) -> Result<SpatialIndex> {
-    build_index_impl(
-        context,
-        build_schema,
-        build_streams,
-        spatial_predicate,
-        join_type,
-        probe_threads_count,
-        metrics,
-        true, // concurrent = true
-    )
-    .await
-}
-
-/// Internal implementation of build_index with configurable concurrency.
-///
-/// # Arguments
-/// * `concurrent` - If true, uses `collect_all` which spawns tasks for parallel collection.
-///   If false, collects partitions sequentially (for JNI/embedded contexts).
-#[allow(clippy::too_many_arguments)]
-async fn build_index_impl(
-    context: Arc<TaskContext>,
-    build_schema: SchemaRef,
-    build_streams: Vec<SendableRecordBatchStream>,
-    spatial_predicate: SpatialPredicate,
-    join_type: JoinType,
-    probe_threads_count: usize,
-    metrics: ExecutionPlanMetricsSet,
-    concurrent: bool,
-) -> Result<SpatialIndex> {
     let session_config = context.session_config();
     let sedona_options = session_config
         .options()
@@ -103,6 +55,7 @@ async fn build_index_impl(
         .get::<SedonaOptions>()
         .cloned()
         .unwrap_or_default();
+    let concurrent = sedona_options.spatial_join.concurrent_build_side_collection;
     let memory_pool = context.memory_pool();
     let evaluator =
         create_operand_evaluator(&spatial_predicate, sedona_options.spatial_join.clone());
