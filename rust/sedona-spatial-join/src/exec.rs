@@ -107,7 +107,7 @@ fn determine_knn_build_probe_plans<'a>(
 /// 2. **Probe Phase**: Each geometry from the right table is used to query the spatial index
 /// 3. **Refinement**: Candidate pairs from the index are refined using exact spatial predicates
 /// 4. **Output**: Matching pairs are combined according to the specified join type
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SpatialJoinExec {
     /// left (build) side which gets hashed
     pub left: Arc<dyn ExecutionPlan>,

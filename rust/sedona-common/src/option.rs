@@ -65,7 +65,7 @@ config_namespace! {
         pub execution_mode: ExecutionMode, default = ExecutionMode::Speculative(DEFAULT_SPECULATIVE_THRESHOLD)
 
         /// Collect build side partitions concurrently (using spawned tasks).
-        /// Set to false for JNI/embedded contexts without async runtime support.
+        /// Set to false for contexts where spawning new tasks is not supported.
         pub concurrent_build_side_collection: bool, default = true
 
         /// Include tie-breakers in KNN join results when there are tied distances
