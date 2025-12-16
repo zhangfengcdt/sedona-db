@@ -262,7 +262,30 @@ def test_st_buffer(eng, geom, dist, expected_area):
     eng.assert_query_result(
         f"SELECT ST_Area(ST_Buffer({geom_or_null(geom)}, {val_or_null(dist)}))",
         expected_area,
-        numeric_epsilon=1e-9,
+        # geos passes with 1e-9, but geo needs it as high as 1e-3
+        numeric_epsilon=1e-3,
+    )
+
+
+@pytest.mark.parametrize("eng", [SedonaDB, PostGIS])
+@pytest.mark.parametrize(
+    ("geom", "expected"),
+    [
+        ("POINT EMPTY", "POLYGON EMPTY"),
+        ("LINESTRING EMPTY", "POLYGON EMPTY"),
+        ("POLYGON EMPTY", "POLYGON EMPTY"),
+        ("MULTIPOINT EMPTY", "POLYGON EMPTY"),
+        ("MULTILINESTRING EMPTY", "POLYGON EMPTY"),
+        ("MULTIPOLYGON EMPTY", "POLYGON EMPTY"),
+        ("GEOMETRYCOLLECTION EMPTY", "POLYGON EMPTY"),
+    ],
+)
+def test_st_buffer_empty(eng, geom, expected):
+    eng = SedonaDB.create_or_skip()
+
+    eng.assert_query_result(
+        f"SELECT ST_Buffer({geom_or_null(geom)}, {2.0})",
+        expected,
     )
 
 
