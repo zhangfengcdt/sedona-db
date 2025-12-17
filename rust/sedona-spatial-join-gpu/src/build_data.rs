@@ -1,6 +1,6 @@
+use crate::config::GpuSpatialJoinConfig;
 use arrow_array::RecordBatch;
 use std::sync::Arc;
-use crate::config::GpuSpatialJoinConfig;
 
 /// Shared build-side data for GPU spatial join
 #[derive(Clone)]
@@ -18,7 +18,11 @@ pub(crate) struct GpuBuildData {
 impl GpuBuildData {
     pub fn new(left_batch: RecordBatch, config: GpuSpatialJoinConfig) -> Self {
         let left_row_count = left_batch.num_rows();
-        Self { left_batch, config, left_row_count }
+        Self {
+            left_batch,
+            config,
+            left_row_count,
+        }
     }
 
     pub fn left_batch(&self) -> &RecordBatch {

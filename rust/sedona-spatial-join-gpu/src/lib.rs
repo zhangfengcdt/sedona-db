@@ -1,9 +1,9 @@
 // Module declarations
 mod build_data;
-pub(crate) mod once_fut;
 pub mod config;
 pub mod exec;
 pub mod gpu_backend;
+pub(crate) mod once_fut;
 pub mod stream;
 
 // Re-exports for convenience

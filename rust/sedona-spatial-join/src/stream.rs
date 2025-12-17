@@ -234,7 +234,7 @@ impl SpatialJoinStream {
                     }
                     Err(e) => Poll::Ready(Err(e)),
                 }
-            },
+            }
             Poll::Ready(Some(Err(e))) => Poll::Ready(Err(e)),
             Poll::Ready(None) => {
                 println!("[CPU Join] All probe batches processed");
@@ -273,7 +273,7 @@ impl SpatialJoinStream {
                                 batch.num_rows(), process_elapsed.as_secs_f64());
                         }
                         opt
-                    },
+                    }
                     Err(e) => {
                         return Poll::Ready(Err(e));
                     }

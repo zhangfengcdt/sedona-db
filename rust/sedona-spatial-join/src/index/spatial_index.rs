@@ -31,7 +31,7 @@ use geo_types::{Point, Rect};
 use parking_lot::Mutex;
 use sedona_expr::statistics::GeoStatistics;
 use sedona_geo::to_geo::item_to_geometry;
-use sedona_geo_generic_alg::algorithm::Centroid;
+use sedona_geo_generic_alg::Centroid;
 use wkb::reader::Wkb;
 
 use crate::{
