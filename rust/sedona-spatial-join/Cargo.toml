@@ -68,6 +68,7 @@ geo-index = { workspace = true }
 geos = { workspace = true }
 float_next_after = { workspace = true }
 log = "0.4"
+fastrand = { workspace = true }
 
 # GPU spatial join (optional)
 sedona-spatial-join-gpu = { path = "../sedona-spatial-join-gpu", optional = true }
@@ -80,3 +81,18 @@ sedona-testing = { workspace = true }
 wkt = { workspace = true }
 tokio = { workspace = true, features = ["macros"] }
 rand = { workspace = true }
+
+[[bench]]
+name = "kdb"
+path = "bench/partitioning/kdb.rs"
+harness = false
+
+[[bench]]
+name = "rtree"
+path = "bench/partitioning/rtree.rs"
+harness = false
+
+[[bench]]
+name = "flat"
+path = "bench/partitioning/flat.rs"
+harness = false
