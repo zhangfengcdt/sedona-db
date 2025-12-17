@@ -114,8 +114,8 @@ impl GpuBackend {
                     let wkb = left_binary.value(i);
                     // Parse WKB header
                     if wkb.len() >= 5 {
-                        let byte_order = wkb[0];
-                        let geom_type = u32::from_le_bytes([wkb[1], wkb[2], wkb[3], wkb[4]]);
+                        let _byte_order = wkb[0];
+                        let _geom_type = u32::from_le_bytes([wkb[1], wkb[2], wkb[3], wkb[4]]);
                     }
                 }
             }
@@ -127,8 +127,8 @@ impl GpuBackend {
                     let wkb = right_binary.value(i);
                     // Parse WKB header
                     if wkb.len() >= 5 {
-                        let byte_order = wkb[0];
-                        let geom_type = u32::from_le_bytes([wkb[1], wkb[2], wkb[3], wkb[4]]);
+                        let _byte_order = wkb[0];
+                        let _geom_type = u32::from_le_bytes([wkb[1], wkb[2], wkb[3], wkb[4]]);
                     }
                 }
             }

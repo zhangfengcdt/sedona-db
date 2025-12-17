@@ -1,6 +1,5 @@
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
-use std::pin::Pin;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
@@ -8,7 +7,6 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion::physical_plan::Partitioning;
 use datafusion::physical_plan::{
     joins::utils::build_join_schema, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
     SendableRecordBatchStream,

@@ -1,6 +1,5 @@
 use crate::config::GpuSpatialJoinConfig;
 use arrow_array::RecordBatch;
-use std::sync::Arc;
 
 /// Shared build-side data for GPU spatial join
 #[derive(Clone)]

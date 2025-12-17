@@ -24,11 +24,9 @@ use arrow::datatypes::SchemaRef;
 use arrow_array::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::TaskContext;
-use datafusion::physical_plan::ExecutionPlanProperties;
 use datafusion::physical_plan::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
 use datafusion_physical_plan::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use futures::stream::Stream;
-use futures::FutureExt;
 
 use crate::config::GpuSpatialJoinConfig;
 use crate::gpu_backend::GpuBackend;
@@ -135,7 +133,7 @@ impl GpuSpatialJoinStream {
     /// 1. Awaits shared left-side build data from once_build_data
     /// 2. Reads the right partition specified by `partition` parameter
     /// 3. Executes GPU join between shared left data and this partition's right data
-    pub fn new_probe(
+    pub(crate) fn new_probe(
         once_build_data: crate::once_fut::OnceFut<crate::build_data::GpuBuildData>,
         right: Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
