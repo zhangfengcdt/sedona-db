@@ -20,9 +20,9 @@ use std::sync::Arc;
 use arrow_array::builder::BinaryBuilder;
 use datafusion_common::{error::Result, exec_err};
 use datafusion_expr::ColumnarValue;
-use geo_generic_alg::Centroid;
 use sedona_expr::scalar_udf::{ScalarKernelRef, SedonaScalarKernel};
 use sedona_functions::executor::WkbExecutor;
+use sedona_geo_generic_alg::Centroid;
 use sedona_geometry::is_empty::is_geometry_empty;
 use sedona_schema::{
     datatypes::{SedonaType, WKB_GEOMETRY},
@@ -54,8 +54,10 @@ impl SedonaScalarKernel for STCentroid {
         args: &[ColumnarValue],
     ) -> Result<ColumnarValue> {
         let executor = WkbExecutor::new(arg_types, args);
-        let mut builder =
-            BinaryBuilder::with_capacity(executor.num_iterations(), WKB_MIN_PROBABLE_BYTES);
+        let mut builder = BinaryBuilder::with_capacity(
+            executor.num_iterations(),
+            WKB_MIN_PROBABLE_BYTES * executor.num_iterations(),
+        );
         executor.execute_wkb_void(|maybe_wkb| {
             match maybe_wkb {
                 Some(wkb) => {

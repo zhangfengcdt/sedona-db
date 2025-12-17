@@ -27,6 +27,21 @@ fn criterion_benchmark(c: &mut Criterion) {
     benchmark::scalar(c, &f, "geo", "st_area", Polygon(10));
     benchmark::scalar(c, &f, "geo", "st_area", Polygon(500));
 
+    benchmark::scalar(
+        c,
+        &f,
+        "geo",
+        "st_buffer",
+        ArrayScalar(Polygon(10), Float64(1.0, 10.0)),
+    );
+    benchmark::scalar(
+        c,
+        &f,
+        "geo",
+        "st_buffer",
+        ArrayScalar(Polygon(50), Float64(1.0, 10.0)), // Reduced from 500 so that it can finish
+    );
+
     benchmark::scalar(c, &f, "geo", "st_perimeter", Polygon(10));
     benchmark::scalar(c, &f, "geo", "st_perimeter", Polygon(500));
 
@@ -76,9 +91,9 @@ fn criterion_benchmark_aggr(c: &mut Criterion) {
         f.add_aggregate_udf_kernel(name, kernel).unwrap();
     }
 
-    // st_intersection_aggr would need its own configuration because most of the generated
+    // st_intersection_agg would need its own configuration because most of the generated
     // polygons would not intersect and result in empty output almost immediately
-    benchmark::aggregate(c, &f, "geo", "st_union_aggr", Polygon(10));
+    benchmark::aggregate(c, &f, "geo", "st_union_agg", Polygon(10));
 }
 
 criterion_group!(benches, criterion_benchmark);

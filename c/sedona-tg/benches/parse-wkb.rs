@@ -14,7 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use geo::{LineString, Point};
 use sedona_tg::tg::Geom;
 
@@ -27,14 +27,18 @@ fn criterion_benchmark(c: &mut Criterion) {
     wkb::writer::write_geometry(
         &mut large_geom_wkb_big_endian,
         &large_geom,
-        wkb::Endianness::BigEndian,
+        &wkb::writer::WriteOptions {
+            endianness: wkb::Endianness::BigEndian,
+        },
     )
     .unwrap();
     let mut large_geom_wkb_little_endian = Vec::new();
     wkb::writer::write_geometry(
         &mut large_geom_wkb_little_endian,
         &large_geom,
-        wkb::Endianness::LittleEndian,
+        &wkb::writer::WriteOptions {
+            endianness: wkb::Endianness::LittleEndian,
+        },
     )
     .unwrap();
 
@@ -44,7 +48,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 &large_geom_wkb_big_endian,
                 sedona_tg::tg::IndexType::Unindexed,
             );
-            black_box(result)
+            std::hint::black_box(result)
         })
     });
 
@@ -54,7 +58,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 &large_geom_wkb_little_endian,
                 sedona_tg::tg::IndexType::Unindexed,
             );
-            black_box(result)
+            std::hint::black_box(result)
         })
     });
 }

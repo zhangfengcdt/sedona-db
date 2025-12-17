@@ -61,6 +61,16 @@ impl InternalDataFrame {
         PySedonaSchema::new(arrow_schema.clone())
     }
 
+    fn columns(&self) -> Result<Vec<String>, PySedonaError> {
+        Ok(self
+            .inner
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().to_string())
+            .collect())
+    }
+
     fn primary_geometry_column(&self) -> Result<Option<String>, PySedonaError> {
         Ok(self
             .inner
@@ -173,6 +183,18 @@ impl InternalDataFrame {
         } else {
             writer_options.geoparquet_version = GeoParquetVersion::Omitted;
         }
+
+        // Resolve writer options from the context configuration
+        let global_parquet_options = ctx
+            .inner
+            .ctx
+            .state()
+            .config()
+            .options()
+            .execution
+            .parquet
+            .clone();
+        writer_options.inner.global = global_parquet_options;
 
         wait_for_future(
             py,

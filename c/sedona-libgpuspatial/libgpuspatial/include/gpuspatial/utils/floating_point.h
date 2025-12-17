@@ -1,8 +1,3 @@
-
-
-#ifndef GPUSPATIAL_UTILS_FLOATING_POINT_H
-#define GPUSPATIAL_UTILS_FLOATING_POINT_H
-
 /*
  * Copyright (c) 2022-2023, NVIDIA CORPORATION.
  *
@@ -20,11 +15,11 @@
  */
 #pragma once
 
+#include "gpuspatial/utils/cuda_utils.h"
+
 #include <cmath>
 #include <cstdint>
 #include <type_traits>
-#include "gpuspatial/utils/cuda_utils.h"
-
 namespace gpuspatial {
 
 constexpr unsigned default_max_ulp = 4;
@@ -129,5 +124,3 @@ bool DEV_HOST float_equal(T const& flhs, T const& frhs) {
 }
 
 }  // namespace gpuspatial
-
-#endif  // GPUSPATIAL_UTILS_FLOATING_POINT_H

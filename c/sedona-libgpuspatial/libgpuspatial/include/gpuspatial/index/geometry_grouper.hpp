@@ -1,19 +1,34 @@
-#ifndef GPUSPATIAL_INDEX_GEOMETRY_GROUPER_HPP
-#define GPUSPATIAL_INDEX_GEOMETRY_GROUPER_HPP
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+#pragma once
 #include "gpuspatial/geom/box.cuh"
 #include "gpuspatial/loader/device_geometries.cuh"
 #include "gpuspatial/utils/launcher.h"
 #include "gpuspatial/utils/morton_code.h"
 
-#include <memory>
-
-#include <rmm/cuda_stream_view.hpp>
-#include <rmm/device_uvector.hpp>
-#include <rmm/exec_policy.hpp>
+#include "rmm/cuda_stream_view.hpp"
+#include "rmm/device_uvector.hpp"
+#include "rmm/exec_policy.hpp"
 
 #include <thrust/sequence.h>
 #include <thrust/sort.h>
 #include <thrust/transform_reduce.h>
+
+#include <memory>
 
 namespace gpuspatial {
 template <typename POINT_T, typename INDEX_T>
@@ -186,7 +201,7 @@ class GeometryGrouper {
         p_n_geoms_per_aabb[aabb_id] = idx_end - idx_begin;
 
         for (auto idx = idx_begin + lane_id; idx < idx_end_rup; idx += 32) {
-          Box<POINT_T> mbr;
+          Box<Point<float, POINT_T::n_dim>> mbr;
 
           auto warp_begin = idx - lane_id;
           auto warp_end = std::min(warp_begin + 32, idx_end);
@@ -265,7 +280,7 @@ class GeometryGrouper {
     return {};
   }
 
-  void clear() {
+  void Clear() {
     aabbs_ = nullptr;
     prefix_sum_ = nullptr;
     reordered_indices_ = nullptr;
@@ -277,5 +292,3 @@ class GeometryGrouper {
   std::unique_ptr<rmm::device_uvector<INDEX_T>> reordered_indices_;
 };
 }  // namespace gpuspatial
-
-#endif  // GPUSPATIAL_INDEX_GEOMETRY_GROUPER_HPP

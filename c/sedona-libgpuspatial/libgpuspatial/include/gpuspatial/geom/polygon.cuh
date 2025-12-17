@@ -1,16 +1,31 @@
-#ifndef GPU_SPATIAL_POLYGON_VEW_CUH
-#define GPU_SPATIAL_POLYGON_VEW_CUH
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+#pragma once
+
+#include "gpuspatial/geom/box.cuh"
+#include "gpuspatial/geom/line_string.cuh"
+#include "gpuspatial/utils/array_view.h"
+#include "gpuspatial/utils/cuda_utils.h"
+#include "gpuspatial/utils/floating_point.h"
+
 #include <cub/block/block_reduce.cuh>
 #include <cub/warp/warp_reduce.cuh>
 
 #include <thrust/binary_search.h>
-
-#include "gpuspatial/geom/box.cuh"
-#include "gpuspatial/geom/line_string.cuh"
-#include "gpuspatial/geom/orientation.cuh"
-#include "gpuspatial/utils/array_view.h"
-#include "gpuspatial/utils/cuda_utils.h"
-#include "gpuspatial/utils/floating_point.h"
 
 namespace gpuspatial {
 
@@ -47,20 +62,6 @@ class LinearRing {
       return false;
     }
     return vertices_.size() >= 3;
-  }
-
-  /**
-    * Calculates the orientation of a ring (list of vertices) using the
-    * Summation of Cross Products (Signed Area).
-
-    * A positive result indicates Counter-Clockwise (CCW).
-    * A negative result indicates Clockwise (CW).
-    * A result near zero indicates a self-intersecting or degenerate polygon.
-    Formula: Sum( (x_i+1 - x_i) * (y_i+1 + y_i) )
-   * @return
-   */
-  DEV_HOST_INLINE bool IsCounterClockwise() const {
-    return Orientation<point_t>::IsCounterClockwise(vertices_);
   }
 
   DEV_HOST_INLINE PointLocation locate_point(const point_t& p) const {
@@ -207,7 +208,7 @@ class Polygon {
   using point_t = POINT_T;
   using index_t = INDEX_T;
   using ring_t = LinearRing<point_t>;
-  using box_t = Box<POINT_T>;
+  using box_t = Box<Point<float, point_t::n_dim>>;
   using scalar_t = typename point_t::scalar_t;
 
   Polygon() = default;
@@ -415,10 +416,10 @@ class Polygon {
 template <typename POINT_T, typename INDEX_T>
 class PolygonArrayView {
   using index_t = INDEX_T;
-  using box_t = Box<POINT_T>;
 
  public:
   using point_t = POINT_T;
+  using box_t = Box<Point<float, point_t::n_dim>>;
   using geometry_t = Polygon<POINT_T, INDEX_T>;
   PolygonArrayView() = default;
 
@@ -434,6 +435,8 @@ class PolygonArrayView {
   DEV_HOST_INLINE size_t size() const {
     return prefix_sum_polygons_.empty() ? 0 : prefix_sum_polygons_.size() - 1;
   }
+
+  DEV_HOST_INLINE bool empty() const { return size() == 0; }
 
   DEV_HOST_INLINE Polygon<point_t, index_t> operator[](size_t i) {
     auto ring_begin = prefix_sum_polygons_[i];
@@ -496,5 +499,3 @@ class PolygonArrayView {
 };
 
 }  // namespace gpuspatial
-
-#endif  // GPU_SPATIAL_POLYGON_VEW_CUH

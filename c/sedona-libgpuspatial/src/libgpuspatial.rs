@@ -1,3 +1,20 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 use crate::error::GpuSpatialError;
 use crate::libgpuspatial_glue_bindgen::*;
 use arrow_array::{ffi::FFI_ArrowArray, ArrayRef};
@@ -38,6 +55,12 @@ impl TryFrom<c_uint> for GpuSpatialPredicateWrapper {
             7 => Ok(GpuSpatialPredicateWrapper::CoveredBy),
             _ => Err("Invalid GpuSpatialPredicate value"),
         }
+    }
+}
+
+impl Default for GpuSpatialJoinerWrapper {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -126,8 +149,16 @@ impl GpuSpatialJoinerWrapper {
         offset: i64,
         length: i64,
     ) -> Result<(), GpuSpatialError> {
-        log::info!("DEBUG FFI: push_build called with offset={}, length={}", offset, length);
-        log::info!("DEBUG FFI: Array length={}, null_count={}", array.len(), array.null_count());
+        log::info!(
+            "DEBUG FFI: push_build called with offset={}, length={}",
+            offset,
+            length
+        );
+        log::info!(
+            "DEBUG FFI: Array length={}, null_count={}",
+            array.len(),
+            array.null_count()
+        );
 
         // 1. Convert the single ArrayRef to its FFI representation
         let (ffi_array, _) = arrow_array::ffi::to_ffi(&array.to_data())?;
@@ -218,9 +249,17 @@ impl GpuSpatialJoinerWrapper {
         predicate: GpuSpatialPredicateWrapper,
         array_index_offset: i32,
     ) -> Result<(), GpuSpatialError> {
-        log::info!("DEBUG FFI: push_stream called with offset={}, length={}, predicate={:?}",
-            offset, length, predicate);
-        log::info!("DEBUG FFI: Array length={}, null_count={}", array.len(), array.null_count());
+        log::info!(
+            "DEBUG FFI: push_stream called with offset={}, length={}, predicate={:?}",
+            offset,
+            length,
+            predicate
+        );
+        log::info!(
+            "DEBUG FFI: Array length={}, null_count={}",
+            array.len(),
+            array.null_count()
+        );
 
         // 1. Convert the single ArrayRef to its FFI representation
         let (ffi_array, _) = arrow_array::ffi::to_ffi(&array.to_data())?;
@@ -270,21 +309,21 @@ impl GpuSpatialJoinerWrapper {
                     &mut build_indices_ptr as *mut *mut c_void,
                     &mut build_indices_len as *mut u32,
                 );
-                
+
                 // Check length first - empty vectors return empty slice
                 if build_indices_len == 0 {
                     return &[];
                 }
-                
+
                 // Validate pointer (should not be null if length > 0)
                 if build_indices_ptr.is_null() {
                     return &[];
                 }
-                
+
                 // Convert the raw pointer to a slice. This is safe to do because
                 // we've validated the pointer is non-null and length is valid.
                 let typed_ptr = build_indices_ptr as *const u32;
-                
+
                 // Safety: We've checked ptr is non-null and len > 0
                 return std::slice::from_raw_parts(typed_ptr, build_indices_len as usize);
             }
@@ -303,21 +342,21 @@ impl GpuSpatialJoinerWrapper {
                     &mut stream_indices_ptr as *mut *mut c_void,
                     &mut stream_indices_len as *mut u32,
                 );
-                
+
                 // Check length first - empty vectors return empty slice
                 if stream_indices_len == 0 {
                     return &[];
                 }
-                
+
                 // Validate pointer (should not be null if length > 0)
                 if stream_indices_ptr.is_null() {
                     return &[];
                 }
-                
+
                 // Convert the raw pointer to a slice. This is safe to do because
                 // we've validated the pointer is non-null and length is valid.
                 let typed_ptr = stream_indices_ptr as *const u32;
-                
+
                 // Safety: We've checked ptr is non-null and len > 0
                 return std::slice::from_raw_parts(typed_ptr, stream_indices_len as usize);
             }
@@ -350,14 +389,13 @@ impl Drop for GpuSpatialJoinerWrapper {
 mod test {
     use super::*;
     use sedona_expr::scalar_udf::SedonaScalarUDF;
-    use std::env;
-    use std::path::PathBuf;
-    // use arrow_array::{create_array as arrow_array, ArrayRef};
     use sedona_geos::register::scalar_kernels;
     use sedona_schema::crs::lnglat;
     use sedona_schema::datatypes::{Edges, SedonaType, WKB_GEOMETRY};
     use sedona_testing::create::create_array_storage;
     use sedona_testing::testers::ScalarUdfTester;
+    use std::env;
+    use std::path::PathBuf;
 
     #[test]
     fn test_gpu_joiner_end2end() {
@@ -452,7 +490,7 @@ mod test {
                 let result = tester
                     .invoke_scalar_scalar(poly.unwrap(), point.unwrap())
                     .unwrap();
-                if result == Some(true).unwrap().into() {
+                if result == true.into() {
                     answer_pairs.push((poly_index as u32, point_index as u32));
                 }
             }

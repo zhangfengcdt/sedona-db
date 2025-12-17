@@ -14,22 +14,26 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use std::ptr::swap_nonoverlapping;
-use std::sync::Arc;
 
 use arrow_array::ffi::FFI_ArrowSchema;
 use arrow_array::ffi_stream::FFI_ArrowArrayStream;
 use arrow_array::{RecordBatchIterator, RecordBatchReader};
 use datafusion::catalog::MemTable;
 use datafusion::prelude::DataFrame;
-use savvy::{savvy, savvy_err, Result};
-use sedona::context::SedonaDataFrame;
+use datafusion_common::Column;
+use datafusion_expr::{select_expr::SelectExpr, Expr, SortExpr};
+use datafusion_ffi::table_provider::FFI_TableProvider;
+use savvy::{savvy, savvy_err, sexp, IntoExtPtrSexp, Result};
+use sedona::context::{SedonaDataFrame, SedonaWriteOptions};
 use sedona::reader::SedonaStreamReader;
 use sedona::show::{DisplayMode, DisplayTableOptions};
+use sedona_geoparquet::options::{GeoParquetVersion, TableGeoParquetOptions};
 use sedona_schema::schema::SedonaSchema;
+use std::{iter::zip, ptr::swap_nonoverlapping, sync::Arc};
 use tokio::runtime::Runtime;
 
 use crate::context::InternalContext;
+use crate::ffi::{import_schema, FFITableProviderR};
 use crate::runtime::wait_for_future_captured_r;
 
 #[savvy]
@@ -83,10 +87,20 @@ impl InternalDataFrame {
         Ok(())
     }
 
-    fn to_arrow_stream(&self, out: savvy::Sexp) -> Result<()> {
+    fn to_arrow_stream(&self, out: savvy::Sexp, requested_schema_xptr: savvy::Sexp) -> Result<()> {
         let out_void = unsafe { savvy_ffi::R_ExternalPtrAddr(out.0) };
         if out_void.is_null() {
             return Err(savvy_err!("external pointer to null in to_arrow_stream()"));
+        }
+
+        let maybe_requested_schema = if requested_schema_xptr.is_null() {
+            None
+        } else {
+            Some(import_schema(requested_schema_xptr))
+        };
+
+        if maybe_requested_schema.is_some() {
+            return Err(savvy_err!("Requested schema is not supported"));
         }
 
         let inner = self.inner.clone();
@@ -104,6 +118,21 @@ impl InternalDataFrame {
         unsafe { swap_nonoverlapping(&mut ffi_stream, ffi_out, 1) };
 
         Ok(())
+    }
+
+    fn to_provider(&self) -> Result<savvy::Sexp> {
+        let provider = self.inner.clone().into_view();
+        // Literal true is because the TableProvider that wraps this DataFrame
+        // can support filters being pushed down.
+        let ffi_provider =
+            FFI_TableProvider::new(provider, true, Some(self.runtime.handle().clone()));
+
+        let mut ffi_xptr = FFITableProviderR(ffi_provider).into_external_pointer();
+        unsafe { savvy_ffi::Rf_protect(ffi_xptr.0) };
+        ffi_xptr.set_class(vec!["datafusion_table_provider"])?;
+        unsafe { savvy_ffi::Rf_unprotect(1) };
+
+        Ok(ffi_xptr)
     }
 
     fn compute(&self, ctx: &InternalContext) -> Result<InternalDataFrame> {
@@ -190,5 +219,93 @@ impl InternalDataFrame {
         })??;
 
         savvy::Sexp::try_from(out_string)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn to_parquet(
+        &self,
+        ctx: &InternalContext,
+        path: &str,
+        partition_by: savvy::Sexp,
+        sort_by: savvy::Sexp,
+        single_file_output: bool,
+        overwrite_bbox_columns: bool,
+        geoparquet_version: Option<&str>,
+    ) -> savvy::Result<()> {
+        let partition_by_strsxp = savvy::StringSexp::try_from(partition_by)?;
+        let partition_by_vec = partition_by_strsxp
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+
+        let sort_by_strsxp = savvy::StringSexp::try_from(sort_by)?;
+        let sort_by_vec = sort_by_strsxp
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+
+        let sort_by_expr = sort_by_vec
+            .iter()
+            .map(|name| {
+                let column = Expr::Column(Column::new_unqualified(name));
+                SortExpr::new(column, true, false)
+            })
+            .collect::<Vec<_>>();
+
+        let options = SedonaWriteOptions::new()
+            .with_partition_by(partition_by_vec)
+            .with_sort_by(sort_by_expr)
+            .with_single_file_output(single_file_output);
+
+        let mut writer_options = TableGeoParquetOptions::new();
+        writer_options.overwrite_bbox_columns = overwrite_bbox_columns;
+        if let Some(geoparquet_version) = geoparquet_version {
+            writer_options.geoparquet_version = geoparquet_version
+                .parse()
+                .map_err(|e| savvy::Error::new(format!("Invalid geoparquet_version: {e}")))?;
+        } else {
+            writer_options.geoparquet_version = GeoParquetVersion::Omitted;
+        }
+
+        // Resolve writer options from the context configuration
+        let global_parquet_options = ctx
+            .inner
+            .ctx
+            .state()
+            .config()
+            .options()
+            .execution
+            .parquet
+            .clone();
+        writer_options.inner.global = global_parquet_options;
+
+        let inner = self.inner.clone();
+        let inner_context = ctx.inner.clone();
+        let path_owned = path.to_string();
+
+        wait_for_future_captured_r(&self.runtime, async move {
+            inner
+                .write_geoparquet(&inner_context, &path_owned, options, Some(writer_options))
+                .await
+        })??;
+
+        Ok(())
+    }
+
+    fn select_indices(&self, names: sexp::Sexp, indices: sexp::Sexp) -> Result<InternalDataFrame> {
+        let names_strsxp = savvy::StringSexp::try_from(names)?;
+        let indices_intsxp = savvy::IntegerSexp::try_from(indices)?;
+
+        let df_schema = self.inner.schema();
+        let exprs = zip(names_strsxp.iter(), indices_intsxp.iter())
+            .map(|(name, index)| {
+                let (table_ref, field) = df_schema.qualified_field(usize::try_from(*index)?);
+                let column = Column::new(table_ref.cloned(), field.name());
+                Ok(SelectExpr::Expression(Expr::Column(column).alias(name)))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let inner = self.inner.clone().select(exprs)?;
+        Ok(new_data_frame(inner, self.runtime.clone()))
     }
 }

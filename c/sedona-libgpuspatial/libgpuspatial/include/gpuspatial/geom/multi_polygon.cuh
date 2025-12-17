@@ -1,5 +1,20 @@
-#ifndef GPUSPATIAL_GEOM_MULTI_POLYGON_CUH
-#define GPUSPATIAL_GEOM_MULTI_POLYGON_CUH
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+#pragma once
 #include "gpuspatial/geom/polygon.cuh"
 
 namespace gpuspatial {
@@ -8,7 +23,7 @@ class MultiPolygon {
  public:
   using point_t = POINT_T;
   using line_segments_view_t = LineString<point_t>;
-  using box_t = Box<POINT_T>;
+  using box_t = Box<Point<float, point_t::n_dim>>;
 
   MultiPolygon() = default;
 
@@ -76,10 +91,9 @@ class MultiPolygon {
  */
 template <typename POINT_T, typename INDEX_T>
 class MultiPolygonArrayView {
-  using box_t = Box<POINT_T>;
-
  public:
   using point_t = POINT_T;
+  using box_t = Box<Point<float, point_t::n_dim>>;
   using geometry_t = MultiPolygon<point_t, INDEX_T>;
   MultiPolygonArrayView() = default;
 
@@ -97,6 +111,8 @@ class MultiPolygonArrayView {
   DEV_HOST_INLINE size_t size() const {
     return prefix_sum_geoms_.empty() ? 0 : prefix_sum_geoms_.size() - 1;
   }
+
+  DEV_HOST_INLINE bool empty() const { return size() == 0; }
 
   DEV_HOST_INLINE MultiPolygon<point_t, INDEX_T> operator[](size_t i) {
     auto part_begin = prefix_sum_geoms_[i];
@@ -168,4 +184,3 @@ class MultiPolygonArrayView {
   ArrayView<box_t> mbrs_;
 };
 }  // namespace gpuspatial
-#endif  // GPUSPATIAL_GEOM_MULTI_POLYGON_CUH

@@ -24,6 +24,7 @@ import geopandas.testing
 import pytest
 import shapely
 from pyarrow import parquet
+import sedonadb
 from sedonadb._lib import SedonaError
 from sedonadb.testing import DuckDB, SedonaDB, geom_or_null, skip_if_not_exists
 
@@ -164,6 +165,8 @@ def test_read_geoparquet_prune_points(geoarrow_data, name, predicate):
         "contains",
         "covers",
         "touches",
+        "crosses",
+        "overlaps",
     ],
 )
 def test_read_geoparquet_prune_polygons(sedona_testing, predicate):
@@ -176,9 +179,16 @@ def test_read_geoparquet_prune_polygons(sedona_testing, predicate):
     # A point inside of a polygon for contains / covers
     wkt_filter = "POINT (33.60 -5.54)"
 
+    # Use a wkt_filter that will lead to non-empty results
     if predicate == "touches":
         # A point on the boundary of a polygon
         wkt_filter = "POINT (33.90371119710453 -0.9500000000000001)"
+    elif predicate == "overlaps":
+        # A polygon that intersects the polygon but neither contain each other
+        wkt_filter = "POLYGON ((33 -1.9, 33.00 0, 34 0, 34 -1.9, 33 -1.9))"
+    elif predicate == "crosses":
+        # A linestring that intersects the polygon but is not contained by it
+        wkt_filter = "LINESTRING (33 -1.9, 33.00 0, 34 0, 34 -1.9, 33 -1.9)"
 
     poly_filter = shapely.from_wkt(wkt_filter)
 
@@ -258,6 +268,28 @@ def test_write_geoparquet_geometry(con, geoarrow_data, name):
 
         gdf_roundtrip = geopandas.read_parquet(tmp_parquet)
         geopandas.testing.assert_geodataframe_equal(gdf_roundtrip, gdf)
+
+
+def test_write_geoparquet_options(geoarrow_data):
+    path = geoarrow_data / "ns-water" / "files" / "ns-water_water-point_geo.parquet"
+    skip_if_not_exists(path)
+
+    # Create a dedicated context here because we are about to mess with options
+    con = sedonadb.connect()
+    gdf = geopandas.read_parquet(path).sort_values(by="OBJECTID").reset_index(drop=True)
+
+    with tempfile.TemporaryDirectory() as td:
+        tmp_parquet = Path(td) / "tmp.parquet"
+
+        # Set a very tiny row group size on purpose
+        con.sql("SET datafusion.execution.parquet.max_row_group_size = 1024").execute()
+        con.create_data_frame(gdf).to_parquet(tmp_parquet)
+
+        gdf_roundtrip = geopandas.read_parquet(tmp_parquet)
+        geopandas.testing.assert_geodataframe_equal(gdf_roundtrip, gdf)
+
+        metadata = parquet.read_metadata(tmp_parquet)
+        assert metadata.row_group(0).num_rows == 1024
 
 
 def test_write_geoparquet_1_1(con, geoarrow_data):

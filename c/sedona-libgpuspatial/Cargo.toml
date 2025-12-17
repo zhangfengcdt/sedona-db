@@ -32,9 +32,9 @@ default = []
 gpu = []
 
 [build-dependencies]
-bindgen = "0.71.0"
+bindgen = "0.72.1"
 cmake = "0.1"
-which = "6.0"
+which = "8.0"
 
 [dependencies]
 arrow-array = { workspace = true, features = ["ffi"] }

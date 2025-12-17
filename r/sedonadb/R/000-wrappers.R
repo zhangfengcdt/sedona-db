@@ -77,6 +77,12 @@ NULL
   }
 }
 
+`InternalContext_data_frame_from_table_provider` <- function(self) {
+  function(`provider_xptr`) {
+    .savvy_wrap_InternalDataFrame(.Call(savvy_InternalContext_data_frame_from_table_provider__impl, `self`, `provider_xptr`))
+  }
+}
+
 `InternalContext_deregister_table` <- function(self) {
   function(`table_ref`) {
     invisible(.Call(savvy_InternalContext_deregister_table__impl, `self`, `table_ref`))
@@ -86,6 +92,18 @@ NULL
 `InternalContext_read_parquet` <- function(self) {
   function(`paths`) {
     .savvy_wrap_InternalDataFrame(.Call(savvy_InternalContext_read_parquet__impl, `self`, `paths`))
+  }
+}
+
+`InternalContext_register_scalar_udf` <- function(self) {
+  function(`scalar_udf_xptr`) {
+    invisible(.Call(savvy_InternalContext_register_scalar_udf__impl, `self`, `scalar_udf_xptr`))
+  }
+}
+
+`InternalContext_scalar_udf_xptr` <- function(self) {
+  function(`name`) {
+    .Call(savvy_InternalContext_scalar_udf_xptr__impl, `self`, `name`)
   }
 }
 
@@ -105,12 +123,15 @@ NULL
   e <- new.env(parent = emptyenv())
   e$.ptr <- ptr
   e$`data_frame_from_array_stream` <- `InternalContext_data_frame_from_array_stream`(ptr)
+  e$`data_frame_from_table_provider` <- `InternalContext_data_frame_from_table_provider`(ptr)
   e$`deregister_table` <- `InternalContext_deregister_table`(ptr)
   e$`read_parquet` <- `InternalContext_read_parquet`(ptr)
+  e$`register_scalar_udf` <- `InternalContext_register_scalar_udf`(ptr)
+  e$`scalar_udf_xptr` <- `InternalContext_scalar_udf_xptr`(ptr)
   e$`sql` <- `InternalContext_sql`(ptr)
   e$`view` <- `InternalContext_view`(ptr)
 
-  class(e) <- c("InternalContext", "savvy_sedonadb__sealed")
+  class(e) <- c("sedonadb::InternalContext", "InternalContext", "savvy_sedonadb__sealed")
   e
 }
 
@@ -125,11 +146,11 @@ NULL
 }
 
 
-class(`InternalContext`) <- c("InternalContext__bundle", "savvy_sedonadb__sealed")
+class(`InternalContext`) <- c("sedonadb::InternalContext__bundle", "savvy_sedonadb__sealed")
 
 #' @export
-`print.InternalContext__bundle` <- function(x, ...) {
-  cat('InternalContext\n')
+`print.sedonadb::InternalContext__bundle` <- function(x, ...) {
+  cat('sedonadb::InternalContext\n')
 }
 
 ### wrapper functions for InternalDataFrame
@@ -142,7 +163,7 @@ class(`InternalContext`) <- c("InternalContext__bundle", "savvy_sedonadb__sealed
 
 `InternalDataFrame_compute` <- function(self) {
   function(`ctx`) {
-    `ctx` <- .savvy_extract_ptr(`ctx`, "InternalContext")
+    `ctx` <- .savvy_extract_ptr(`ctx`, "sedonadb::InternalContext")
     .savvy_wrap_InternalDataFrame(.Call(savvy_InternalDataFrame_compute__impl, `self`, `ctx`))
   }
 }
@@ -165,9 +186,15 @@ class(`InternalContext`) <- c("InternalContext__bundle", "savvy_sedonadb__sealed
   }
 }
 
+`InternalDataFrame_select_indices` <- function(self) {
+  function(`names`, `indices`) {
+    .savvy_wrap_InternalDataFrame(.Call(savvy_InternalDataFrame_select_indices__impl, `self`, `names`, `indices`))
+  }
+}
+
 `InternalDataFrame_show` <- function(self) {
   function(`ctx`, `width_chars`, `ascii`, `limit` = NULL) {
-    `ctx` <- .savvy_extract_ptr(`ctx`, "InternalContext")
+    `ctx` <- .savvy_extract_ptr(`ctx`, "sedonadb::InternalContext")
     .Call(savvy_InternalDataFrame_show__impl, `self`, `ctx`, `width_chars`, `ascii`, `limit`)
   }
 }
@@ -179,14 +206,27 @@ class(`InternalContext`) <- c("InternalContext__bundle", "savvy_sedonadb__sealed
 }
 
 `InternalDataFrame_to_arrow_stream` <- function(self) {
-  function(`out`) {
-    invisible(.Call(savvy_InternalDataFrame_to_arrow_stream__impl, `self`, `out`))
+  function(`out`, `requested_schema_xptr`) {
+    invisible(.Call(savvy_InternalDataFrame_to_arrow_stream__impl, `self`, `out`, `requested_schema_xptr`))
+  }
+}
+
+`InternalDataFrame_to_parquet` <- function(self) {
+  function(`ctx`, `path`, `partition_by`, `sort_by`, `single_file_output`, `overwrite_bbox_columns`, `geoparquet_version` = NULL) {
+    `ctx` <- .savvy_extract_ptr(`ctx`, "sedonadb::InternalContext")
+    invisible(.Call(savvy_InternalDataFrame_to_parquet__impl, `self`, `ctx`, `path`, `partition_by`, `sort_by`, `single_file_output`, `overwrite_bbox_columns`, `geoparquet_version`))
+  }
+}
+
+`InternalDataFrame_to_provider` <- function(self) {
+  function() {
+    .Call(savvy_InternalDataFrame_to_provider__impl, `self`)
   }
 }
 
 `InternalDataFrame_to_view` <- function(self) {
   function(`ctx`, `table_ref`, `overwrite`) {
-    `ctx` <- .savvy_extract_ptr(`ctx`, "InternalContext")
+    `ctx` <- .savvy_extract_ptr(`ctx`, "sedonadb::InternalContext")
     invisible(.Call(savvy_InternalDataFrame_to_view__impl, `self`, `ctx`, `table_ref`, `overwrite`))
   }
 }
@@ -199,12 +239,15 @@ class(`InternalContext`) <- c("InternalContext__bundle", "savvy_sedonadb__sealed
   e$`count` <- `InternalDataFrame_count`(ptr)
   e$`limit` <- `InternalDataFrame_limit`(ptr)
   e$`primary_geometry_column_index` <- `InternalDataFrame_primary_geometry_column_index`(ptr)
+  e$`select_indices` <- `InternalDataFrame_select_indices`(ptr)
   e$`show` <- `InternalDataFrame_show`(ptr)
   e$`to_arrow_schema` <- `InternalDataFrame_to_arrow_schema`(ptr)
   e$`to_arrow_stream` <- `InternalDataFrame_to_arrow_stream`(ptr)
+  e$`to_parquet` <- `InternalDataFrame_to_parquet`(ptr)
+  e$`to_provider` <- `InternalDataFrame_to_provider`(ptr)
   e$`to_view` <- `InternalDataFrame_to_view`(ptr)
 
-  class(e) <- c("InternalDataFrame", "savvy_sedonadb__sealed")
+  class(e) <- c("sedonadb::InternalDataFrame", "InternalDataFrame", "savvy_sedonadb__sealed")
   e
 }
 
@@ -216,9 +259,9 @@ class(`InternalContext`) <- c("InternalContext__bundle", "savvy_sedonadb__sealed
 
 
 
-class(`InternalDataFrame`) <- c("InternalDataFrame__bundle", "savvy_sedonadb__sealed")
+class(`InternalDataFrame`) <- c("sedonadb::InternalDataFrame__bundle", "savvy_sedonadb__sealed")
 
 #' @export
-`print.InternalDataFrame__bundle` <- function(x, ...) {
-  cat('InternalDataFrame\n')
+`print.sedonadb::InternalDataFrame__bundle` <- function(x, ...) {
+  cat('sedonadb::InternalDataFrame\n')
 }

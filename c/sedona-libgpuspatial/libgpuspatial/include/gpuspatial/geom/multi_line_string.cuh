@@ -1,5 +1,20 @@
-#ifndef GPUSPATIAL_GEOM_MULTI_LINE_STRING_CUH
-#define GPUSPATIAL_GEOM_MULTI_LINE_STRING_CUH
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+#pragma once
 #include "gpuspatial/geom/line_string.cuh"
 #include "gpuspatial/utils/array_view.h"
 #include "gpuspatial/utils/cuda_utils.h"
@@ -9,7 +24,7 @@ template <typename POINT_T, typename INDEX_T>
 class MultiLineString {
  public:
   using point_t = POINT_T;
-  using box_t = Box<POINT_T>;
+  using box_t = Box<Point<float, point_t::n_dim>>;
 
   MultiLineString() = default;
 
@@ -47,10 +62,9 @@ class MultiLineString {
 
 template <typename POINT_T, typename INDEX_T>
 class MultiLineStringArrayView {
-  using box_t = Box<POINT_T>;
-
  public:
   using point_t = POINT_T;
+  using box_t = Box<Point<float, point_t::n_dim>>;
   using geometry_t = MultiLineString<POINT_T, INDEX_T>;
 
   MultiLineStringArrayView() = default;
@@ -67,6 +81,8 @@ class MultiLineStringArrayView {
   DEV_HOST_INLINE size_t size() const {
     return prefix_sum_geoms_.empty() ? 0 : prefix_sum_geoms_.size() - 1;
   }
+
+  DEV_HOST_INLINE bool empty() const { return size() == 0; }
 
   DEV_HOST_INLINE MultiLineString<POINT_T, INDEX_T> operator[](size_t i) {
     auto begin = prefix_sum_geoms_[i];
@@ -103,5 +119,3 @@ class MultiLineStringArrayView {
 };
 
 }  // namespace gpuspatial
-
-#endif

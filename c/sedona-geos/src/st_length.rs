@@ -74,14 +74,14 @@ impl SedonaScalarKernel for STLength {
 fn invoke_scalar(geos_geom: &geos::Geometry) -> GResult<f64> {
     // The .length() property may return non-zero values for non line geometries,
     // so we check for the geometry type here
-    match geos_geom.geometry_type() {
+    match geos_geom.geometry_type()? {
         LineString => Ok(geos_geom.length()?),
         MultiLineString => Ok(geos_geom.length()?),
         GeometryCollection => {
             let mut sum = 0.0;
             for i in 0..geos_geom.get_num_geometries()? {
                 let geom = geos_geom.get_geometry_n(i)?;
-                match geom.geometry_type() {
+                match geom.geometry_type()? {
                     LineString => sum += geom.length()?,
                     MultiLineString => sum += geom.length()?,
                     _ => {}
@@ -96,6 +96,7 @@ fn invoke_scalar(geos_geom: &geos::Geometry) -> GResult<f64> {
 #[cfg(test)]
 mod tests {
     use arrow_array::{create_array, ArrayRef};
+    use datafusion_common::ScalarValue;
     use rstest::rstest;
     use sedona_expr::scalar_udf::SedonaScalarUDF;
     use sedona_schema::datatypes::{WKB_GEOMETRY, WKB_VIEW_GEOMETRY};
@@ -105,8 +106,6 @@ mod tests {
 
     #[rstest]
     fn udf(#[values(WKB_GEOMETRY, WKB_VIEW_GEOMETRY)] sedona_type: SedonaType) {
-        use datafusion_common::ScalarValue;
-
         let udf = SedonaScalarUDF::from_kernel("st_length", st_length_impl());
         let tester = ScalarUdfTester::new(udf.into(), vec![sedona_type]);
         tester.assert_return_type(DataType::Float64);

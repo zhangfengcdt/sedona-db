@@ -65,7 +65,7 @@ pub fn configure_global_proj_engine(builder: ProjCrsEngineBuilder) -> Result<()>
 
 /// Do something with the global thread-local PROJ engine, creating it if it has not
 /// already been created.
-fn with_global_proj_engine(
+pub(crate) fn with_global_proj_engine(
     mut func: impl FnMut(&CachingCrsEngine<ProjCrsEngine>) -> Result<()>,
 ) -> Result<()> {
     PROJ_ENGINE.with(|engine_cell| {
@@ -192,8 +192,7 @@ impl SedonaScalarKernel for STTransform {
         // If there is no CRS argument, we cannot determine the return type.
         match crs_str_opt {
             Some(to_crs) => {
-                let val = serde_json::Value::String(to_crs.to_string());
-                let crs = deserialize_crs(&val)?;
+                let crs = deserialize_crs(&to_crs)?;
                 Ok(Some(SedonaType::Wkb(Edges::Planar, crs)))
             }
             _ => Ok(Some(SedonaType::Wkb(Edges::Planar, None))),
@@ -293,7 +292,7 @@ fn invoke_scalar(wkb: &Wkb, trans: &dyn CrsTransform, builder: &mut BinaryBuilde
 fn parse_source_crs(source_type: &SedonaType) -> Result<Option<String>> {
     match source_type {
         SedonaType::Wkb(_, Some(crs)) | SedonaType::WkbView(_, Some(crs)) => {
-            crs.to_authority_code()
+            Ok(Some(crs.to_crs_string()))
         }
         _ => Ok(None),
     }
@@ -331,6 +330,7 @@ mod tests {
     use super::*;
     use arrow_array::ArrayRef;
     use arrow_schema::{DataType, Field};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
     use rstest::rstest;
     use sedona_expr::scalar_udf::SedonaScalarUDF;
@@ -570,8 +570,7 @@ mod tests {
     }
 
     fn get_crs(auth_code: &str) -> Crs {
-        let crs_value = serde_json::Value::String(auth_code.to_string());
-        deserialize_crs(&crs_value).unwrap()
+        deserialize_crs(auth_code).unwrap()
     }
 
     fn invoke_udf_test(
@@ -608,6 +607,7 @@ mod tests {
             arg_fields: arg_fields.to_vec(),
             number_rows: row_count,
             return_field,
+            config_options: Arc::new(ConfigOptions::default()),
         };
 
         let value = udf.invoke_with_args(args)?;

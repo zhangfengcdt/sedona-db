@@ -50,6 +50,4 @@ __pycache__
 # .env file for release management
 dev/release/.env
 
-
-venv/
-
+/.luarc.json

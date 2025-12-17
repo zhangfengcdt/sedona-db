@@ -1,3 +1,19 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
 
 #include "geoarrow/geoarrow.hpp"
 #include "nanoarrow/nanoarrow.hpp"
@@ -25,7 +41,7 @@ inline void MakeWKBArrayFromWKT(const std::vector<std::string>& wkts,
   // Convert it to WKB using the ArrayReader and ArrayWriter
   geoarrow::ArrayReader reader(GEOARROW_TYPE_WKT);
   geoarrow::ArrayWriter writer(GEOARROW_TYPE_WKB);
-  struct GeoArrowError error {};
+  struct GeoArrowError error{};
 
   reader.SetArrayNonOwning(wkt_array.get());
   GEOARROW_THROW_NOT_OK(&error,
@@ -37,7 +53,7 @@ inline std::vector<std::string> ReadWKBArray(const struct ArrowArray* wkb_array)
   // Convert array to WKT using the ArrayReader and ArrayWriter
   geoarrow::ArrayReader reader(GEOARROW_TYPE_WKB);
   geoarrow::ArrayWriter writer(GEOARROW_TYPE_WKT);
-  struct GeoArrowError error {};
+  struct GeoArrowError error{};
 
   reader.SetArrayNonOwning(wkb_array);
   GEOARROW_THROW_NOT_OK(&error,
@@ -128,9 +144,9 @@ class WKBBounder {
   }
 
  private:
-  struct GeoArrowError error_ {};
+  struct GeoArrowError error_{};
   struct ArrowArrayView array_view_;
-  struct GeoArrowWKBReader reader_ {};
+  struct GeoArrowWKBReader reader_{};
   BoxXY bounds_{BoxXY::Empty()};
 };
 
