@@ -32,14 +32,6 @@ use crate::config::GpuSpatialJoinConfig;
 use crate::gpu_backend::GpuBackend;
 use std::time::Instant;
 
-/// Stream that executes GPU spatial join
-///
-/// This stream manages the entire GPU spatial join lifecycle:
-/// 1. Initialize GPU context
-/// 2. Read data from left child stream
-/// 3. Read data from right child stream
-/// 4. Execute GPU spatial join
-/// 5. Emit result batches
 /// Metrics for GPU spatial join operations
 pub(crate) struct GpuSpatialJoinMetrics {
     /// Total time for GPU join execution

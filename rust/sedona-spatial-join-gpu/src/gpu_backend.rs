@@ -53,7 +53,7 @@ impl GpuBackend {
             DataType::BinaryView => {
                 // OPTIMIZATION: Use Arrow's cast which is much faster than manual iteration
                 use arrow::compute::cast;
-                cast(array.as_ref(), &DataType::Binary).map_err(|e| crate::Error::Arrow(e))
+                cast(array.as_ref(), &DataType::Binary).map_err(crate::Error::Arrow)
             }
             DataType::Binary | DataType::LargeBinary => {
                 // Already in correct format
@@ -263,10 +263,7 @@ mod tests {
     fn test_gpu_backend_initialization() {
         let mut backend = GpuBackend::new(0).unwrap();
         let result = backend.init();
-
-        #[cfg(gpu_available)]
+        // Should succeed regardless of GPU availability
         assert!(result.is_ok());
-        #[cfg(not(gpu_available))]
-        assert!(result.is_ok()); // Should still succeed but with no GPU context
     }
 }

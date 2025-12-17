@@ -49,6 +49,7 @@ use std::fs::File;
 use std::sync::Arc;
 
 /// Helper to create test geometry data
+#[allow(dead_code)]
 fn create_point_wkb(x: f64, y: f64) -> Vec<u8> {
     let mut wkb = vec![0x01, 0x01, 0x00, 0x00, 0x00]; // Little endian point type
     wkb.extend_from_slice(&x.to_le_bytes());
@@ -67,11 +68,13 @@ fn is_gpu_available() -> bool {
 }
 
 /// Mock execution plan that produces geometry data
+#[allow(dead_code)]
 struct GeometryDataExec {
     schema: Arc<Schema>,
     batch: RecordBatch,
 }
 
+#[allow(dead_code)]
 impl GeometryDataExec {
     fn new(ids: Vec<i32>, geometries: Vec<Vec<u8>>) -> Self {
         let schema = Arc::new(Schema::new(vec![
@@ -420,7 +423,6 @@ impl datafusion::physical_plan::ExecutionPlan for SingleBatchExec {
 #[tokio::test]
 #[ignore] // Requires GPU hardware
 async fn test_gpu_spatial_join_correctness() {
-    use arrow_array::builder::BinaryBuilder;
     use sedona_expr::scalar_udf::SedonaScalarUDF;
     use sedona_geos::register::scalar_kernels;
     use sedona_schema::crs::lnglat;
@@ -483,7 +485,7 @@ async fn test_gpu_spatial_join_correctness() {
     let kernels = scalar_kernels();
     let sedona_type = SedonaType::Wkb(Edges::Planar, lnglat());
 
-    let cpu_testers: std::collections::HashMap<&str, ScalarUdfTester> = [
+    let _cpu_testers: std::collections::HashMap<&str, ScalarUdfTester> = [
         "st_equals",
         "st_disjoint",
         "st_touches",
@@ -511,17 +513,17 @@ async fn test_gpu_spatial_join_correctness() {
     // Note: Some predicates may not be fully implemented in GPU yet
     // Currently testing Intersects and Contains as known working predicates
     let predicates = vec![
-        (SpatialPredicate::Equals, "st_equals", "Equals"),
-        (SpatialPredicate::Disjoint, "st_disjoint", "Disjoint"),
-        (SpatialPredicate::Touches, "st_touches", "Touches"),
-        (SpatialPredicate::Contains, "st_contains", "Contains"),
-        (SpatialPredicate::Covers, "st_covers", "Covers"),
-        (SpatialPredicate::Intersects, "st_intersects", "Intersects"),
-        (SpatialPredicate::Within, "st_within", "Within"),
-        (SpatialPredicate::CoveredBy, "st_coveredby", "CoveredBy"),
+        (SpatialPredicate::Equals, "Equals"),
+        (SpatialPredicate::Disjoint, "Disjoint"),
+        (SpatialPredicate::Touches, "Touches"),
+        (SpatialPredicate::Contains, "Contains"),
+        (SpatialPredicate::Covers, "Covers"),
+        (SpatialPredicate::Intersects, "Intersects"),
+        (SpatialPredicate::Within, "Within"),
+        (SpatialPredicate::CoveredBy, "CoveredBy"),
     ];
 
-    for (gpu_predicate, cpu_function_name, predicate_name) in predicates {
+    for (gpu_predicate, predicate_name) in predicates {
         println!("\nTesting predicate: {}", predicate_name);
 
         // Run GPU spatial join
