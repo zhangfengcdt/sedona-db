@@ -206,7 +206,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: "rust-gpu-v3"
+          prefix-key: "rust-gpu-v4"
 
       # Build WITH GPU feature to compile CUDA code
       # CUDA compilation (nvcc) works without GPU hardware
