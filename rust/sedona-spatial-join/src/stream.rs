@@ -713,6 +713,7 @@ impl SpatialJoinBatchIterator {
             &probe_indices,
             column_indices,
             build_side,
+            join_type,
         )?;
 
         // Update metrics with actual output
@@ -911,6 +912,7 @@ impl UnmatchedBuildBatchIterator {
                     &right_side,
                     column_indices,
                     build_side,
+                    join_type,
                 )?
             };
 
