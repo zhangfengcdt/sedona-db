@@ -14,7 +14,8 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-#include "gpuspatial/rt/launch_parameters.h"
+#include "gpuspatial/index/detail/launch_parameters.h"
+#include "gpuspatial/relate/relate.cuh"
 #include "ray_params.h"
 #include "shader_config.h"
 
@@ -31,22 +32,17 @@ extern "C" __global__ void __intersection__gpuspatial() {
   using point_t = gpuspatial::ShaderPointType;
   constexpr int n_dim = point_t::n_dim;
   using ray_params_t = gpuspatial::detail::RayParams<n_dim>;
-  auto rect1_id = optixGetPayload_0();
-  auto rect2_id = optixGetPrimitiveIndex();
-  const auto& rect1 = params.rects1[rect1_id];
-  const auto& rect2 = params.rects2[rect2_id];
-  const auto& aabb1 = rect1.ToOptixAabb();
-  const auto aabb2 = rect2.ToOptixAabb();
+  auto geom1_id = optixGetPayload_0();
+  auto geom2_id = optixGetPrimitiveIndex();
+  const auto& mbr1 = params.mbrs1[geom1_id];
+  const auto& mbr2 = params.mbrs2[geom2_id];
+  const auto& aabb1 = mbr1.ToOptixAabb();
+  const auto aabb2 = mbr2.ToOptixAabb();
   ray_params_t ray_params(aabb1, false);
 
   if (ray_params.IsHit(aabb2)) {
-    if (rect1.intersects(rect2)) {
-      if (params.count == nullptr) {
-        auto tail = params.rect1_ids.Append(rect1_id);
-        params.rect2_ids[tail] = rect2_id;
-      } else {
-        atomicAdd(params.count, 1);
-      }
+    if (mbr1.intersects(mbr2)) {
+      params.ids.Append(thrust::make_pair(geom1_id, geom2_id));
     }
   }
 }
@@ -57,17 +53,20 @@ extern "C" __global__ void __raygen__gpuspatial() {
   using point_t = gpuspatial::ShaderPointType;
   constexpr int n_dim = point_t::n_dim;
 
-  for (uint32_t i = optixGetLaunchIndex().x; i < params.rects1.size();
+  for (uint32_t i = optixGetLaunchIndex().x; i < params.mbrs1.size();
        i += optixGetLaunchDimensions().x) {
-    const auto& rect1 = params.rects1[i];
-    auto aabb1 = rect1.ToOptixAabb();
+    const auto& mbr1 = params.mbrs1[i];
+    auto aabb1 = mbr1.ToOptixAabb();
     gpuspatial::detail::RayParams<n_dim> ray_params(aabb1, false);
-    float3 origin{0, 0, 0}, dir{0, 0, 0};
+    float3 origin, dir;
 
-    for (int dim = 0; dim < n_dim; dim++) {
-      (&origin.x)[dim] = (&ray_params.o.x)[dim];
-      (&dir.x)[dim] = (&ray_params.d.x)[dim];
-    }
+    origin.x = ray_params.o.x;
+    origin.y = ray_params.o.y;
+    origin.z = 0;
+
+    dir.x = ray_params.d.x;
+    dir.y = ray_params.d.y;
+    dir.z = 0;
 
     float tmin = 0;
     float tmax = 1;

@@ -86,26 +86,22 @@ class Box {
   }
 
   DEV_HOST_INLINE OptixAabb ToOptixAabb() const {
-    OptixAabb aabb{0, 0, 0, 0, 0, 0};
+    OptixAabb aabb;
 
-    if constexpr (sizeof(scalar_t) == sizeof(float)) {
+    memset(&aabb, 0, sizeof(OptixAabb));
+    if (sizeof(scalar_t) == sizeof(float)) {
       for (int dim = 0; dim < n_dim; dim++) {
-        auto min_val = min_.get_coordinate(dim);
-        auto max_val = max_.get_coordinate(dim);
-        if (min_val == max_val) {
-          min_val = next_float_from_double(min_val, -1, 2);
-          max_val = next_float_from_double(max_val, 1, 2);
-        }
-        (&aabb.minX)[dim] = min_val;
-        (&aabb.maxX)[dim] = max_val;
+        reinterpret_cast<float*>(&aabb.minX)[dim] = min_.get_coordinate(dim);
+        reinterpret_cast<float*>(&aabb.maxX)[dim] = max_.get_coordinate(dim);
       }
     } else {
       for (int dim = 0; dim < n_dim; dim++) {
         auto min_val = min_.get_coordinate(dim);
         auto max_val = max_.get_coordinate(dim);
 
-        (&aabb.minX)[dim] = next_float_from_double(min_val, -1, 2);
-        (&aabb.maxX)[dim] = next_float_from_double(max_val, 1, 2);
+        reinterpret_cast<float*>(&aabb.minX)[dim] =
+            next_float_from_double(min_val, -1, 2);
+        reinterpret_cast<float*>(&aabb.maxX)[dim] = next_float_from_double(max_val, 1, 2);
       }
     }
     return aabb;

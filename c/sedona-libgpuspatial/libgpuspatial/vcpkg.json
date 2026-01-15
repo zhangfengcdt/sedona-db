@@ -7,7 +7,6 @@
       "dependencies": [
         "gtest",
         "geos",
-        "zstd",
         {
           "name": "arrow",
           "features": [

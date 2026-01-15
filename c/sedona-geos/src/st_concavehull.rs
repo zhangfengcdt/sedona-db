@@ -23,10 +23,7 @@ use datafusion_common::error::Result;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use geos::Geom;
-use sedona_expr::{
-    item_crs::ItemCrsKernel,
-    scalar_udf::{ScalarKernelRef, SedonaScalarKernel},
-};
+use sedona_expr::scalar_udf::{ScalarKernelRef, SedonaScalarKernel};
 use sedona_geometry::wkb_factory::WKB_MIN_PROBABLE_BYTES;
 use sedona_schema::{
     datatypes::{SedonaType, WKB_GEOMETRY},
@@ -34,11 +31,10 @@ use sedona_schema::{
 };
 
 use crate::executor::GeosExecutor;
-use crate::geos_to_wkb::write_geos_geometry;
 
 /// ST_ConcaveHull() implementation using the geos crate
-pub fn st_concave_hull_allow_holes_impl() -> Vec<ScalarKernelRef> {
-    ItemCrsKernel::wrap_impl(STConcaveHullAllowHoles {})
+pub fn st_concave_hull_allow_holes_impl() -> ScalarKernelRef {
+    Arc::new(STConcaveHullAllowHoles {})
 }
 
 #[derive(Debug)]
@@ -67,8 +63,8 @@ impl SedonaScalarKernel for STConcaveHullAllowHoles {
     }
 }
 
-pub fn st_concave_hull_impl() -> Vec<ScalarKernelRef> {
-    ItemCrsKernel::wrap_impl(STConcaveHull {})
+pub fn st_concave_hull_impl() -> ScalarKernelRef {
+    Arc::new(STConcaveHull {})
 }
 
 #[derive(Debug)]
@@ -144,7 +140,11 @@ fn invoke_scalar<W: std::io::Write>(
             DataFusionError::Execution(format!("Failed to calculate concave hull: {e}"))
         })?;
 
-    write_geos_geometry(&geometry, writer)?;
+    let geo_wkb = geometry
+        .to_wkb()
+        .map_err(|e| DataFusionError::Execution(format!("Failed to convert to WKB: {e}")))?;
+
+    writer.write_all(&geo_wkb)?;
     Ok(())
 }
 
@@ -155,7 +155,7 @@ mod tests {
     use datafusion_common::ScalarValue;
     use rstest::rstest;
     use sedona_expr::scalar_udf::SedonaScalarUDF;
-    use sedona_schema::datatypes::{WKB_GEOMETRY, WKB_GEOMETRY_ITEM_CRS, WKB_VIEW_GEOMETRY};
+    use sedona_schema::datatypes::{WKB_GEOMETRY, WKB_VIEW_GEOMETRY};
     use sedona_testing::{
         compare::{assert_array_equal, assert_scalar_equal_wkb_geometry},
         create::create_array,
@@ -166,7 +166,7 @@ mod tests {
 
     #[rstest]
     fn udf(#[values(WKB_GEOMETRY, WKB_VIEW_GEOMETRY)] sedona_type: SedonaType) {
-        let udf = SedonaScalarUDF::from_impl("st_concavehull", st_concave_hull_impl());
+        let udf = SedonaScalarUDF::from_kernel("st_concavehull", st_concave_hull_impl());
         let tester = ScalarUdfTester::new(
             udf.into(),
             vec![sedona_type.clone(), SedonaType::Arrow(DataType::Float64)],
@@ -303,7 +303,8 @@ mod tests {
 
     #[rstest]
     fn udf_allow_holes(#[values(WKB_GEOMETRY, WKB_VIEW_GEOMETRY)] sedona_type: SedonaType) {
-        let udf = SedonaScalarUDF::from_impl("st_concavehull", st_concave_hull_allow_holes_impl());
+        let udf =
+            SedonaScalarUDF::from_kernel("st_concavehull", st_concave_hull_allow_holes_impl());
         let tester = ScalarUdfTester::new(
             udf.into(),
             vec![
@@ -473,23 +474,5 @@ mod tests {
             )
             .unwrap();
         tester.assert_scalar_result_equals(result, "POLYGON ((3 3, 1 1, 4 5, 5 6, 3 3))");
-    }
-
-    #[rstest]
-    fn udf_invoke_item_crs(#[values(WKB_GEOMETRY_ITEM_CRS.clone())] sedona_type: SedonaType) {
-        let udf = SedonaScalarUDF::from_impl("st_concavehull", st_concave_hull_impl());
-        let tester = ScalarUdfTester::new(
-            udf.into(),
-            vec![sedona_type.clone(), SedonaType::Arrow(DataType::Float64)],
-        );
-        tester.assert_return_type(sedona_type);
-
-        let result = tester
-            .invoke_scalar_scalar("POLYGON ((70 80, 50 60, 100 150, 160 170, 70 80))", 0.2)
-            .unwrap();
-        tester.assert_scalar_result_equals(
-            result,
-            "POLYGON ((70 80, 50 60, 100 150, 160 170, 70 80))",
-        );
     }
 }

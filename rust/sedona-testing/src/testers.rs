@@ -17,7 +17,7 @@
 use std::{iter::zip, sync::Arc};
 
 use arrow_array::{ArrayRef, RecordBatch};
-use arrow_schema::{DataType, FieldRef, Schema};
+use arrow_schema::{FieldRef, Schema};
 use datafusion_common::{config::ConfigOptions, Result, ScalarValue};
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
@@ -119,7 +119,6 @@ impl AggregateUdfTester {
             name: "",
             is_distinct: false,
             exprs: &exprs,
-            expr_fields: &[],
         };
 
         self.udf.accumulator(accumulator_args)
@@ -533,18 +532,10 @@ impl ScalarUdfTester {
 
     fn scalar_lit(arg: impl Literal, sedona_type: &SedonaType) -> Result<ScalarValue> {
         if let Expr::Literal(scalar, _) = arg.lit() {
-            let is_geometry_or_geography = match sedona_type {
-                SedonaType::Wkb(_, _) | SedonaType::WkbView(_, _) => true,
-                SedonaType::Arrow(DataType::Struct(fields))
-                    if fields.iter().map(|f| f.name()).collect::<Vec<_>>()
-                        == vec!["item", "crs"] =>
-                {
-                    true
-                }
-                _ => false,
-            };
-
-            if is_geometry_or_geography {
+            if matches!(
+                sedona_type,
+                SedonaType::Wkb(_, _) | SedonaType::WkbView(_, _)
+            ) {
                 if let ScalarValue::Utf8(expected_wkt) = scalar {
                     Ok(create_scalar(expected_wkt.as_deref(), sedona_type))
                 } else if &scalar.data_type() == sedona_type.storage_type() {

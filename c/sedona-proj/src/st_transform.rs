@@ -159,7 +159,7 @@ impl SedonaScalarKernel for STTransform {
     ) -> Result<Option<SedonaType>> {
         let matcher = ArgMatcher::new(
             vec![
-                ArgMatcher::is_geometry(),
+                ArgMatcher::is_geometry_or_geography(),
                 ArgMatcher::or(vec![ArgMatcher::is_numeric(), ArgMatcher::is_string()]),
                 ArgMatcher::optional(ArgMatcher::or(vec![
                     ArgMatcher::is_numeric(),
@@ -345,7 +345,8 @@ mod tests {
 
     #[rstest]
     fn invalid_arg_checks() {
-        let udf: SedonaScalarUDF = SedonaScalarUDF::from_impl("st_transform", st_transform_impl());
+        let udf: SedonaScalarUDF =
+            SedonaScalarUDF::from_kernel("st_transform", st_transform_impl());
 
         // No args
         let result = udf.return_field_from_args(ReturnFieldArgs {
@@ -577,7 +578,7 @@ mod tests {
         scalar_args: Vec<ScalarValue>,
         arg_types: Vec<SedonaType>,
     ) -> Result<(SedonaType, ColumnarValue)> {
-        let udf = SedonaScalarUDF::from_impl("st_transform", st_transform_impl());
+        let udf = SedonaScalarUDF::from_kernel("st_transform", st_transform_impl());
 
         let arg_fields: Vec<Arc<Field>> = arg_types
             .into_iter()

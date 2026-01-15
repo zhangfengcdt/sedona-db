@@ -119,13 +119,6 @@ fn main() {
                 println!("cargo:warning=CMAKE_CUDA_ARCHITECTURES environment variable not set. Defaulting to '86;89'.");
                 "86;89".to_string()
             });
-        // Determine the build profile to match Cargo's debug/release mode
-        let profile_mode = if cfg!(debug_assertions) {
-            "Debug"
-        } else {
-            "Release"
-        };
-
         let dst = cmake::Config::new("./libgpuspatial")
             .define("CMAKE_CUDA_ARCHITECTURES", cuda_architectures)
             .define("CMAKE_POLICY_VERSION_MINIMUM", "3.5") // Allow older CMake versions
@@ -142,14 +135,14 @@ fn main() {
 
         // Detect CUDA library path from CUDA_HOME or default locations
         let cuda_lib_path = if let Ok(cuda_home) = env::var("CUDA_HOME") {
-            format!("{cuda_home}/lib64")
+            format!("{}/lib64", cuda_home)
         } else if std::path::Path::new("/usr/local/cuda/lib64").exists() {
             "/usr/local/cuda/lib64".to_string()
         } else {
             panic!("CUDA lib is not found. Neither CUDA_HOME is set nor the default path /usr/local/cuda/lib64 exists.");
         };
 
-        println!("cargo:rustc-link-search=native={cuda_lib_path}"); // CUDA runtime
+        println!("cargo:rustc-link-search=native={}", cuda_lib_path); // CUDA runtime
 
         if let Some(driver_lib_path) = find_cuda_driver_path() {
             println!(
@@ -164,17 +157,6 @@ fn main() {
         println!("cargo:rustc-link-lib=static=gpuspatial");
         println!("cargo:rustc-link-lib=static=rmm");
         println!("cargo:rustc-link-lib=static=rapids_logger");
-        // Use the 'd' suffix for the debug build of spdlog (libspdlogd.a)
-        let spdlog_lib_name = if cfg!(debug_assertions) {
-            "spdlogd"
-        } else {
-            "spdlog"
-        };
-        println!(
-            "cargo:warning=Linking spdlog in {} mode: lib{}.a",
-            profile_mode, spdlog_lib_name
-        );
-        println!("cargo:rustc-link-lib=static={}", spdlog_lib_name);
         println!("cargo:rustc-link-lib=static=geoarrow");
         println!("cargo:rustc-link-lib=static=nanoarrow");
         println!("cargo:rustc-link-lib=stdc++");

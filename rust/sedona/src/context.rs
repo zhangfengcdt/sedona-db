@@ -31,7 +31,7 @@ use async_trait::async_trait;
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::file_format::format_as_file_type;
 use datafusion::{
-    common::plan_err,
+    common::{plan_datafusion_err, plan_err},
     error::{DataFusionError, Result},
     execution::{context::DataFilePaths, runtime_env::RuntimeEnvBuilder, SessionStateBuilder},
     prelude::{DataFrame, SessionConfig, SessionContext},
@@ -45,8 +45,8 @@ use parking_lot::Mutex;
 use sedona_common::option::add_sedona_option_extension;
 use sedona_datasource::provider::external_listing_table;
 use sedona_datasource::spec::ExternalFormatSpec;
-use sedona_expr::function_set::FunctionSet;
-use sedona_expr::{aggregate_udf::SedonaAccumulatorRef, scalar_udf::IntoScalarKernelRefs};
+use sedona_expr::aggregate_udf::SedonaAccumulatorRef;
+use sedona_expr::{function_set::FunctionSet, scalar_udf::ScalarKernelRef};
 use sedona_geoparquet::options::TableGeoParquetOptions;
 use sedona_geoparquet::{
     format::GeoParquetFormatFactory,
@@ -84,23 +84,6 @@ impl SedonaContext {
         // variables.
         let session_config = SessionConfig::from_env()?.with_information_schema(true);
         let session_config = add_sedona_option_extension(session_config);
-
-        // Auto-enable GPU when built with gpu feature
-        // The optimizer will check actual GPU availability at runtime
-        #[cfg(feature = "gpu")]
-        let session_config = {
-            use sedona_common::option::SedonaOptions;
-            let mut session_config = session_config;
-            if let Some(sedona_opts) = session_config
-                .options_mut()
-                .extensions
-                .get_mut::<SedonaOptions>()
-            {
-                sedona_opts.spatial_join.gpu.enable = true;
-            }
-            session_config
-        };
-
         let rt_builder = RuntimeEnvBuilder::new();
         let runtime_env = rt_builder.build_arc()?;
 
@@ -190,7 +173,9 @@ impl SedonaContext {
         let sd_order_kernel = sd_order_lnglat::OrderLngLat::new(
             sedona_s2geography::s2geography::s2_cell_id_from_lnglat,
         );
-        self.register_scalar_kernels([("sd_order", sd_order_kernel)].into_iter())?;
+        self.register_scalar_kernels(
+            [("sd_order", Arc::new(sd_order_kernel) as ScalarKernelRef)].into_iter(),
+        )?;
 
         Ok(())
     }
@@ -211,10 +196,10 @@ impl SedonaContext {
     /// Register a collection of kernels with this context
     pub fn register_scalar_kernels<'a>(
         &mut self,
-        kernels: impl Iterator<Item = (&'a str, impl IntoScalarKernelRefs)>,
+        kernels: impl Iterator<Item = (&'a str, ScalarKernelRef)>,
     ) -> Result<()> {
         for (name, kernel) in kernels {
-            let udf = self.functions.add_scalar_udf_impl(name, kernel)?;
+            let udf = self.functions.add_scalar_udf_kernel(name, kernel)?;
             self.ctx.register_udf(udf.clone().into());
         }
 
@@ -237,8 +222,8 @@ impl SedonaContext {
     /// statements
     pub async fn multi_sql(&self, sql: &str) -> Result<Vec<DataFrame>> {
         let task_ctx = self.ctx.task_ctx();
-        let dialect = &task_ctx.session_config().options().sql_parser.dialect;
-        let dialect = ThreadSafeDialect::try_new(dialect)?;
+        let dialect_str = &task_ctx.session_config().options().sql_parser.dialect;
+        let dialect = ThreadSafeDialect::try_new(dialect_str)?;
 
         let statements = dialect.parse(sql)?;
         let mut results = Vec::with_capacity(statements.len());
@@ -524,14 +509,12 @@ struct ThreadSafeDialect {
 unsafe impl Send for ThreadSafeDialect {}
 
 impl ThreadSafeDialect {
-    pub fn try_new(dialect: &datafusion::config::Dialect) -> Result<Self> {
-        if let Some(box_dialect) = dialect_from_str(dialect) {
-            Ok(Self {
-                inner: box_dialect.into(),
-            })
-        } else {
-            plan_err!("Unsupported SQL dialect: {dialect}")
-        }
+    pub fn try_new(dialect_str: &str) -> Result<Self> {
+        let dialect = dialect_from_str(dialect_str)
+            .ok_or_else(|| plan_datafusion_err!("Unsupported SQL dialect: {dialect_str}"))?;
+        Ok(Self {
+            inner: dialect.into(),
+        })
     }
 
     pub fn parse(&self, sql: &str) -> Result<VecDeque<Statement>> {

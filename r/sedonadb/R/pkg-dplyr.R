@@ -15,7 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# nolint start: object_name_linter
 collect.sedonadb_dataframe <- function(x, ...) {
   rlang::check_dots_empty()
   tibble::as_tibble(sd_collect(x))
@@ -29,4 +28,3 @@ select.sedonadb_dataframe <- function(.data, ...) {
   df <- .data$df$select_indices(names(loc), loc - 1L)
   new_sedonadb_dataframe(.data$ctx, df)
 }
-# nolint end

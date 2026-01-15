@@ -21,7 +21,6 @@ pub mod exec;
 mod index;
 pub mod operand_evaluator;
 pub mod optimizer;
-pub mod partitioning;
 pub mod refine;
 pub mod spatial_predicate;
 mod stream;

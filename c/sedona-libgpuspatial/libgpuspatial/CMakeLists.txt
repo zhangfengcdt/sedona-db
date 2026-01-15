@@ -132,12 +132,8 @@ config_shaders(PTX_FILES)
 
 message("-- Config shader PTX files ${PTX_FILES}")
 
-add_library(gpuspatial
-            src/rt/rt_engine.cpp
-            src/relate_engine.cu
-            src/rt_spatial_index.cu
-            src/rt_spatial_refiner.cu
-            ${PTX_FILES})
+add_library(gpuspatial src/rt/rt_engine.cpp src/relate_engine.cu src/spatial_joiner.cu
+                       ${PTX_FILES})
 
 # Link libraries
 target_link_libraries(gpuspatial
@@ -146,7 +142,8 @@ target_link_libraries(gpuspatial
                              cuda
                              rmm::rmm
                              rapids_logger::rapids_logger
-                             OptiX)
+                             OptiX
+                      PRIVATE zstd)
 
 # Set include directories
 target_include_directories(gpuspatial

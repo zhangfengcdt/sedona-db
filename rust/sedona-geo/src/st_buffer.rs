@@ -23,10 +23,7 @@ use datafusion_common::{error::Result, exec_err, DataFusionError};
 use datafusion_expr::ColumnarValue;
 use geo::algorithm::buffer::{Buffer, BufferStyle};
 use geo_types::Polygon;
-use sedona_expr::{
-    item_crs::ItemCrsKernel,
-    scalar_udf::{ScalarKernelRef, SedonaScalarKernel},
-};
+use sedona_expr::scalar_udf::{ScalarKernelRef, SedonaScalarKernel};
 use sedona_functions::executor::WkbExecutor;
 use sedona_geometry::is_empty::is_geometry_empty;
 use sedona_geometry::wkb_factory::WKB_MIN_PROBABLE_BYTES;
@@ -43,8 +40,8 @@ use wkb::{
 use crate::to_geo::item_to_geometry;
 
 /// ST_Buffer() implementation using buffer calculation
-pub fn st_buffer_impl() -> Vec<ScalarKernelRef> {
-    ItemCrsKernel::wrap_impl(STBuffer {})
+pub fn st_buffer_impl() -> ScalarKernelRef {
+    Arc::new(STBuffer {})
 }
 
 #[derive(Debug)]
@@ -144,7 +141,7 @@ mod tests {
     use datafusion_common::ScalarValue;
     use rstest::rstest;
     use sedona_expr::scalar_udf::SedonaScalarUDF;
-    use sedona_schema::datatypes::{WKB_GEOMETRY, WKB_GEOMETRY_ITEM_CRS, WKB_VIEW_GEOMETRY};
+    use sedona_schema::datatypes::{WKB_GEOMETRY, WKB_VIEW_GEOMETRY};
     use sedona_testing::compare::assert_array_equal;
     use sedona_testing::create::create_array;
     use sedona_testing::testers::ScalarUdfTester;
@@ -153,7 +150,7 @@ mod tests {
 
     #[rstest]
     fn udf(#[values(WKB_GEOMETRY, WKB_VIEW_GEOMETRY)] sedona_type: SedonaType) {
-        let udf = SedonaScalarUDF::from_impl("st_buffer", st_buffer_impl());
+        let udf = SedonaScalarUDF::from_kernel("st_buffer", st_buffer_impl());
         let tester = ScalarUdfTester::new(
             udf.into(),
             vec![sedona_type.clone(), SedonaType::Arrow(DataType::Float64)],
@@ -189,7 +186,7 @@ mod tests {
 
     #[test]
     fn test_empty_geometry() {
-        let udf = SedonaScalarUDF::from_impl("st_buffer", st_buffer_impl());
+        let udf = SedonaScalarUDF::from_kernel("st_buffer", st_buffer_impl());
         let tester = ScalarUdfTester::new(
             udf.into(),
             vec![WKB_GEOMETRY, SedonaType::Arrow(DataType::Float64)],
@@ -222,19 +219,5 @@ mod tests {
             &WKB_GEOMETRY,
         );
         assert_array_equal(&buffer_result, &expected);
-    }
-
-    #[rstest]
-    fn udf_invoke_item_crs(#[values(WKB_GEOMETRY_ITEM_CRS.clone())] sedona_type: SedonaType) {
-        let udf = SedonaScalarUDF::from_impl("st_buffer", st_buffer_impl());
-        let tester = ScalarUdfTester::new(
-            udf.into(),
-            vec![sedona_type.clone(), SedonaType::Arrow(DataType::Float64)],
-        );
-        tester.assert_return_type(sedona_type);
-
-        let result = tester.invoke_scalar_scalar("POINT (1 2)", 2.0).unwrap();
-        // Just verify it returns a valid geometry without checking exact shape
-        assert!(!result.is_null());
     }
 }

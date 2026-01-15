@@ -18,11 +18,10 @@
 use std::sync::Arc;
 
 use arrow_array::{
-    ffi::{from_ffi_and_data_type, FFI_ArrowArray, FFI_ArrowSchema},
+    ffi::FFI_ArrowSchema,
     ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream},
-    make_array, ArrayRef,
 };
-use arrow_schema::{Field, Schema};
+use arrow_schema::Schema;
 use datafusion::catalog::TableProvider;
 use datafusion_expr::ScalarUDF;
 use datafusion_ffi::{
@@ -35,25 +34,6 @@ pub fn import_schema(mut xptr: savvy::Sexp) -> savvy::Result<Schema> {
     let ffi_schema: &FFI_ArrowSchema = import_xptr(&mut xptr, "nanoarrow_schema")?;
     let schema = Schema::try_from(ffi_schema)?;
     Ok(schema)
-}
-
-pub fn import_field(mut xptr: savvy::Sexp) -> savvy::Result<Field> {
-    let ffi_schema: &FFI_ArrowSchema = import_xptr(&mut xptr, "nanoarrow_schema")?;
-    let schema = Field::try_from(ffi_schema)?;
-    Ok(schema)
-}
-
-pub fn import_array(
-    mut xptr: savvy::Sexp,
-    schema_xptr: savvy::Sexp,
-) -> savvy::Result<(Field, ArrayRef)> {
-    let field = import_field(schema_xptr)?;
-    let ffi_array_ref: &mut FFI_ArrowArray = import_xptr(&mut xptr, "nanoarrow_array")?;
-    let ffi_array_owned = unsafe { FFI_ArrowArray::from_raw(ffi_array_ref as _) };
-    let array_data =
-        unsafe { from_ffi_and_data_type(ffi_array_owned as _, field.data_type().clone())? };
-    let array_ref = make_array(array_data);
-    Ok((field, array_ref))
 }
 
 pub fn import_array_stream(mut xptr: savvy::Sexp) -> savvy::Result<ArrowArrayStreamReader> {

@@ -21,10 +21,7 @@ use datafusion_expr::{
     scalar_doc_sections::DOC_SECTION_OTHER, ColumnarValue, Documentation, Volatility,
 };
 use geo_traits::{CoordTrait, GeometryTrait, GeometryType, PointTrait};
-use sedona_expr::{
-    item_crs::ItemCrsKernel,
-    scalar_udf::{SedonaScalarKernel, SedonaScalarUDF},
-};
+use sedona_expr::scalar_udf::{SedonaScalarKernel, SedonaScalarUDF};
 use sedona_schema::{datatypes::SedonaType, matchers::ArgMatcher};
 use std::sync::Arc;
 use wkb::reader::Wkb;
@@ -37,7 +34,7 @@ use crate::executor::WkbExecutor;
 pub fn st_azimuth_udf() -> SedonaScalarUDF {
     SedonaScalarUDF::new(
         "st_azimuth",
-        ItemCrsKernel::wrap_impl(vec![Arc::new(STAzimuth {})]),
+        vec![Arc::new(STAzimuth {})],
         Volatility::Immutable,
         Some(st_azimuth_doc()),
     )
@@ -135,7 +132,7 @@ mod tests {
     use datafusion_common::scalar::ScalarValue;
     use datafusion_expr::ScalarUDF;
     use rstest::rstest;
-    use sedona_schema::datatypes::{WKB_GEOMETRY, WKB_GEOMETRY_ITEM_CRS, WKB_VIEW_GEOMETRY};
+    use sedona_schema::datatypes::{WKB_GEOMETRY, WKB_VIEW_GEOMETRY};
     use sedona_testing::create::create_scalar;
     use sedona_testing::testers::ScalarUdfTester;
 
@@ -150,10 +147,8 @@ mod tests {
 
     #[rstest]
     fn udf(
-        #[values(WKB_GEOMETRY, WKB_VIEW_GEOMETRY, WKB_GEOMETRY_ITEM_CRS.clone())]
-        start_type: SedonaType,
-        #[values(WKB_GEOMETRY, WKB_VIEW_GEOMETRY, WKB_GEOMETRY_ITEM_CRS.clone())]
-        end_type: SedonaType,
+        #[values(WKB_GEOMETRY, WKB_VIEW_GEOMETRY)] start_type: SedonaType,
+        #[values(WKB_GEOMETRY, WKB_VIEW_GEOMETRY)] end_type: SedonaType,
     ) {
         let tester = ScalarUdfTester::new(
             st_azimuth_udf().into(),

@@ -35,13 +35,15 @@ updates:
       - dependency-name: "*"
         update-types: ["version-update:semver-patch"]
     groups:
-      datafusion-arrow-parquet:
+      arrow-parquet:
+        applies-to: version-updates
+        patterns:
+          - "arrow*"
+          - "parquet"
+      datafusion:
         applies-to: version-updates
         patterns:
           - "datafusion*"
-          - "arrow*"
-          - "parquet"
-          - "objstore"
       wasm-bindgen:
         applies-to: version-updates
         patterns:
@@ -51,7 +53,3 @@ updates:
         applies-to: version-updates
         patterns:
           - "savvy*"
-      adbc:
-        applies-to: version-updates
-        patterns:
-          - "adbc_*"
