@@ -78,14 +78,58 @@ pub const WKB_VIEW_GEOGRAPHY: SedonaType = SedonaType::WkbView(Edges::Spherical,
 /// Sentinel for [`SedonaType::Raster`]
 pub const RASTER: SedonaType = SedonaType::Raster;
 
+/// Sentinel for [SedonaType::new_item_crs] containing [WKB_GEOMETRY]
+pub static WKB_GEOMETRY_ITEM_CRS: LazyLock<SedonaType> =
+    LazyLock::new(|| SedonaType::new_item_crs(&WKB_GEOMETRY).unwrap());
+
+/// Sentinel for [SedonaType::new_item_crs] containing [WKB_GEOGRAPHY]
+pub static WKB_GEOGRAPHY_ITEM_CRS: LazyLock<SedonaType> =
+    LazyLock::new(|| SedonaType::new_item_crs(&WKB_GEOGRAPHY).unwrap());
+
 /// Create a static value for the [`SedonaType::Raster`] that's initialized exactly once,
 /// on first access
 static RASTER_DATATYPE: LazyLock<DataType> =
     LazyLock::new(|| DataType::Struct(RasterSchema::fields()));
 
+impl AsRef<SedonaType> for LazyLock<SedonaType> {
+    fn as_ref(&self) -> &SedonaType {
+        self
+    }
+}
+
 // Implementation details
 
 impl SedonaType {
+    /// Create a new item-level CRS type
+    ///
+    /// An item level CRS type in SedonaDB is a struct(item: <arbitrary type>, crs: <string view>).
+    /// This design was used to minimize the friction of automatically wrapping existing functions
+    /// that accept <arbitrary type>. The crs representation is typically an authority:code string;
+    /// however, any string that works with [deserialize_crs] is valid. A "missing" CRS (i.e.,
+    /// `Crs::None` at the type level) is represented by a null value in the crs array.
+    ///
+    /// Note that this function strips CRSes from item if they are present. This is to prevent the
+    /// item-level CRS type from carrying a CRS itself.
+    pub fn new_item_crs(item: &SedonaType) -> Result<SedonaType> {
+        let item_sedona_type = match item {
+            SedonaType::Wkb(edges, _) => SedonaType::Wkb(*edges, None),
+            SedonaType::WkbView(edges, _) => SedonaType::WkbView(*edges, None),
+            _ => {
+                return sedona_internal_err!("Can't create item_crs from non-geo type");
+            }
+        };
+
+        let arrow_type = DataType::Struct(
+            vec![
+                item_sedona_type.to_storage_field("item", true)?,
+                Field::new("crs", DataType::Utf8View, true),
+            ]
+            .into(),
+        );
+
+        Ok(SedonaType::Arrow(arrow_type))
+    }
+
     /// Given a field as it would appear in an external Schema return the appropriate SedonaType
     pub fn from_storage_field(field: &Field) -> Result<SedonaType> {
         match ExtensionType::from_field(field) {

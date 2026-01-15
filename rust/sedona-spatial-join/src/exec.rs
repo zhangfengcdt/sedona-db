@@ -171,6 +171,7 @@ impl SpatialJoinExec {
         let cache = Self::compute_properties(
             &left,
             &right,
+            &on,
             Arc::clone(&join_schema),
             *join_type,
             projection.as_ref(),
@@ -226,6 +227,11 @@ impl SpatialJoinExec {
         self.projection.is_some()
     }
 
+    /// Get the projection indices
+    pub fn projection(&self) -> Option<&Vec<usize>> {
+        self.projection.as_ref()
+    }
+
     /// This function creates the cache object that stores the plan properties such as schema,
     /// equivalence properties, ordering, partitioning, etc.
     ///
@@ -236,9 +242,11 @@ impl SpatialJoinExec {
     ///
     /// When converted from HashJoin, we preserve HashJoin's equivalence properties by extracting
     /// equality conditions from the filter.
+    #[allow(clippy::too_many_arguments)]
     fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
         right: &Arc<dyn ExecutionPlan>,
+        on: &SpatialPredicate,
         schema: SchemaRef,
         join_type: JoinType,
         projection: Option<&Vec<usize>>,
@@ -265,7 +273,13 @@ impl SpatialJoinExec {
 
         // Use symmetric partitioning (like HashJoin) when converted from HashJoin
         // Otherwise use asymmetric partitioning (like NestedLoopJoin)
-        let mut output_partitioning = if converted_from_hash_join {
+        let mut output_partitioning = if let SpatialPredicate::KNearestNeighbors(knn) = on {
+            match knn.probe_side {
+                JoinSide::Left => left.output_partitioning().clone(),
+                JoinSide::Right => right.output_partitioning().clone(),
+                _ => asymmetric_join_output_partitioning(left, right, &join_type)?,
+            }
+        } else if converted_from_hash_join {
             // Replicate HashJoin's symmetric partitioning logic
             // HashJoin preserves partitioning from both sides for inner joins
             // and from one side for outer joins
@@ -281,10 +295,10 @@ impl SpatialJoinExec {
                     // For full outer join, we can't preserve partitioning
                     Partitioning::UnknownPartitioning(left.output_partitioning().partition_count())
                 }
-                _ => asymmetric_join_output_partitioning(left, right, &join_type),
+                _ => asymmetric_join_output_partitioning(left, right, &join_type)?,
             }
         } else {
-            asymmetric_join_output_partitioning(left, right, &join_type)
+            asymmetric_join_output_partitioning(left, right, &join_type)?
         };
 
         if let Some(projection) = projection {
@@ -467,7 +481,6 @@ impl ExecutionPlan for SpatialJoinExec {
                         })?
                 };
 
-                // Column indices for regular joins - no swapping needed
                 let column_indices_after_projection = match &self.projection {
                     Some(projection) => projection
                         .iter()
@@ -559,29 +572,13 @@ impl SpatialJoinExec {
                 })?
         };
 
-        // Handle column indices for KNN - need to swap if we swapped execution plans
-        let mut column_indices_after_projection = match &self.projection {
+        let column_indices_after_projection = match &self.projection {
             Some(projection) => projection
                 .iter()
                 .map(|i| self.column_indices[*i].clone())
                 .collect(),
             None => self.column_indices.clone(),
         };
-
-        // If we swapped execution plans for KNN, we need to swap the column indices too
-        if !actual_probe_plan_is_left {
-            for col_idx in &mut column_indices_after_projection {
-                match col_idx.side {
-                    datafusion_common::JoinSide::Left => {
-                        col_idx.side = datafusion_common::JoinSide::Right
-                    }
-                    datafusion_common::JoinSide::Right => {
-                        col_idx.side = datafusion_common::JoinSide::Left
-                    }
-                    datafusion_common::JoinSide::None => {} // No change needed
-                }
-            }
-        }
 
         let join_metrics = SpatialJoinProbeMetrics::new(partition, &self.metrics);
         let probe_stream = probe_plan.execute(partition, Arc::clone(&context))?;
@@ -614,7 +611,7 @@ impl SpatialJoinExec {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::RecordBatch;
+    use arrow_array::{Array, RecordBatch};
     use arrow_schema::{DataType, Field, Schema};
     use datafusion::{
         catalog::{MemTable, TableProvider},
@@ -622,8 +619,12 @@ mod tests {
         prelude::{SessionConfig, SessionContext},
     };
     use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+    use datafusion_expr::ColumnarValue;
+    use datafusion_physical_plan::joins::NestedLoopJoinExec;
+    use geo::{Distance, Euclidean};
     use geo_types::{Coord, Rect};
     use rstest::rstest;
+    use sedona_geo::to_geo::GeoTypesExecutor;
     use sedona_geometry::types::GeometryTypeId;
     use sedona_schema::datatypes::{SedonaType, WKB_GEOGRAPHY, WKB_GEOMETRY};
     use sedona_testing::datagen::RandomPartitionedDataBuilder;
@@ -652,7 +653,7 @@ mod tests {
         let bounds = Rect::new(Coord { x: 0.0, y: 0.0 }, Coord { x: 100.0, y: 100.0 });
 
         let left_data = RandomPartitionedDataBuilder::new()
-            .seed(1)
+            .seed(11584)
             .num_partitions(2)
             .batches_per_partition(2)
             .rows_per_batch(30)
@@ -664,7 +665,7 @@ mod tests {
             .build()?;
 
         let right_data = RandomPartitionedDataBuilder::new()
-            .seed(2)
+            .seed(54843)
             .num_partitions(4)
             .batches_per_partition(4)
             .rows_per_batch(30)
@@ -687,6 +688,40 @@ mod tests {
         left_data.1.push(vec![]);
         right_data.1.insert(0, vec![]);
         right_data.1.push(vec![]);
+
+        Ok((left_data, right_data))
+    }
+
+    /// Creates test data for KNN join (Point-Point)
+    fn create_knn_test_data(
+        size_range: (f64, f64),
+        sedona_type: SedonaType,
+    ) -> Result<(TestPartitions, TestPartitions)> {
+        let bounds = Rect::new(Coord { x: 0.0, y: 0.0 }, Coord { x: 100.0, y: 100.0 });
+
+        let left_data = RandomPartitionedDataBuilder::new()
+            .seed(1)
+            .num_partitions(2)
+            .batches_per_partition(2)
+            .rows_per_batch(30)
+            .geometry_type(GeometryTypeId::Point)
+            .sedona_type(sedona_type.clone())
+            .bounds(bounds)
+            .size_range(size_range)
+            .null_rate(0.1)
+            .build()?;
+
+        let right_data = RandomPartitionedDataBuilder::new()
+            .seed(2)
+            .num_partitions(4)
+            .batches_per_partition(4)
+            .rows_per_batch(30)
+            .geometry_type(GeometryTypeId::Point)
+            .sedona_type(sedona_type)
+            .bounds(bounds)
+            .size_range(size_range)
+            .null_rate(0.1)
+            .build()?;
 
         Ok((left_data, right_data))
     }
@@ -720,7 +755,7 @@ mod tests {
         });
 
         for (name, kernel) in scalar_kernels.into_iter() {
-            let udf = function_set.add_scalar_udf_kernel(name, kernel)?;
+            let udf = function_set.add_scalar_udf_impl(name, kernel)?;
             ctx.register_udf(udf.clone().into());
         }
 
@@ -731,7 +766,7 @@ mod tests {
     async fn test_empty_data() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
-            Field::new("dist", DataType::Float64, false),
+            Field::new("dist", DataType::Int32, false),
             WKB_GEOMETRY.to_storage_field("geometry", true).unwrap(),
         ]));
 
@@ -967,7 +1002,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn test_left_joins(
-        #[values(JoinType::Left, /* JoinType::LeftSemi, JoinType::LeftAnti */)] join_type: JoinType,
+        #[values(JoinType::Left, JoinType::LeftSemi, JoinType::LeftAnti)] join_type: JoinType,
     ) -> Result<()> {
         test_with_join_types(join_type).await?;
         Ok(())
@@ -976,8 +1011,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn test_right_joins(
-        #[values(JoinType::Right, /* JoinType::RightSemi, JoinType::RightAnti */)]
-        join_type: JoinType,
+        #[values(JoinType::Right, JoinType::RightSemi, JoinType::RightAnti)] join_type: JoinType,
     ) -> Result<()> {
         test_with_join_types(join_type).await?;
         Ok(())
@@ -986,6 +1020,82 @@ mod tests {
     #[tokio::test]
     async fn test_full_outer_join() -> Result<()> {
         test_with_join_types(JoinType::Full).await?;
+        Ok(())
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_mark_joins(
+        #[values(JoinType::LeftMark, JoinType::RightMark)] join_type: JoinType,
+    ) -> Result<()> {
+        let options = SpatialJoinOptions::default();
+        test_mark_join(join_type, options, 10).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_mark_join_via_correlated_exists_sql() -> Result<()> {
+        let ((left_schema, left_partitions), (right_schema, right_partitions)) =
+            create_test_data_with_size_range((0.1, 10.0), WKB_GEOMETRY)?;
+
+        let mem_table_left: Arc<dyn TableProvider> = Arc::new(MemTable::try_new(
+            left_schema.clone(),
+            left_partitions.clone(),
+        )?);
+        let mem_table_right: Arc<dyn TableProvider> = Arc::new(MemTable::try_new(
+            right_schema.clone(),
+            right_partitions.clone(),
+        )?);
+
+        // DataFusion doesn't have explicit SQL syntax for MARK joins. Predicate subqueries embedded
+        // in a more complex boolean expression (e.g. OR) are planned using a MARK join.
+        //
+        // Using EXISTS here (rather than IN) keeps the join filter as the pulled-up correlated
+        // predicate (ST_Intersects), which is what SpatialJoinExec can optimize.
+        let sql = "SELECT L.id FROM L WHERE L.id = 1 OR EXISTS (SELECT 1 FROM R WHERE ST_Intersects(L.geometry, R.geometry)) ORDER BY L.id";
+
+        let batch_size = 10;
+        let options = SpatialJoinOptions::default();
+
+        // Optimized plan should include a SpatialJoinExec with Mark join type.
+        let ctx = setup_context(Some(options), batch_size)?;
+        ctx.register_table("L", Arc::clone(&mem_table_left))?;
+        ctx.register_table("R", Arc::clone(&mem_table_right))?;
+        let df = ctx.sql(sql).await?;
+        let plan = df.clone().create_physical_plan().await?;
+        let spatial_join_execs = collect_spatial_join_exec(&plan)?;
+        assert!(
+            spatial_join_execs
+                .iter()
+                .any(|exec| matches!(*exec.join_type(), JoinType::LeftMark | JoinType::RightMark)),
+            "expected correlated IN-subquery to plan using a MARK join when optimized"
+        );
+        let actual_schema = df.schema().as_arrow().clone();
+        let actual_batches = df.collect().await?;
+        let actual_batch =
+            arrow::compute::concat_batches(&Arc::new(actual_schema), &actual_batches)?;
+
+        // Unoptimized plan should still contain a Mark join, but implemented as NestedLoopJoinExec.
+        let ctx_no_opt = setup_context(None, batch_size)?;
+        ctx_no_opt.register_table("L", mem_table_left)?;
+        ctx_no_opt.register_table("R", mem_table_right)?;
+        let df_no_opt = ctx_no_opt.sql(sql).await?;
+        let plan_no_opt = df_no_opt.clone().create_physical_plan().await?;
+        let nlj_execs = collect_nested_loop_join_exec(&plan_no_opt)?;
+        assert!(
+            nlj_execs
+                .iter()
+                .any(|exec| matches!(*exec.join_type(), JoinType::LeftMark | JoinType::RightMark)),
+            "expected correlated IN-subquery to plan using a MARK join when not optimized"
+        );
+        let expected_schema = df_no_opt.schema().as_arrow().clone();
+        let expected_batches = df_no_opt.collect().await?;
+        let expected_batch =
+            arrow::compute::concat_batches(&Arc::new(expected_schema), &expected_batches)?;
+
+        assert!(expected_batch.num_rows() > 0);
+        assert_eq!(expected_batch, actual_batch);
+
         Ok(())
     }
 
@@ -1013,7 +1123,7 @@ mod tests {
         // Verify that no SpatialJoinExec is present (geography join should not be optimized)
         let spatial_joins = collect_spatial_join_exec(&plan)?;
         assert!(
-            spatial_joins.is_empty(),
+            spatial_joins == 0,
             "Geography joins should not be optimized to SpatialJoinExec"
         );
 
@@ -1046,10 +1156,10 @@ mod tests {
             JoinType::Left => "SELECT L.id l_id, R.id r_id FROM L LEFT JOIN R ON ST_Intersects(L.geometry, R.geometry) ORDER BY l_id, r_id",
             JoinType::Right => "SELECT L.id l_id, R.id r_id FROM L RIGHT JOIN R ON ST_Intersects(L.geometry, R.geometry) ORDER BY l_id, r_id",
             JoinType::Full => "SELECT L.id l_id, R.id r_id FROM L FULL OUTER JOIN R ON ST_Intersects(L.geometry, R.geometry) ORDER BY l_id, r_id",
-            JoinType::LeftSemi => "SELECT L.id l_id FROM L WHERE EXISTS (SELECT 1 FROM R WHERE ST_Intersects(L.geometry, R.geometry)) ORDER BY l_id",
-            JoinType::RightSemi => "SELECT R.id r_id FROM R WHERE EXISTS (SELECT 1 FROM L WHERE ST_Intersects(L.geometry, R.geometry)) ORDER BY r_id",
-            JoinType::LeftAnti => "SELECT L.id l_id FROM L WHERE NOT EXISTS (SELECT 1 FROM R WHERE ST_Intersects(L.geometry, R.geometry)) ORDER BY l_id",
-            JoinType::RightAnti => "SELECT R.id r_id FROM R WHERE NOT EXISTS (SELECT 1 FROM L WHERE ST_Intersects(L.geometry, R.geometry)) ORDER BY r_id",
+            JoinType::LeftSemi => "SELECT L.id l_id FROM L LEFT SEMI JOIN R ON ST_Intersects(L.geometry, R.geometry) ORDER BY l_id",
+            JoinType::RightSemi => "SELECT R.id r_id FROM L RIGHT SEMI JOIN R ON ST_Intersects(L.geometry, R.geometry) ORDER BY r_id",
+            JoinType::LeftAnti => "SELECT L.id l_id FROM L LEFT ANTI JOIN R ON ST_Intersects(L.geometry, R.geometry) ORDER BY l_id",
+            JoinType::RightAnti => "SELECT R.id r_id FROM L RIGHT ANTI JOIN R ON ST_Intersects(L.geometry, R.geometry) ORDER BY r_id",
             JoinType::LeftMark => {
                 unreachable!("LeftMark is not directly supported in SQL, will be tested in other tests");
             }
@@ -1151,11 +1261,11 @@ mod tests {
         let df = ctx.sql(sql).await?;
         let actual_schema = df.schema().as_arrow().clone();
         let plan = df.clone().create_physical_plan().await?;
-        let spatial_join_execs = collect_spatial_join_exec(&plan)?;
+        let spatial_join_count = collect_spatial_join_exec(&plan)?;
         if is_optimized_spatial_join {
-            assert_eq!(spatial_join_execs.len(), 1);
+            assert_eq!(spatial_join_count, 1);
         } else {
-            assert!(spatial_join_execs.is_empty());
+            assert_eq!(spatial_join_count, 0);
         }
         let result_batches = df.collect().await?;
         let result_batch =
@@ -1163,14 +1273,387 @@ mod tests {
         Ok(result_batch)
     }
 
-    fn collect_spatial_join_exec(plan: &Arc<dyn ExecutionPlan>) -> Result<Vec<&SpatialJoinExec>> {
-        let mut spatial_join_execs = Vec::new();
+    fn collect_spatial_join_exec(plan: &Arc<dyn ExecutionPlan>) -> Result<usize> {
+        let mut count = 0;
         plan.apply(|node| {
-            if let Some(spatial_join_exec) = node.as_any().downcast_ref::<SpatialJoinExec>() {
-                spatial_join_execs.push(spatial_join_exec);
+            if node.as_any().downcast_ref::<SpatialJoinExec>().is_some() {
+                count += 1;
+            }
+            #[cfg(feature = "gpu")]
+            if node
+                .as_any()
+                .downcast_ref::<sedona_spatial_join_gpu::GpuSpatialJoinExec>()
+                .is_some()
+            {
+                count += 1;
             }
             Ok(TreeNodeRecursion::Continue)
         })?;
-        Ok(spatial_join_execs)
+        Ok(count)
+    }
+
+    #[cfg(feature = "gpu")]
+    #[tokio::test]
+    #[ignore] // Requires GPU hardware
+    async fn test_gpu_spatial_join_sql() -> Result<()> {
+        use arrow_array::Int32Array;
+        use sedona_common::option::ExecutionMode;
+        use sedona_testing::create::create_array_storage;
+
+        // Create guaranteed-to-intersect test data
+        // 3 polygons and 5 points where 4 points are inside polygons
+        let polygon_wkts = vec![
+            Some("POLYGON ((0 0, 20 0, 20 20, 0 20, 0 0))"), // Large polygon covering 0-20
+            Some("POLYGON ((30 30, 50 30, 50 50, 30 50, 30 30))"), // Medium polygon at 30-50
+            Some("POLYGON ((60 60, 80 60, 80 80, 60 80, 60 60))"), // Small polygon at 60-80
+        ];
+
+        let point_wkts = vec![
+            Some("POINT (10 10)"),   // Inside polygon 0
+            Some("POINT (15 15)"),   // Inside polygon 0
+            Some("POINT (40 40)"),   // Inside polygon 1
+            Some("POINT (70 70)"),   // Inside polygon 2
+            Some("POINT (100 100)"), // Outside all
+        ];
+
+        let polygon_geoms = create_array_storage(&polygon_wkts, &WKB_GEOMETRY);
+        let point_geoms = create_array_storage(&point_wkts, &WKB_GEOMETRY);
+
+        let polygon_ids = Int32Array::from(vec![0, 1, 2]);
+        let point_ids = Int32Array::from(vec![0, 1, 2, 3, 4]);
+
+        let polygon_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            WKB_GEOMETRY.to_storage_field("geometry", false).unwrap(),
+        ]));
+
+        let point_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            WKB_GEOMETRY.to_storage_field("geometry", false).unwrap(),
+        ]));
+
+        let polygon_batch = RecordBatch::try_new(
+            polygon_schema.clone(),
+            vec![Arc::new(polygon_ids), polygon_geoms],
+        )?;
+
+        let point_batch =
+            RecordBatch::try_new(point_schema.clone(), vec![Arc::new(point_ids), point_geoms])?;
+
+        let polygon_partitions = vec![vec![polygon_batch]];
+        let point_partitions = vec![vec![point_batch]];
+
+        // Test with GPU enabled
+        let options = SpatialJoinOptions {
+            execution_mode: ExecutionMode::PrepareNone,
+            gpu: sedona_common::option::GpuOptions {
+                enable: true,
+                fallback_to_cpu: false,
+                device_id: 0,
+            },
+            ..Default::default()
+        };
+
+        // Setup context for both queries
+        let ctx = setup_context(Some(options.clone()), 1024)?;
+        ctx.register_table(
+            "L",
+            Arc::new(MemTable::try_new(
+                polygon_schema.clone(),
+                polygon_partitions.clone(),
+            )?),
+        )?;
+        ctx.register_table(
+            "R",
+            Arc::new(MemTable::try_new(
+                point_schema.clone(),
+                point_partitions.clone(),
+            )?),
+        )?;
+
+        // Test ST_Intersects - should return 4 rows (4 points inside polygons)
+
+        // First, run EXPLAIN to show the physical plan
+        let explain_df = ctx
+            .sql("EXPLAIN SELECT * FROM L JOIN R ON ST_Intersects(L.geometry, R.geometry)")
+            .await?;
+        let explain_batches = explain_df.collect().await?;
+        log::info!("=== ST_Intersects Physical Plan ===");
+        arrow::util::pretty::print_batches(&explain_batches)?;
+
+        // Now run the actual query
+        let result = run_spatial_join_query(
+            &polygon_schema,
+            &point_schema,
+            polygon_partitions.clone(),
+            point_partitions.clone(),
+            Some(options.clone()),
+            1024,
+            "SELECT * FROM L JOIN R ON ST_Intersects(L.geometry, R.geometry)",
+        )
+        .await?;
+
+        assert!(
+            result.num_rows() > 0,
+            "Expected join results for ST_Intersects"
+        );
+        log::info!(
+            "ST_Intersects returned {} rows (expected 4)",
+            result.num_rows()
+        );
+
+        // Test ST_Contains - should also return 4 rows
+
+        // First, run EXPLAIN to show the physical plan
+        let explain_df = ctx
+            .sql("EXPLAIN SELECT * FROM L JOIN R ON ST_Contains(L.geometry, R.geometry)")
+            .await?;
+        let explain_batches = explain_df.collect().await?;
+        log::info!("=== ST_Contains Physical Plan ===");
+        arrow::util::pretty::print_batches(&explain_batches)?;
+
+        // Now run the actual query
+        let result = run_spatial_join_query(
+            &polygon_schema,
+            &point_schema,
+            polygon_partitions.clone(),
+            point_partitions.clone(),
+            Some(options),
+            1024,
+            "SELECT * FROM L JOIN R ON ST_Contains(L.geometry, R.geometry)",
+        )
+        .await?;
+
+        assert!(
+            result.num_rows() > 0,
+            "Expected join results for ST_Contains"
+        );
+        log::info!(
+            "ST_Contains returned {} rows (expected 4)",
+            result.num_rows()
+        );
+
+        Ok(())
+    }
+
+    fn collect_nested_loop_join_exec(
+        plan: &Arc<dyn ExecutionPlan>,
+    ) -> Result<Vec<&NestedLoopJoinExec>> {
+        let mut execs = Vec::new();
+        plan.apply(|node| {
+            if let Some(exec) = node.as_any().downcast_ref::<NestedLoopJoinExec>() {
+                execs.push(exec);
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        Ok(execs)
+    }
+
+    async fn test_mark_join(
+        join_type: JoinType,
+        options: SpatialJoinOptions,
+        batch_size: usize,
+    ) -> Result<()> {
+        let ((left_schema, left_partitions), (right_schema, right_partitions)) =
+            create_test_data_with_size_range((0.1, 10.0), WKB_GEOMETRY)?;
+        let mem_table_left: Arc<dyn TableProvider> = Arc::new(MemTable::try_new(
+            left_schema.clone(),
+            left_partitions.clone(),
+        )?);
+        let mem_table_right: Arc<dyn TableProvider> = Arc::new(MemTable::try_new(
+            right_schema.clone(),
+            right_partitions.clone(),
+        )?);
+
+        // We use a Left Join as a template to create the plan, then modify it to Mark Join
+        let sql = "SELECT * FROM L LEFT JOIN R ON ST_Intersects(L.geometry, R.geometry)";
+
+        // Create SpatialJoinExec plan
+        let ctx = setup_context(Some(options), batch_size)?;
+        ctx.register_table("L", mem_table_left.clone())?;
+        ctx.register_table("R", mem_table_right.clone())?;
+        let df = ctx.sql(sql).await?;
+        let plan = df.create_physical_plan().await?;
+        let spatial_join_execs = collect_spatial_join_exec(&plan)?;
+        assert_eq!(spatial_join_execs.len(), 1);
+        let original_exec = spatial_join_execs[0];
+        let mark_exec = SpatialJoinExec::try_new(
+            original_exec.left.clone(),
+            original_exec.right.clone(),
+            original_exec.on.clone(),
+            original_exec.filter.clone(),
+            &join_type,
+            None,
+        )?;
+
+        // Create NestedLoopJoinExec plan for comparison
+        let ctx_no_opt = setup_context(None, batch_size)?;
+        ctx_no_opt.register_table("L", mem_table_left)?;
+        ctx_no_opt.register_table("R", mem_table_right)?;
+        let df_no_opt = ctx_no_opt.sql(sql).await?;
+        let plan_no_opt = df_no_opt.create_physical_plan().await?;
+        let nlj_execs = collect_nested_loop_join_exec(&plan_no_opt)?;
+        assert_eq!(nlj_execs.len(), 1);
+        let original_nlj = nlj_execs[0];
+        let mark_nlj = NestedLoopJoinExec::try_new(
+            original_nlj.children()[0].clone(),
+            original_nlj.children()[1].clone(),
+            original_nlj.filter().cloned(),
+            &join_type,
+            None,
+        )?;
+
+        async fn run_and_sort(
+            plan: Arc<dyn ExecutionPlan>,
+            ctx: &SessionContext,
+        ) -> Result<RecordBatch> {
+            let results = datafusion_physical_plan::collect(plan, ctx.task_ctx()).await?;
+            let batch = arrow::compute::concat_batches(&results[0].schema(), &results)?;
+            let sort_col = batch.column(0);
+            let indices = arrow::compute::sort_to_indices(sort_col, None, None)?;
+            let sorted_batch = arrow::compute::take_record_batch(&batch, &indices)?;
+            Ok(sorted_batch)
+        }
+
+        // Run both Mark Join plans and compare results
+        let mark_batch = run_and_sort(Arc::new(mark_exec), &ctx).await?;
+        let mark_nlj_batch = run_and_sort(Arc::new(mark_nlj), &ctx_no_opt).await?;
+        assert_eq!(mark_batch, mark_nlj_batch);
+
+        Ok(())
+    }
+
+    fn extract_geoms_and_ids(partitions: &[Vec<RecordBatch>]) -> Vec<(i32, geo::Geometry<f64>)> {
+        let mut result = Vec::new();
+        for partition in partitions {
+            for batch in partition {
+                let id_idx = batch.schema().index_of("id").expect("Id column not found");
+                let ids = batch
+                    .column(id_idx)
+                    .as_any()
+                    .downcast_ref::<arrow_array::Int32Array>()
+                    .expect("Column 'id' should be Int32");
+
+                let geom_idx = batch
+                    .schema()
+                    .index_of("geometry")
+                    .expect("Geometry column not found");
+
+                let geoms_col = batch.column(geom_idx);
+                let geom_type = SedonaType::from_storage_field(batch.schema().field(geom_idx))
+                    .expect("Failed to get SedonaType from geometry field");
+                let arg_types = [geom_type];
+                let arg_values = [ColumnarValue::Array(Arc::clone(geoms_col))];
+
+                let executor = GeoTypesExecutor::new(&arg_types, &arg_values);
+                let mut id_iter = ids.iter();
+                executor
+                    .execute_wkb_void(|maybe_geom| {
+                        if let Some(id_opt) = id_iter.next() {
+                            if let (Some(id), Some(geom)) = (id_opt, maybe_geom) {
+                                result.push((id, geom))
+                            }
+                        }
+                        Ok(())
+                    })
+                    .expect("Failed to extract geoms and ids from RecordBatch");
+            }
+        }
+        result
+    }
+
+    fn compute_knn_ground_truth(
+        left_partitions: &[Vec<RecordBatch>],
+        right_partitions: &[Vec<RecordBatch>],
+        k: usize,
+    ) -> Vec<(i32, i32, f64)> {
+        let left_data = extract_geoms_and_ids(left_partitions);
+        let right_data = extract_geoms_and_ids(right_partitions);
+
+        let mut results = Vec::new();
+
+        for (l_id, l_geom) in left_data {
+            let mut distances: Vec<(i32, f64)> = right_data
+                .iter()
+                .map(|(r_id, r_geom)| (*r_id, Euclidean.distance(&l_geom, r_geom)))
+                .collect();
+
+            // Sort by distance, then by ID for stability
+            distances.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+
+            for (r_id, dist) in distances.iter().take(k.min(distances.len())) {
+                results.push((l_id, *r_id, *dist));
+            }
+        }
+
+        // Sort results by L.id, R.id
+        results.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        results
+    }
+
+    #[tokio::test]
+    async fn test_knn_join_correctness() -> Result<()> {
+        // Generate slightly larger data
+        let ((left_schema, left_partitions), (right_schema, right_partitions)) =
+            create_knn_test_data((0.1, 10.0), WKB_GEOMETRY)?;
+
+        let options = SpatialJoinOptions::default();
+        let k = 3;
+
+        let sql1 = format!(
+            "SELECT L.id, R.id, ST_Distance(L.geometry, R.geometry) FROM L JOIN R ON ST_KNN(L.geometry, R.geometry, {}, false) ORDER BY L.id, R.id",
+            k
+        );
+        let expected1 = compute_knn_ground_truth(&left_partitions, &right_partitions, k)
+            .into_iter()
+            .map(|(l, r, _)| (l, r))
+            .collect::<Vec<_>>();
+
+        let sql2 = format!(
+            "SELECT R.id, L.id, ST_Distance(L.geometry, R.geometry) FROM L JOIN R ON ST_KNN(R.geometry, L.geometry, {}, false) ORDER BY R.id, L.id",
+            k
+        );
+        let expected2 = compute_knn_ground_truth(&right_partitions, &left_partitions, k)
+            .into_iter()
+            .map(|(l, r, _)| (l, r))
+            .collect::<Vec<_>>();
+
+        let sqls = [(&sql1, &expected1), (&sql2, &expected2)];
+
+        for (sql, expected_results) in sqls {
+            let batches = run_spatial_join_query(
+                &left_schema,
+                &right_schema,
+                left_partitions.clone(),
+                right_partitions.clone(),
+                Some(options.clone()),
+                10,
+                sql,
+            )
+            .await?;
+
+            // Collect actual results
+            let mut actual_results = Vec::new();
+            let combined_batch = arrow::compute::concat_batches(&batches.schema(), &[batches])?;
+            let l_ids = combined_batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<arrow_array::Int32Array>()
+                .unwrap();
+            let r_ids = combined_batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<arrow_array::Int32Array>()
+                .unwrap();
+
+            for i in 0..combined_batch.num_rows() {
+                actual_results.push((l_ids.value(i), r_ids.value(i)));
+            }
+            actual_results.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+
+            assert_eq!(actual_results, *expected_results);
+        }
+
+        Ok(())
     }
 }

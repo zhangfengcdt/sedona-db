@@ -22,7 +22,7 @@ use sedona_testing::benchmark_util::{benchmark, BenchmarkArgSpec::*};
 fn criterion_benchmark(c: &mut Criterion) {
     let mut f = FunctionSet::new();
     for (name, kernel) in sedona_geos::register::scalar_kernels() {
-        f.add_scalar_udf_kernel(name, kernel).unwrap();
+        f.add_scalar_udf_impl(name, kernel).unwrap();
     }
 
     benchmark::scalar(c, &f, "geos", "st_area", Polygon(10));
@@ -48,6 +48,14 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     benchmark::scalar(c, &f, "geos", "st_centroid", Polygon(10));
     benchmark::scalar(c, &f, "geos", "st_centroid", Polygon(500));
+
+    benchmark::scalar(
+        c,
+        &f,
+        "geos",
+        "st_concavehull",
+        ArrayScalar(Polygon(10), Float64(0.0, 1.0)),
+    );
 
     benchmark::scalar(
         c,
@@ -229,13 +237,13 @@ fn criterion_benchmark(c: &mut Criterion) {
     benchmark::scalar(c, &f, "geos", "st_length", LineString(500));
 
     benchmark::scalar(c, &f, "geos", "st_makevalid", Polygon(10));
-    benchmark::scalar(c, &f, "geos", "st_makevalid", Polygon(10));
+    benchmark::scalar(c, &f, "geos", "st_makevalid", Polygon(100));
 
     benchmark::scalar(c, &f, "geos", "st_minimumclearance", Polygon(10));
     benchmark::scalar(c, &f, "geos", "st_minimumclearance", Polygon(10));
 
     benchmark::scalar(c, &f, "geos", "st_minimumclearanceline", LineString(10));
-    benchmark::scalar(c, &f, "geos", "st_minimumclearanceline", LineString(500));
+    benchmark::scalar(c, &f, "geos", "st_minimumclearanceline", LineString(50));
 
     benchmark::scalar(
         c,
@@ -255,6 +263,40 @@ fn criterion_benchmark(c: &mut Criterion) {
     benchmark::scalar(c, &f, "geos", "st_perimeter", Polygon(10));
     benchmark::scalar(c, &f, "geos", "st_perimeter", Polygon(500));
 
+    benchmark::scalar(c, &f, "geos", "st_polygonize", LineString(10));
+    benchmark::scalar(c, &f, "geos", "st_polygonize", LineString(500));
+
+    benchmark::scalar(
+        c,
+        &f,
+        "geos",
+        "st_simplify",
+        ArrayScalar(Polygon(10), Float64(1.0, 10.0)),
+    );
+    benchmark::scalar(
+        c,
+        &f,
+        "geos",
+        "st_simplify",
+        ArrayScalar(Polygon(500), Float64(1.0, 10.0)),
+    );
+
+    benchmark::scalar(
+        c,
+        &f,
+        "geos",
+        "st_simplifypreservetopology",
+        ArrayScalar(Polygon(10), Float64(1.0, 10.0)),
+    );
+
+    benchmark::scalar(
+        c,
+        &f,
+        "geos",
+        "st_simplifypreservetopology",
+        ArrayScalar(Polygon(25), Float64(1.0, 10.0)),
+    );
+
     benchmark::scalar(
         c,
         &f,
@@ -267,7 +309,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         &f,
         "geos",
         "st_snap",
-        ArrayArrayScalar(Polygon(10), Polygon(500), Float64(1.0, 10.0)),
+        ArrayArrayScalar(Polygon(10), Polygon(50), Float64(1.0, 10.0)),
     );
 
     benchmark::scalar(

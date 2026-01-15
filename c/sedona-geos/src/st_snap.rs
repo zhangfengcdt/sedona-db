@@ -22,7 +22,10 @@ use arrow_schema::DataType;
 use datafusion_common::{cast::as_float64_array, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use geos::Geom;
-use sedona_expr::scalar_udf::{ScalarKernelRef, SedonaScalarKernel};
+use sedona_expr::{
+    item_crs::ItemCrsKernel,
+    scalar_udf::{ScalarKernelRef, SedonaScalarKernel},
+};
 use sedona_geometry::wkb_factory::WKB_MIN_PROBABLE_BYTES;
 use sedona_schema::{
     datatypes::{SedonaType, WKB_GEOMETRY},
@@ -30,10 +33,11 @@ use sedona_schema::{
 };
 
 use crate::executor::GeosExecutor;
+use crate::geos_to_wkb::write_geos_geometry;
 
 /// ST_Snap() implementation using the geos crate
-pub fn st_snap_impl() -> ScalarKernelRef {
-    Arc::new(STSnap {})
+pub fn st_snap_impl() -> Vec<ScalarKernelRef> {
+    ItemCrsKernel::wrap_impl(STSnap {})
 }
 
 #[derive(Debug)]
@@ -93,15 +97,20 @@ fn invoke_scalar(
     tolerance: f64,
     writer: &mut impl std::io::Write,
 ) -> Result<()> {
-    let geometry = geom_input
-        .snap(geom_reference, tolerance)
-        .map_err(|e| DataFusionError::Execution(format!("Failed to snap geometry: {e}")))?;
-
-    let wkb = geometry
-        .to_wkb()
-        .map_err(|e| DataFusionError::Execution(format!("Failed to convert to wkb: {e}")))?;
-
-    writer.write_all(wkb.as_ref())?;
+    let is_empty = geom_input.is_empty().map_err(|e| {
+        DataFusionError::Execution(format!("Failed to check if geometry is empty: {e}"))
+    })?;
+    if is_empty {
+        // There's a bug in GEOS where snap() adds a Z coordinate when processing POINT EMPTY or LINESTRING EMPTY.
+        // See https://github.com/apache/sedona-db/pull/493.
+        // As a workaround, we handle it separately and write the input geometry as-is
+        write_geos_geometry(geom_input, writer)?;
+    } else {
+        let geometry = geom_input
+            .snap(geom_reference, tolerance)
+            .map_err(|e| DataFusionError::Execution(format!("Failed to snap geometry: {e}")))?;
+        write_geos_geometry(&geometry, writer)?;
+    }
     Ok(())
 }
 
@@ -109,7 +118,7 @@ fn invoke_scalar(
 mod tests {
     use rstest::rstest;
     use sedona_expr::scalar_udf::SedonaScalarUDF;
-    use sedona_schema::datatypes::{SedonaType, WKB_VIEW_GEOMETRY};
+    use sedona_schema::datatypes::{SedonaType, WKB_GEOMETRY_ITEM_CRS, WKB_VIEW_GEOMETRY};
     use sedona_testing::{
         compare::assert_array_equal, create::create_array, testers::ScalarUdfTester,
     };
@@ -118,7 +127,7 @@ mod tests {
 
     #[rstest]
     fn udf(#[values(WKB_GEOMETRY, WKB_VIEW_GEOMETRY)] sedona_type: SedonaType) {
-        let udf = SedonaScalarUDF::from_kernel("st_snap", st_snap_impl());
+        let udf = SedonaScalarUDF::from_impl("st_snap", st_snap_impl());
         let tester = ScalarUdfTester::new(
             udf.into(),
             vec![
@@ -247,5 +256,24 @@ mod tests {
                 .unwrap(),
             &expected_geometries,
         );
+    }
+
+    #[rstest]
+    fn udf_invoke_item_crs(#[values(WKB_GEOMETRY_ITEM_CRS.clone())] sedona_type: SedonaType) {
+        let udf = SedonaScalarUDF::from_impl("st_snap", st_snap_impl());
+        let tester = ScalarUdfTester::new(
+            udf.into(),
+            vec![
+                sedona_type.clone(),
+                sedona_type.clone(),
+                SedonaType::Arrow(DataType::Float64),
+            ],
+        );
+        tester.assert_return_type(sedona_type);
+
+        let result = tester
+            .invoke_scalar_scalar_scalar("POINT (1.1 2.1)", "POINT (1 2)", 0.5)
+            .unwrap();
+        tester.assert_scalar_result_equals(result, "POINT (1 2)");
     }
 }

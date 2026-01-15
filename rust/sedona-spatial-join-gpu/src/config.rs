@@ -14,15 +14,21 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-#pragma once
 
-#include "gpuspatial/index/streaming_joiner.hpp"
+#[derive(Debug, Clone)]
+pub struct GpuSpatialJoinConfig {
+    /// GPU device ID to use
+    pub device_id: i32,
 
-#include <memory>
+    /// Fall back to CPU if GPU fails
+    pub fallback_to_cpu: bool,
+}
 
-namespace gpuspatial {
-std::unique_ptr<StreamingJoiner> CreateSpatialJoiner();
-
-void InitSpatialJoiner(StreamingJoiner* index, const char* ptx_root,
-                       uint32_t concurrency);
-}  // namespace gpuspatial
+impl Default for GpuSpatialJoinConfig {
+    fn default() -> Self {
+        Self {
+            device_id: 0,
+            fallback_to_cpu: true,
+        }
+    }
+}

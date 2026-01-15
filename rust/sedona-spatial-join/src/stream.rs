@@ -210,7 +210,9 @@ impl SpatialJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
+        log::debug!("[CPU Join] Probe stream waiting for build index...");
         let index = ready!(self.once_fut_spatial_index.get_shared(cx))?;
+        log::debug!("[CPU Join] Spatial index received, starting probe phase");
         self.spatial_index = Some(index);
         self.state = SpatialJoinStreamState::FetchProbeBatch;
         Poll::Ready(Ok(StatefulStreamResult::Continue))
@@ -222,15 +224,20 @@ impl SpatialJoinStream {
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         let result = self.probe_stream.poll_next_unpin(cx);
         match result {
-            Poll::Ready(Some(Ok(batch))) => match self.create_spatial_join_iterator(batch) {
-                Ok(iterator) => {
-                    self.state = SpatialJoinStreamState::ProcessProbeBatch(iterator);
-                    Poll::Ready(Ok(StatefulStreamResult::Continue))
+            Poll::Ready(Some(Ok(batch))) => {
+                let num_rows = batch.num_rows();
+                log::debug!("[CPU Join] Fetched probe batch: {} rows", num_rows);
+                match self.create_spatial_join_iterator(batch) {
+                    Ok(iterator) => {
+                        self.state = SpatialJoinStreamState::ProcessProbeBatch(iterator);
+                        Poll::Ready(Ok(StatefulStreamResult::Continue))
+                    }
+                    Err(e) => Poll::Ready(Err(e)),
                 }
-                Err(e) => Poll::Ready(Err(e)),
-            },
+            }
             Poll::Ready(Some(Err(e))) => Poll::Ready(Err(e)),
             Poll::Ready(None) => {
+                log::debug!("[CPU Join] All probe batches processed");
                 self.state = SpatialJoinStreamState::ExhaustedProbeSide;
                 Poll::Ready(Ok(StatefulStreamResult::Continue))
             }
@@ -244,13 +251,14 @@ impl SpatialJoinStream {
         // Extract the necessary data first to avoid borrowing conflicts
         let (batch_opt, is_complete) = match &mut self.state {
             SpatialJoinStreamState::ProcessProbeBatch(iterator) => {
-                // For KNN joins, we swapped build/probe sides, so build_side should be Right
-                // For regular joins, build_side is Left
+                // For KNN joins, we may have swapped build/probe sides, so build_side might be Right;
+                // For regular joins, build_side is always Left.
                 let build_side = match &self.spatial_predicate {
-                    SpatialPredicate::KNearestNeighbors(_) => JoinSide::Right,
+                    SpatialPredicate::KNearestNeighbors(knn) => knn.probe_side.negate(),
                     _ => JoinSide::Left,
                 };
 
+                let process_start = std::time::Instant::now();
                 let batch_opt = match iterator.next_batch(
                     &self.schema,
                     self.filter.as_ref(),
@@ -258,7 +266,14 @@ impl SpatialJoinStream {
                     &self.column_indices,
                     build_side,
                 ) {
-                    Ok(opt) => opt,
+                    Ok(opt) => {
+                        if let Some(ref batch) = opt {
+                            let process_elapsed = process_start.elapsed();
+                            log::debug!("[CPU Join] Produced result batch: {} rows in {:.3}s (index query + refinement)",
+                                batch.num_rows(), process_elapsed.as_secs_f64());
+                        }
+                        opt
+                    }
                     Err(e) => {
                         return Poll::Ready(Err(e));
                     }
@@ -698,6 +713,7 @@ impl SpatialJoinBatchIterator {
             &probe_indices,
             column_indices,
             build_side,
+            join_type,
         )?;
 
         // Update metrics with actual output
@@ -896,6 +912,7 @@ impl UnmatchedBuildBatchIterator {
                     &right_side,
                     column_indices,
                     build_side,
+                    join_type,
                 )?
             };
 
