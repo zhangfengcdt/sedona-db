@@ -15,22 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, sync::Arc};
+use std::{any::Any, iter, sync::Arc};
 
 use datafusion_common::{config::ConfigOptions, error::DataFusionError, Statistics};
 use datafusion_datasource::{
-    file::FileSource, file_scan_config::FileScanConfig, file_stream::FileOpener, TableSchema,
+    file::FileSource, file_groups::FileGroupPartitioner, file_scan_config::FileScanConfig,
+    file_stream::FileOpener, source::DataSource, TableSchema,
 };
-use datafusion_physical_expr::{conjunction, PhysicalExpr};
+use datafusion_physical_expr::{conjunction, LexOrdering, PhysicalExpr};
 use datafusion_physical_plan::{
     filter_pushdown::{FilterPushdownPropagation, PushedDown},
     metrics::ExecutionPlanMetricsSet,
 };
 use object_store::ObjectStore;
 
-use crate::{
-    las::{format::Extension, opener::LasOpener, reader::LasFileReaderFactory},
-    options::PointcloudOptions,
+use crate::las::{
+    format::Extension, opener::LasOpener, options::LasOptions, reader::LasFileReaderFactory,
 };
 
 #[derive(Clone, Debug)]
@@ -46,7 +46,7 @@ pub struct LasSource {
     /// Batch size configuration
     pub(crate) batch_size: Option<usize>,
     pub(crate) projected_statistics: Option<Statistics>,
-    pub(crate) options: PointcloudOptions,
+    pub(crate) options: LasOptions,
     pub(crate) extension: Extension,
 }
 
@@ -64,7 +64,7 @@ impl LasSource {
         }
     }
 
-    pub fn with_options(mut self, options: PointcloudOptions) -> Self {
+    pub fn with_options(mut self, options: LasOptions) -> Self {
         self.options = options;
         self
     }
@@ -80,7 +80,7 @@ impl FileSource for LasSource {
         &self,
         object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
-        _partition: usize,
+        partition: usize,
     ) -> Arc<dyn FileOpener> {
         let projection = base_config
             .file_column_projection_indices()
@@ -98,6 +98,8 @@ impl FileSource for LasSource {
             predicate: self.predicate.clone(),
             file_reader_factory,
             options: self.options.clone(),
+            partition_count: base_config.output_partitioning().partition_count(),
+            partition,
         })
     }
 
@@ -147,6 +149,52 @@ impl FileSource for LasSource {
 
     fn file_type(&self) -> &str {
         self.extension.as_str()
+    }
+
+    fn repartitioned(
+        &self,
+        target_partitions: usize,
+        repartition_file_min_size: usize,
+        output_ordering: Option<LexOrdering>,
+        config: &FileScanConfig,
+    ) -> Result<Option<FileScanConfig>, DataFusionError> {
+        if output_ordering.is_none() & self.options.round_robin_partitioning {
+            // Custom round robin repartitioning
+            //
+            // The default way to partition a dataset to enable parallel reading
+            // by DataFusion is through splitting files by byte ranges into the
+            // number of target partitions. For selective queries on (partially)
+            // ordered datasets that support pruning, this can result in unequal
+            // resource use, as all the work is done on one partition while the
+            // rest is pruned. Additionally, this breaks the existing locality
+            // in the input when it is converted, as data from all partitions
+            // ends up in each output row group. This approach addresses these
+            // issues by partitioning the dataset using a round-robin scheme
+            // across sequential chunks. This improves selective query performance
+            // by more than half.
+            let mut config = config.clone();
+            config.file_groups = config
+                .file_groups
+                .into_iter()
+                .flat_map(|fg| iter::repeat_n(fg, target_partitions))
+                .collect();
+            return Ok(Some(config));
+        } else {
+            // Default byte range repartitioning
+            let repartitioned_file_groups_option = FileGroupPartitioner::new()
+                .with_target_partitions(target_partitions)
+                .with_repartition_file_min_size(repartition_file_min_size)
+                .with_preserve_order_within_groups(output_ordering.is_some())
+                .repartition_file_groups(&config.file_groups);
+
+            if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
+                let mut source = config.clone();
+                source.file_groups = repartitioned_file_groups;
+                return Ok(Some(source));
+            }
+        }
+
+        Ok(None)
     }
 
     fn try_pushdown_filters(

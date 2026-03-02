@@ -60,12 +60,9 @@ use sedona_geoparquet::{
     provider::{geoparquet_listing_table, GeoParquetReadOptions},
 };
 #[cfg(feature = "pointcloud")]
-use sedona_pointcloud::{
-    las::{
-        format::{Extension, LasFormatFactory},
-        options::LasExtraBytes,
-    },
-    options::{GeometryEncoding, PointcloudOptions},
+use sedona_pointcloud::las::{
+    format::{Extension, LasFormatFactory},
+    options::{GeometryEncoding, LasExtraBytes, LasOptions},
 };
 
 /// Sedona SessionContext wrapper
@@ -120,7 +117,7 @@ impl SedonaContext {
 
         #[cfg(feature = "pointcloud")]
         let session_config = session_config.with_option_extension(
-            PointcloudOptions::default()
+            LasOptions::default()
                 .with_geometry_encoding(GeometryEncoding::Wkb)
                 .with_las_extra_bytes(LasExtraBytes::Typed),
         );

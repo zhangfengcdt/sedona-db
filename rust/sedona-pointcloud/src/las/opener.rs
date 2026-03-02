@@ -29,12 +29,10 @@ use futures::StreamExt;
 use sedona_expr::spatial_filter::SpatialFilter;
 use sedona_geometry::bounding_box::BoundingBox;
 
-use crate::{
-    las::{
-        reader::{LasFileReader, LasFileReaderFactory},
-        schema::try_schema_from_header,
-    },
-    options::PointcloudOptions,
+use crate::las::{
+    options::LasOptions,
+    reader::{LasFileReader, LasFileReaderFactory},
+    schema::try_schema_from_header,
 };
 
 pub struct LasOpener {
@@ -42,13 +40,18 @@ pub struct LasOpener {
     pub projection: Arc<[usize]>,
     /// Optional limit on the number of rows to read
     pub limit: Option<usize>,
+    /// Filter predicate for pruning
     pub predicate: Option<Arc<dyn PhysicalExpr>>,
     /// Factory for instantiating LAS/LAZ reader
     pub file_reader_factory: Arc<LasFileReaderFactory>,
     /// Table options
-    pub options: PointcloudOptions,
+    pub options: LasOptions,
     /// Target batch size
-    pub(crate) batch_size: usize,
+    pub batch_size: usize,
+    /// Target partition count
+    pub partition_count: usize,
+    /// Partition to read
+    pub partition: usize,
 }
 
 impl FileOpener for LasOpener {
@@ -56,6 +59,9 @@ impl FileOpener for LasOpener {
         let projection = self.projection.clone();
         let limit = self.limit;
         let batch_size = self.batch_size;
+        let round_robin = self.options.round_robin_partitioning;
+        let partition_count = self.partition_count;
+        let partition = self.partition;
 
         let predicate = self.predicate.clone();
 
@@ -68,7 +74,7 @@ impl FileOpener for LasOpener {
             let schema = Arc::new(try_schema_from_header(
                 &metadata.header,
                 file_reader.options.geometry_encoding,
-                file_reader.options.las.extra_bytes,
+                file_reader.options.extra_bytes,
             )?);
 
             let pruning_predicate = predicate.and_then(|physical_expr| {
@@ -117,6 +123,11 @@ impl FileOpener for LasOpener {
 
             let stream = async_stream::try_stream! {
                 for (i, chunk_meta) in metadata.chunk_table.iter().enumerate() {
+                    // round robin
+                    if round_robin && i % partition_count != partition {
+                        continue;
+                    }
+
                     // limit
                     if let Some(limit) = limit {
                         if row_count >= limit {
@@ -187,10 +198,10 @@ mod tests {
         let ctx = SedonaContext::new_local_interactive().await.unwrap();
 
         // ensure no faulty chunk pruning
-        ctx.sql("SET pointcloud.geometry_encoding = 'plain'")
+        ctx.sql("SET las.geometry_encoding = 'plain'")
             .await
             .unwrap();
-        ctx.sql("SET pointcloud.collect_statistics = 'true'")
+        ctx.sql("SET las.collect_statistics = 'true'")
             .await
             .unwrap();
 
@@ -212,9 +223,7 @@ mod tests {
             .unwrap();
         assert_eq!(count, 50000);
 
-        ctx.sql("SET pointcloud.geometry_encoding = 'wkb'")
-            .await
-            .unwrap();
+        ctx.sql("SET las.geometry_encoding = 'wkb'").await.unwrap();
         let count = ctx
             .sql(&format!("SELECT * FROM \"{path}\" WHERE ST_Intersects(geometry, ST_GeomFromText('POLYGON ((0 0, 0.7 0, 0.7 0.7, 0 0.7, 0 0))'))"))
             .await
@@ -233,10 +242,10 @@ mod tests {
         let ctx = SedonaContext::new_local_interactive().await.unwrap();
 
         // ensure no faulty chunk pruning
-        ctx.sql("SET pointcloud.geometry_encoding = 'plain'")
+        ctx.sql("SET las.geometry_encoding = 'plain'")
             .await
             .unwrap();
-        ctx.sql("SET pointcloud.collect_statistics = 'true'")
+        ctx.sql("SET las.collect_statistics = 'true'")
             .await
             .unwrap();
 
@@ -258,9 +267,7 @@ mod tests {
             .unwrap();
         assert_eq!(count, 50000);
 
-        ctx.sql("SET pointcloud.geometry_encoding = 'wkb'")
-            .await
-            .unwrap();
+        ctx.sql("SET las.geometry_encoding = 'wkb'").await.unwrap();
         let count = ctx
             .sql(&format!("SELECT * FROM \"{path}\" WHERE ST_Intersects(geometry, ST_GeomFromText('POLYGON ((0 0, 0.7 0, 0.7 0.7, 0 0.7, 0 0))'))"))
             .await
@@ -269,5 +276,33 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 50000);
+    }
+
+    #[tokio::test]
+    async fn round_robin_partitioning() {
+        // file with two clusters, one at 0.5 one at 1.0
+        let path = "tests/data/large.laz";
+
+        let ctx = SedonaContext::new_local_interactive().await.unwrap();
+
+        let result1 = ctx
+            .sql(&format!("SELECT * FROM \"{path}\""))
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        ctx.sql("SET las.round_robin_partitioning = 'true'")
+            .await
+            .unwrap();
+        let result2 = ctx
+            .sql(&format!("SELECT * FROM \"{path}\""))
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(result1, result2);
     }
 }
