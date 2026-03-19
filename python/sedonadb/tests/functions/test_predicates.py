@@ -442,3 +442,56 @@ def test_st_overlaps(eng, geom1, geom2, expected):
         f"SELECT ST_Overlaps({geom_or_null(geom1)}, {geom_or_null(geom2)})",
         expected,
     )
+
+
+@pytest.mark.parametrize("eng", [SedonaDB, PostGIS])
+@pytest.mark.parametrize(
+    ("geom1", "geom2", "expected"),
+    [
+        (None, None, None),
+        ("POINT (0 0)", None, None),
+        (None, "POINT (0 0)", None),
+        ("POINT (0 0)", "POINT (1 1)", "FF0FFF0F2"),
+        ("POINT (0 0)", "POINT (0 0)", "0FFFFFFF2"),
+        ("POINT (0 0)", "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", "F0FFFF212"),
+        ("POINT (0.5 0.5)", "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", "0FFFFF212"),
+        (
+            "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
+            "POLYGON ((5 5, 6 5, 6 6, 5 6, 5 5))",
+            "FF2FF1212",
+        ),
+        (
+            "POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))",
+            "POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1))",
+            "212101212",
+        ),
+        ("POINT (0 0)", "LINESTRING (0 0, 1 1)", "F0FFFF102"),
+        ("LINESTRING (0 0, 2 2)", "LINESTRING (1 1, 3 3)", "1010F0102"),
+        (
+            "GEOMETRYCOLLECTION (POINT (0 0), LINESTRING (0 0, 1 1))",
+            "POINT (0 0)",
+            "FF10F0FF2",
+        ),
+        (
+            "POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))",
+            "POLYGON ((2 0, 4 0, 4 2, 2 2, 2 0))",
+            "FF2F11212",
+        ),  # touching polygons
+        (
+            "POLYGON ((0 0, 4 0, 4 4, 0 4, 0 0))",
+            "POLYGON ((1 1, 2 1, 2 2, 1 2, 1 1))",
+            "212FF1FF2",
+        ),  # polygon containment
+        (
+            "POLYGON ((0 0, 6 0, 6 6, 0 6, 0 0), (2 2, 4 2, 4 4, 2 4, 2 2))",
+            "POINT (1 1)",
+            "0F2FF1FF2",
+        ),  # point in a polygon hole
+    ],
+)
+def test_st_relate(eng, geom1, geom2, expected):
+    eng = eng.create_or_skip()
+    eng.assert_query_result(
+        f"SELECT ST_Relate({geom_or_null(geom1)}, {geom_or_null(geom2)})",
+        expected,
+    )
