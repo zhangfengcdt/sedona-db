@@ -18,13 +18,15 @@
 use std::sync::Arc;
 
 use arrow::array::Float64Array;
-use arrow_array::{Array, RecordBatch, StructArray};
+use arrow_array::{Array, ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, StructArray};
 use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion::config::SpillCompression;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::{disk_manager::RefCountedTempFile, runtime_env::RuntimeEnv};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_plan::metrics::SpillMetrics;
+use geo::{Coord, Rect};
+use geo_traits::CoordTrait;
 use sedona_common::{sedona_internal_datafusion_err, sedona_internal_err};
 use sedona_schema::datatypes::SedonaType;
 
@@ -52,6 +54,7 @@ pub struct EvaluatedBatchSpillWriter {
 const SPILL_FIELD_DATA_INDEX: usize = 0;
 const SPILL_FIELD_GEOM_INDEX: usize = 1;
 const SPILL_FIELD_DIST_INDEX: usize = 2;
+const SPILL_FIELD_RECT_INDEX: usize = 3;
 
 impl EvaluatedBatchSpillWriter {
     /// Create a new SpillWriter
@@ -70,7 +73,12 @@ impl EvaluatedBatchSpillWriter {
             Field::new("data", DataType::Struct(data_inner_fields.clone()), false);
         let geom_field = sedona_type.to_storage_field("geom", true)?;
         let dist_field = Field::new("dist", DataType::Float64, true);
-        let spill_schema = Schema::new(vec![data_struct_field, geom_field, dist_field]);
+        let rect_field = Field::new(
+            "rect",
+            DataType::new_fixed_size_list(DataType::Float32, 4, true),
+            true,
+        );
+        let spill_schema = Schema::new(vec![data_struct_field, geom_field, dist_field, rect_field]);
 
         // Create spill file
         let inner = RecordBatchSpillWriter::try_new(
@@ -115,7 +123,7 @@ impl EvaluatedBatchSpillWriter {
         // Store dist into a Float64Array
         let mut dist_builder = arrow::array::Float64Builder::with_capacity(num_rows);
         let geom_array = &evaluated_batch.geom_array;
-        match &geom_array.distance {
+        match geom_array.distance() {
             Some(ColumnarValue::Scalar(scalar)) => match scalar {
                 ScalarValue::Float64(dist_value) => {
                     for _ in 0..num_rows {
@@ -141,11 +149,31 @@ impl EvaluatedBatchSpillWriter {
         }
         let dist_array = dist_builder.finish();
 
+        // Store rect into a FixedSizeList array
+        let mut rect_builder =
+            arrow::array::FixedSizeListBuilder::new(arrow::array::Float32Builder::new(), 4);
+        for rect_opt in geom_array.rects() {
+            if let Some(rect) = rect_opt {
+                rect_builder.values().append_slice(&[
+                    rect.min().x(),
+                    rect.min().y(),
+                    rect.max().x(),
+                    rect.max().y(),
+                ]);
+                rect_builder.append(true);
+            } else {
+                rect_builder.values().append_nulls(4);
+                rect_builder.append(false);
+            }
+        }
+        let rect_array = rect_builder.finish();
+
         // Assemble the final spilled RecordBatch
         let columns = vec![
-            Arc::new(data_struct_array) as Arc<dyn arrow::array::Array>,
-            Arc::clone(&geom_array.geometry_array),
-            Arc::new(dist_array) as Arc<dyn arrow::array::Array>,
+            Arc::new(data_struct_array) as ArrayRef,
+            Arc::clone(geom_array.geometry_array()),
+            Arc::new(dist_array) as ArrayRef,
+            Arc::new(rect_array) as ArrayRef,
         ];
         let spilled_record_batch =
             RecordBatch::try_new(Arc::new(self.spill_schema.clone()), columns)?;
@@ -170,7 +198,6 @@ impl EvaluatedBatchSpillReader {
     }
 
     /// Read the next EvaluatedBatch from the spill file
-    #[allow(unused)]
     pub fn next_batch(&mut self) -> Option<Result<EvaluatedBatch>> {
         self.next_raw_batch()
             .map(|record_batch| record_batch.and_then(spilled_batch_to_evaluated_batch))
@@ -250,9 +277,47 @@ pub(crate) fn spilled_batch_to_evaluated_batch(
         None
     };
 
+    // Extract the rect array
+    let rect_array = record_batch
+        .column(SPILL_FIELD_RECT_INDEX)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .ok_or_else(|| {
+            sedona_internal_datafusion_err!("Expected rect column to be FixedSizeListArray")
+        })?;
+    let rect_child_array = rect_array
+        .values()
+        .as_any()
+        .downcast_ref::<Float32Array>()
+        .ok_or_else(|| {
+            sedona_internal_datafusion_err!("Expected rect column child to be Float32Array")
+        })?;
+    let rect_vec = (0..rect_array.len())
+        .map(|i| {
+            if rect_array.is_null(i) {
+                None
+            } else {
+                let child_i = i * 4;
+                unsafe {
+                    Some(Rect::new(
+                        Coord {
+                            x: rect_child_array.value_unchecked(child_i),
+                            y: rect_child_array.value_unchecked(child_i + 1),
+                        },
+                        Coord {
+                            x: rect_child_array.value_unchecked(child_i + 2),
+                            y: rect_child_array.value_unchecked(child_i + 3),
+                        },
+                    ))
+                }
+            }
+        })
+        .collect::<Vec<_>>();
+
     // Create EvaluatedGeometryArray
-    let mut geom_array = EvaluatedGeometryArray::try_new(geom_array, &sedona_type)?;
-    geom_array.distance = distance;
+    let geom_array =
+        EvaluatedGeometryArray::try_new_with_rects(geom_array, rect_vec, &sedona_type)?
+            .with_distance(distance);
 
     Ok(EvaluatedBatch { batch, geom_array })
 }
@@ -328,10 +393,11 @@ mod tests {
     fn create_test_evaluated_batch() -> Result<EvaluatedBatch> {
         let batch = create_test_record_batch()?;
         let (geom_array, sedona_type) = create_test_geometry_array()?;
-        let mut geom_array = EvaluatedGeometryArray::try_new(geom_array, &sedona_type)?;
 
-        // Add distance as a scalar value
-        geom_array.distance = Some(ColumnarValue::Scalar(ScalarValue::Float64(Some(10.0))));
+        // With distance as ScalarValue
+        let geom_array = EvaluatedGeometryArray::try_new(geom_array, &sedona_type)?.with_distance(
+            Some(ColumnarValue::Scalar(ScalarValue::Float64(Some(10.0)))),
+        );
 
         Ok(EvaluatedBatch { batch, geom_array })
     }
@@ -339,11 +405,11 @@ mod tests {
     fn create_test_evaluated_batch_with_array_distance() -> Result<EvaluatedBatch> {
         let batch = create_test_record_batch()?;
         let (geom_array, sedona_type) = create_test_geometry_array()?;
-        let mut geom_array = EvaluatedGeometryArray::try_new(geom_array, &sedona_type)?;
 
-        // Add distance as an array value
+        // With distance as an array value
         let dist_array = Arc::new(Float64Array::from(vec![Some(1.0), Some(2.0), Some(3.0)]));
-        geom_array.distance = Some(ColumnarValue::Array(dist_array));
+        let geom_array = EvaluatedGeometryArray::try_new(geom_array, &sedona_type)?
+            .with_distance(Some(ColumnarValue::Array(dist_array)));
 
         Ok(EvaluatedBatch { batch, geom_array })
     }
@@ -374,11 +440,10 @@ mod tests {
             Some(point3_wkb.as_slice()),
         ]));
 
-        let mut geom_array = EvaluatedGeometryArray::try_new(geom_array, &sedona_type)?;
-
-        // Add distance with nulls
+        // With distance with nulls
         let dist_array = Arc::new(Float64Array::from(vec![Some(1.0), None, Some(3.0)]));
-        geom_array.distance = Some(ColumnarValue::Array(dist_array));
+        let geom_array = EvaluatedGeometryArray::try_new(geom_array, &sedona_type)?
+            .with_distance(Some(ColumnarValue::Array(dist_array)));
 
         Ok(EvaluatedBatch { batch, geom_array })
     }
@@ -402,7 +467,7 @@ mod tests {
         )?;
 
         // Verify the spill schema has the expected structure
-        assert_eq!(writer.spill_schema.fields().len(), 3);
+        assert_eq!(writer.spill_schema.fields().len(), 4);
         assert_eq!(
             writer.spill_schema.field(SPILL_FIELD_DATA_INDEX).name(),
             "data"
@@ -414,6 +479,10 @@ mod tests {
         assert_eq!(
             writer.spill_schema.field(SPILL_FIELD_DIST_INDEX).name(),
             "dist"
+        );
+        assert_eq!(
+            writer.spill_schema.field(SPILL_FIELD_RECT_INDEX).name(),
+            "rect"
         );
 
         Ok(())
@@ -487,7 +556,7 @@ mod tests {
         let read_batch = reader.next_batch().unwrap()?;
 
         // Verify distance is read back as array
-        match &read_batch.geom_array.distance {
+        match read_batch.geom_array.distance() {
             Some(ColumnarValue::Array(array)) => {
                 let float_array = array.as_any().downcast_ref::<Float64Array>().unwrap();
                 assert_eq!(float_array.len(), 3);
@@ -529,10 +598,10 @@ mod tests {
 
         // Verify nulls are preserved
         assert_eq!(read_batch.num_rows(), 3);
-        assert!(read_batch.geom_array.rects[1].is_none()); // Null geometry
+        assert!(read_batch.geom_array.rects()[1].is_none()); // Null geometry
 
         // Verify distance nulls
-        match &read_batch.geom_array.distance {
+        match read_batch.geom_array.distance() {
             Some(ColumnarValue::Array(array)) => {
                 let float_array = array.as_any().downcast_ref::<Float64Array>().unwrap();
                 assert!(float_array.is_valid(0));
@@ -642,7 +711,7 @@ mod tests {
         )?;
 
         let evaluated_batch = create_test_evaluated_batch()?;
-        let original_rects = evaluated_batch.rects().clone();
+        let original_rects = evaluated_batch.geom_array.rects();
 
         writer.append(&evaluated_batch)?;
         let temp_file = writer.finish()?;
@@ -651,8 +720,11 @@ mod tests {
         let mut reader = EvaluatedBatchSpillReader::try_new(&temp_file)?;
         let read_batch = reader.next_batch().unwrap()?;
 
-        assert_eq!(read_batch.rects().len(), original_rects.len());
-        for (original, read) in original_rects.iter().zip(read_batch.rects().iter()) {
+        assert_eq!(read_batch.geom_array.rects().len(), original_rects.len());
+        for (original, read) in original_rects
+            .iter()
+            .zip(read_batch.geom_array.rects().iter())
+        {
             match (original, read) {
                 (Some(orig_rect), Some(read_rect)) => {
                     assert_eq!(orig_rect.min().x, read_rect.min().x);
@@ -694,7 +766,7 @@ mod tests {
         let mut reader = EvaluatedBatchSpillReader::try_new(&temp_file)?;
         let read_batch = reader.next_batch().unwrap()?;
 
-        match &read_batch.geom_array.distance {
+        match read_batch.geom_array.distance() {
             Some(ColumnarValue::Scalar(ScalarValue::Float64(Some(val)))) => {
                 assert_eq!(*val, 10.0);
             }

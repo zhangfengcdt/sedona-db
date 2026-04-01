@@ -32,7 +32,6 @@ use sedona_expr::statistics::GeoStatistics;
 use sedona_functions::st_analyze_agg::AnalyzeAccumulator;
 use sedona_schema::datatypes::WKB_GEOMETRY;
 
-use crate::index::spatial_index_builder::SpatialIndexBuilderRef;
 use crate::{
     evaluated_batch::{
         evaluated_batch_stream::{
@@ -42,7 +41,8 @@ use crate::{
         spill::EvaluatedBatchSpillWriter,
         EvaluatedBatch,
     },
-    operand_evaluator::{create_operand_evaluator, OperandEvaluator},
+    join_provider::SpatialJoinProvider,
+    operand_evaluator::create_operand_evaluator,
     spatial_predicate::SpatialPredicate,
     utils::bbox_sampler::{BoundingBoxSampler, BoundingBoxSamples},
 };
@@ -81,10 +81,9 @@ pub(crate) struct BuildPartition {
 pub(crate) struct BuildSideBatchesCollector {
     spatial_predicate: SpatialPredicate,
     spatial_join_options: SpatialJoinOptions,
-    evaluator: Arc<dyn OperandEvaluator>,
     runtime_env: Arc<RuntimeEnv>,
     spill_compression: SpillCompression,
-    spatial_index_builder: SpatialIndexBuilderRef,
+    join_provider: Arc<dyn SpatialJoinProvider>,
 }
 
 #[derive(Clone)]
@@ -128,16 +127,14 @@ impl BuildSideBatchesCollector {
         spatial_join_options: SpatialJoinOptions,
         runtime_env: Arc<RuntimeEnv>,
         spill_compression: SpillCompression,
-        spatial_index_builder: SpatialIndexBuilderRef,
+        join_provider: Arc<dyn SpatialJoinProvider>,
     ) -> Self {
-        let evaluator = create_operand_evaluator(&spatial_predicate, spatial_join_options.clone());
         BuildSideBatchesCollector {
             spatial_predicate,
             spatial_join_options,
-            evaluator,
             runtime_env,
             spill_compression,
-            spatial_index_builder,
+            join_provider,
         }
     }
 
@@ -220,7 +217,7 @@ impl BuildSideBatchesCollector {
         }
 
         let geo_statistics = analyzer.finish();
-        let extra_mem = self.spatial_index_builder.estimate_extra_memory_usage(
+        let extra_mem = self.join_provider.estimate_extra_memory_usage(
             &geo_statistics,
             &self.spatial_predicate,
             &self.spatial_join_options,
@@ -328,7 +325,10 @@ impl BuildSideBatchesCollector {
             .enumerate()
         {
             let collector = self.clone();
-            let evaluator = Arc::clone(&self.evaluator);
+            let evaluator = create_operand_evaluator(
+                &self.spatial_predicate,
+                self.join_provider.evaluated_array_factory(),
+            );
             let bbox_sampler = BoundingBoxSampler::try_new(
                 self.spatial_join_options.min_index_side_bbox_samples,
                 self.spatial_join_options.max_index_side_bbox_samples,
@@ -377,7 +377,10 @@ impl BuildSideBatchesCollector {
             .zip(reservations)
             .enumerate()
         {
-            let evaluator = Arc::clone(&self.evaluator);
+            let evaluator = create_operand_evaluator(
+                &self.spatial_predicate,
+                self.join_provider.evaluated_array_factory(),
+            );
             let bbox_sampler = BoundingBoxSampler::try_new(
                 self.spatial_join_options.min_index_side_bbox_samples,
                 self.spatial_join_options.max_index_side_bbox_samples,
@@ -408,7 +411,7 @@ impl BuildSideBatchesCollector {
         let build_side_batch = &in_mem_batches[0];
 
         let schema = build_side_batch.schema();
-        let sedona_type = &build_side_batch.geom_array.sedona_type;
+        let sedona_type = &build_side_batch.geom_array.sedona_type();
         let mut spill_writer = EvaluatedBatchSpillWriter::try_new(
             Arc::clone(&self.runtime_env),
             schema,
@@ -442,15 +445,14 @@ impl BuildSideBatchesCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::spatial_index_builder::SpatialJoinBuildMetrics;
-    use crate::index::DefaultSpatialIndexBuilder;
+    use crate::join_provider::DefaultSpatialJoinProvider;
     use crate::{
         operand_evaluator::EvaluatedGeometryArray,
         spatial_predicate::{RelationPredicate, SpatialRelationType},
     };
     use arrow_array::{ArrayRef, BinaryArray, Int32Array, RecordBatch};
     use arrow_schema::{DataType, Field, Schema};
-    use datafusion_common::{JoinType, ScalarValue};
+    use datafusion_common::ScalarValue;
     use datafusion_execution::memory_pool::{GreedyMemoryPool, MemoryConsumer, MemoryPool};
     use datafusion_physical_expr::expressions::Literal;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -488,22 +490,12 @@ mod tests {
             SpatialRelationType::Intersects,
         ));
 
-        let builder = DefaultSpatialIndexBuilder::new(
-            test_schema(),
-            predicate.clone(),
-            SpatialJoinOptions::default(),
-            JoinType::Inner,
-            1,
-            SpatialJoinBuildMetrics::default(),
-        )
-        .unwrap();
-
         BuildSideBatchesCollector::new(
             predicate,
             SpatialJoinOptions::default(),
             Arc::new(RuntimeEnv::default()),
             SpillCompression::Uncompressed,
-            Arc::new(builder),
+            Arc::new(DefaultSpatialJoinProvider),
         )
     }
 

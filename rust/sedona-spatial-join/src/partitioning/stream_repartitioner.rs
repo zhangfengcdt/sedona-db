@@ -35,13 +35,11 @@ use crate::{
         SpatialPartitioner,
     },
 };
-use arrow::compute::interleave as arrow_interleave;
 use arrow::compute::interleave_record_batch;
-use arrow_array::{Array, ArrayRef, RecordBatch};
+use arrow_array::RecordBatch;
 use datafusion::config::SpillCompression;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::Result;
 use datafusion_execution::{disk_manager::RefCountedTempFile, runtime_env::RuntimeEnv};
-use datafusion_expr::ColumnarValue;
 use datafusion_physical_plan::metrics::SpillMetrics;
 use futures::StreamExt;
 use sedona_common::sedona_internal_err;
@@ -479,7 +477,7 @@ impl StreamRepartitioner {
                     self.slots.num_regular_partitions()
                 );
             };
-            if let Some(wkb) = batch_ref.wkb(row_idx) {
+            if let Some(wkb) = batch_ref.geom_array.wkb(row_idx) {
                 self.geo_stats_accumulators[slot_idx].update_statistics(wkb)?;
             }
             self.slot_assignments[slot_idx].push((batch_idx, row_idx));
@@ -573,7 +571,7 @@ impl StreamRepartitioner {
             self.spill_registry[slot_idx] = Some(EvaluatedBatchSpillWriter::try_new(
                 Arc::clone(&self.runtime_env),
                 batch.schema(),
-                &batch.geom_array.sedona_type,
+                batch.geom_array.sedona_type(),
                 "streaming repartitioner",
                 self.spill_compression,
                 self.spill_metrics.clone(),
@@ -597,13 +595,13 @@ pub(crate) fn assign_rows(
     assignments: &mut Vec<SpatialPartition>,
 ) -> Result<()> {
     assignments.clear();
-    assignments.reserve(batch.rects().len());
+    assignments.reserve(batch.geom_array.rects().len());
 
     match partitioned_side {
         PartitionedSide::BuildSide => {
             let mut cnt = 0;
             let num_regular_partitions = partitioner.num_regular_partitions() as u32;
-            for rect_opt in batch.rects() {
+            for rect_opt in batch.geom_array.rects() {
                 let partition = match rect_opt {
                     Some(rect) => partitioner.partition_no_multi(&geo_rect_to_bbox(rect))?,
                     None => {
@@ -618,7 +616,7 @@ pub(crate) fn assign_rows(
             }
         }
         PartitionedSide::ProbeSide => {
-            for rect_opt in batch.rects() {
+            for rect_opt in batch.geom_array.rects() {
                 let partition = match rect_opt {
                     Some(rect) => partitioner.partition(&geo_rect_to_bbox(rect))?,
                     None => SpatialPartition::None,
@@ -645,115 +643,14 @@ pub(crate) fn interleave_evaluated_batch(
         return sedona_internal_err!("interleave_evaluated_batch requires at least one batch");
     }
     let batch = interleave_record_batch(record_batches, indices)?;
-    let geom_array = interleave_geometry_array(geom_arrays, indices)?;
+    let geom_array = EvaluatedGeometryArray::interleave(geom_arrays, indices)?;
     Ok(EvaluatedBatch { batch, geom_array })
-}
-
-fn interleave_geometry_array(
-    geom_arrays: &[&EvaluatedGeometryArray],
-    indices: &[(usize, usize)],
-) -> Result<EvaluatedGeometryArray> {
-    if geom_arrays.is_empty() {
-        return sedona_internal_err!("interleave_geometry_array requires at least one batch");
-    }
-    let sedona_type = &geom_arrays[0].sedona_type;
-    let value_refs: Vec<&dyn Array> = geom_arrays
-        .iter()
-        .map(|geom| geom.geometry_array.as_ref())
-        .collect();
-    let geometry_array = arrow_interleave(&value_refs, indices)?;
-
-    let distance = interleave_distance_columns(geom_arrays, indices)?;
-
-    let mut result = EvaluatedGeometryArray::try_new(geometry_array, sedona_type)?;
-    result.distance = distance;
-    Ok(result)
-}
-
-fn interleave_distance_columns(
-    geom_arrays: &[&EvaluatedGeometryArray],
-    assignments: &[(usize, usize)],
-) -> Result<Option<ColumnarValue>> {
-    // Check consistency and determine if we need array conversion
-    let mut first_value: Option<&ColumnarValue> = None;
-    let mut needs_array = false;
-    let mut all_null = true;
-    let mut first_scalar: Option<&ScalarValue> = None;
-
-    for geom in geom_arrays {
-        match &geom.distance {
-            Some(value) => {
-                if first_value.is_none() {
-                    first_value = Some(value);
-                }
-
-                match value {
-                    ColumnarValue::Array(array) => {
-                        needs_array = true;
-                        if all_null && array.logical_null_count() != array.len() {
-                            all_null = false;
-                        }
-                    }
-                    ColumnarValue::Scalar(scalar) => {
-                        if let Some(first) = first_scalar {
-                            if first != scalar {
-                                needs_array = true;
-                            }
-                        } else {
-                            first_scalar = Some(scalar);
-                        }
-                        if !scalar.is_null() {
-                            all_null = false;
-                        }
-                    }
-                }
-            }
-            None => {
-                if first_value.is_some() && !all_null {
-                    return sedona_internal_err!("Inconsistent distance metadata across batches");
-                }
-            }
-        }
-    }
-
-    if all_null {
-        return Ok(None);
-    }
-
-    let Some(distance_value) = first_value else {
-        return Ok(None);
-    };
-
-    // If all scalars match, return scalar
-    if !needs_array {
-        if let ColumnarValue::Scalar(value) = distance_value {
-            return Ok(Some(ColumnarValue::Scalar(value.clone())));
-        }
-    }
-
-    // Convert to arrays and interleave
-    let mut arrays: Vec<ArrayRef> = Vec::with_capacity(geom_arrays.len());
-    for geom in geom_arrays {
-        match &geom.distance {
-            Some(ColumnarValue::Array(array)) => arrays.push(array.clone()),
-            Some(ColumnarValue::Scalar(value)) => {
-                arrays.push(value.to_array_of_size(geom.geometry_array.len())?);
-            }
-            None => {
-                return sedona_internal_err!("Inconsistent distance metadata across batches");
-            }
-        }
-    }
-
-    let array_refs: Vec<&dyn Array> = arrays.iter().map(|array| array.as_ref()).collect();
-    let array = arrow_interleave(&array_refs, assignments)?;
-    Ok(Some(ColumnarValue::Array(array)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::{ArrayRef, BinaryArray, Int32Array};
+    use arrow_array::{Array, ArrayRef, BinaryArray, Int32Array};
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use sedona_geometry::bounding_box::BoundingBox;
@@ -1096,154 +993,6 @@ mod tests {
         Ok(())
     }
 
-    fn make_geom_array_with_distance(
-        wkbs: Vec<Vec<u8>>,
-        distance: Option<ColumnarValue>,
-    ) -> Result<EvaluatedGeometryArray> {
-        let geom_array: ArrayRef = Arc::new(BinaryArray::from(
-            wkbs.iter()
-                .map(|wkb| Some(wkb.as_slice()))
-                .collect::<Vec<_>>(),
-        ));
-        let mut geom = EvaluatedGeometryArray::try_new(geom_array, &WKB_GEOMETRY)?;
-        geom.distance = distance;
-        Ok(geom)
-    }
-
-    #[test]
-    fn interleave_distance_none() -> Result<()> {
-        let wkbs1 = vec![
-            wkb_point((10.0, 10.0)).unwrap(),
-            wkb_point((20.0, 20.0)).unwrap(),
-        ];
-        let wkbs2 = vec![wkb_point((30.0, 30.0)).unwrap()];
-
-        let geom1 = make_geom_array_with_distance(wkbs1, None)?;
-        let geom2 = make_geom_array_with_distance(wkbs2, None)?;
-
-        let geom_arrays = vec![&geom1, &geom2];
-        let assignments = vec![(0, 0), (1, 0), (0, 1)];
-
-        let result = interleave_distance_columns(&geom_arrays, &assignments)?;
-        assert!(result.is_none());
-        Ok(())
-    }
-
-    #[test]
-    fn interleave_distance_uniform_scalar() -> Result<()> {
-        let wkbs1 = vec![
-            wkb_point((10.0, 10.0)).unwrap(),
-            wkb_point((20.0, 20.0)).unwrap(),
-        ];
-        let wkbs2 = vec![wkb_point((30.0, 30.0)).unwrap()];
-
-        let scalar = ScalarValue::Float64(Some(5.0));
-        let geom1 =
-            make_geom_array_with_distance(wkbs1, Some(ColumnarValue::Scalar(scalar.clone())))?;
-        let geom2 =
-            make_geom_array_with_distance(wkbs2, Some(ColumnarValue::Scalar(scalar.clone())))?;
-
-        let geom_arrays = vec![&geom1, &geom2];
-        let assignments = vec![(0, 0), (1, 0), (0, 1)];
-
-        let result = interleave_distance_columns(&geom_arrays, &assignments)?;
-        assert!(matches!(result, Some(ColumnarValue::Scalar(_))));
-        if let Some(ColumnarValue::Scalar(value)) = result {
-            assert_eq!(value, ScalarValue::Float64(Some(5.0)));
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn interleave_distance_different_scalars() -> Result<()> {
-        use arrow_array::Float64Array;
-
-        let wkbs1 = vec![
-            wkb_point((10.0, 10.0)).unwrap(),
-            wkb_point((20.0, 20.0)).unwrap(),
-        ];
-        let wkbs2 = vec![wkb_point((30.0, 30.0)).unwrap()];
-
-        let scalar1 = ScalarValue::Float64(Some(5.0));
-        let scalar2 = ScalarValue::Float64(Some(10.0));
-        let geom1 = make_geom_array_with_distance(wkbs1, Some(ColumnarValue::Scalar(scalar1)))?;
-        let geom2 = make_geom_array_with_distance(wkbs2, Some(ColumnarValue::Scalar(scalar2)))?;
-
-        let geom_arrays = vec![&geom1, &geom2];
-        let assignments = vec![(0, 0), (1, 0), (0, 1)];
-
-        let result = interleave_distance_columns(&geom_arrays, &assignments)?;
-        assert!(matches!(result, Some(ColumnarValue::Array(_))));
-        if let Some(ColumnarValue::Array(array)) = result {
-            let float_array = array.as_any().downcast_ref::<Float64Array>().unwrap();
-            assert_eq!(float_array.len(), 3);
-            assert_eq!(float_array.value(0), 5.0);
-            assert_eq!(float_array.value(1), 10.0);
-            assert_eq!(float_array.value(2), 5.0);
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn interleave_distance_arrays() -> Result<()> {
-        use arrow_array::Float64Array;
-
-        let wkbs1 = vec![
-            wkb_point((10.0, 10.0)).unwrap(),
-            wkb_point((20.0, 20.0)).unwrap(),
-        ];
-        let wkbs2 = vec![wkb_point((30.0, 30.0)).unwrap()];
-
-        let array1: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0]));
-        let array2: ArrayRef = Arc::new(Float64Array::from(vec![3.0]));
-        let geom1 = make_geom_array_with_distance(wkbs1, Some(ColumnarValue::Array(array1)))?;
-        let geom2 = make_geom_array_with_distance(wkbs2, Some(ColumnarValue::Array(array2)))?;
-
-        let geom_arrays = vec![&geom1, &geom2];
-        let assignments = vec![(0, 0), (1, 0), (0, 1)];
-
-        let result = interleave_distance_columns(&geom_arrays, &assignments)?;
-        assert!(matches!(result, Some(ColumnarValue::Array(_))));
-        if let Some(ColumnarValue::Array(array)) = result {
-            let float_array = array.as_any().downcast_ref::<Float64Array>().unwrap();
-            assert_eq!(float_array.len(), 3);
-            assert_eq!(float_array.value(0), 1.0);
-            assert_eq!(float_array.value(1), 3.0);
-            assert_eq!(float_array.value(2), 2.0);
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn interleave_distance_mixed_scalar_and_array() -> Result<()> {
-        use arrow_array::Float64Array;
-
-        let wkbs1 = vec![
-            wkb_point((10.0, 10.0)).unwrap(),
-            wkb_point((20.0, 20.0)).unwrap(),
-        ];
-        let wkbs2 = vec![wkb_point((30.0, 30.0)).unwrap()];
-
-        let scalar = ScalarValue::Float64(Some(5.0));
-        let array: ArrayRef = Arc::new(Float64Array::from(vec![10.0]));
-        let geom1 = make_geom_array_with_distance(wkbs1, Some(ColumnarValue::Scalar(scalar)))?;
-        let geom2 = make_geom_array_with_distance(wkbs2, Some(ColumnarValue::Array(array)))?;
-
-        let geom_arrays = vec![&geom1, &geom2];
-        let assignments = vec![(0, 0), (1, 0), (0, 1)];
-
-        let result = interleave_distance_columns(&geom_arrays, &assignments)?;
-        assert!(matches!(result, Some(ColumnarValue::Array(_))));
-        if let Some(ColumnarValue::Array(array)) = result {
-            let float_array = array.as_any().downcast_ref::<Float64Array>().unwrap();
-            assert_eq!(float_array.len(), 3);
-            assert_eq!(float_array.value(0), 5.0);
-            assert_eq!(float_array.value(1), 10.0);
-            assert_eq!(float_array.value(2), 5.0);
-        }
-        Ok(())
-    }
-
     #[test]
     fn interleave_evaluated_batch_empty_assignments() -> Result<()> {
         let batch_a = sample_batch(&[0], vec![Some(wkb_point((10.0, 10.0)).unwrap())])?;
@@ -1253,29 +1002,9 @@ mod tests {
 
         let result = interleave_evaluated_batch(&record_batches, &geom_arrays, &[])?;
         assert_eq!(result.batch.num_rows(), 0);
-        assert_eq!(result.geom_array.geometry_array.len(), 0);
-        assert!(result.geom_array.rects.is_empty());
-        assert!(result.geom_array.distance.is_none());
-        Ok(())
-    }
-
-    #[test]
-    fn interleave_distance_inconsistent_metadata() -> Result<()> {
-        let wkbs1 = vec![wkb_point((10.0, 10.0)).unwrap()];
-        let wkbs2 = vec![wkb_point((20.0, 20.0)).unwrap()];
-
-        let scalar = ScalarValue::Float64(Some(5.0));
-        let geom1 = make_geom_array_with_distance(wkbs1, Some(ColumnarValue::Scalar(scalar)))?;
-        let geom2 = make_geom_array_with_distance(wkbs2, None)?;
-
-        let geom_arrays = vec![&geom1, &geom2];
-        let assignments = vec![(0, 0), (1, 0)];
-
-        let result = interleave_distance_columns(&geom_arrays, &assignments);
-        assert!(result.is_err());
-        if let Err(e) = result {
-            assert!(e.to_string().contains("Inconsistent distance metadata"));
-        }
+        assert_eq!(result.geom_array.geometry_array().len(), 0);
+        assert!(result.geom_array.rects().is_empty());
+        assert!(result.geom_array.distance().is_none());
         Ok(())
     }
 
@@ -1314,7 +1043,7 @@ mod tests {
         let result = interleave_evaluated_batch(&record_batches, &geom_arrays, &assignments)?;
 
         // Check if the result geometry array is BinaryViewArray
-        let geom_array = result.geom_array.geometry_array;
+        let geom_array = result.geom_array.geometry_array();
         assert!(geom_array
             .as_any()
             .downcast_ref::<BinaryViewArray>()
@@ -1330,30 +1059,6 @@ mod tests {
         assert_eq!(view_array.value(1), wkbs2[0].as_slice());
         assert_eq!(view_array.value(2), wkbs1[1].as_slice());
 
-        Ok(())
-    }
-
-    #[test]
-    fn interleave_distance_mixed_none_and_null() -> Result<()> {
-        use arrow_array::Float64Array;
-
-        let wkbs1 = vec![wkb_point((10.0, 10.0)).unwrap()];
-        let wkbs2 = vec![wkb_point((20.0, 20.0)).unwrap()];
-        let wkbs3 = vec![wkb_point((30.0, 30.0)).unwrap()];
-
-        let null_array = Arc::new(Float64Array::new_null(1));
-        let ega1 = make_geom_array_with_distance(wkbs1, Some(ColumnarValue::Array(null_array)))?;
-
-        let null_scalar = ScalarValue::Float64(None);
-        let ega2 = make_geom_array_with_distance(wkbs2, Some(ColumnarValue::Scalar(null_scalar)))?;
-
-        let ega3 = make_geom_array_with_distance(wkbs3, None)?;
-
-        let vec_ega = vec![&ega1, &ega2, &ega3];
-        let assignments = vec![(0, 0), (1, 0), (2, 0)];
-
-        let result = interleave_distance_columns(&vec_ega, &assignments)?;
-        assert!(result.is_none());
         Ok(())
     }
 }

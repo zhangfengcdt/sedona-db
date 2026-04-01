@@ -35,7 +35,6 @@ use geo_index::rtree::{
 };
 use geo_index::rtree::{sort::HilbertSort, RTree, RTreeBuilder, RTreeIndex};
 use geo_index::IndexableNum;
-use geo_types::Rect;
 use parking_lot::Mutex;
 use sedona_expr::statistics::GeoStatistics;
 use sedona_geo::to_geo::item_to_geometry;
@@ -49,7 +48,7 @@ use crate::{
         knn_adapter::{KnnComponents, SedonaKnnAdapter},
         IndexQueryResult, QueryResultMetrics,
     },
-    operand_evaluator::{create_operand_evaluator, distance_value_at, OperandEvaluator},
+    operand_evaluator::distance_value_at,
     refine::{create_refiner, IndexQueryResultRefiner},
     spatial_predicate::SpatialPredicate,
 };
@@ -60,9 +59,6 @@ use sedona_common::{option::SpatialJoinOptions, sedona_internal_err, ExecutionMo
 struct DefaultSpatialIndexInner {
     pub(crate) schema: SchemaRef,
     pub(crate) options: SpatialJoinOptions,
-
-    /// The spatial predicate evaluator for the spatial predicate.
-    pub(crate) evaluator: Arc<dyn OperandEvaluator>,
 
     /// The refiner for refining the index query results.
     pub(crate) refiner: Arc<dyn IndexQueryResultRefiner>,
@@ -111,7 +107,6 @@ impl DefaultSpatialIndex {
         options: SpatialJoinOptions,
         probe_threads_counter: AtomicUsize,
     ) -> Self {
-        let evaluator = create_operand_evaluator(&spatial_predicate, options.clone());
         let refiner = create_refiner(
             options.spatial_library,
             &spatial_predicate,
@@ -126,7 +121,6 @@ impl DefaultSpatialIndex {
             inner: Arc::new(DefaultSpatialIndexInner {
                 schema,
                 options,
-                evaluator,
                 refiner,
                 rtree,
                 data_id_to_batch_pos: Vec::new(),
@@ -142,7 +136,6 @@ impl DefaultSpatialIndex {
     pub fn new(
         schema: SchemaRef,
         options: SpatialJoinOptions,
-        evaluator: Arc<dyn OperandEvaluator>,
         refiner: Arc<dyn IndexQueryResultRefiner>,
         rtree: RTree<f32>,
         indexed_batches: Vec<EvaluatedBatch>,
@@ -156,7 +149,6 @@ impl DefaultSpatialIndex {
             inner: Arc::new(DefaultSpatialIndexInner {
                 schema,
                 options,
-                evaluator,
                 refiner,
                 rtree,
                 data_id_to_batch_pos,
@@ -194,7 +186,7 @@ impl DefaultSpatialIndex {
             let chunk = chunk.to_vec();
             let index_owned = self.clone();
             join_set.spawn(async move {
-                let Some(probe_wkb) = cloned_evaluated_batch.wkb(row_idx) else {
+                let Some(probe_wkb) = cloned_evaluated_batch.geom_array.wkb(row_idx) else {
                     return (
                         i,
                         sedona_internal_err!(
@@ -248,15 +240,16 @@ impl DefaultSpatialIndex {
             let pos = self.inner.data_id_to_batch_pos[*data_idx as usize];
             let (batch_idx, row_idx) = pos;
             let indexed_batch = &self.inner.indexed_batches[batch_idx as usize];
-            let build_wkb = indexed_batch.wkb(row_idx as usize);
+            let build_wkb = indexed_batch.geom_array.wkb(row_idx as usize);
             let Some(build_wkb) = build_wkb else {
                 continue;
             };
-            let distance = self.inner.evaluator.resolve_distance(
-                indexed_batch.distance(),
-                row_idx as usize,
-                distance,
-            )?;
+            let build_distance = indexed_batch.geom_array.distance_at(row_idx as usize)?;
+            debug_assert!(
+                build_distance.is_none() || distance.is_none(),
+                "Distance should not be present on both build and probe sides"
+            );
+            let distance = build_distance.map(Some).unwrap_or(*distance);
             let geom_idx = self.inner.geom_idx_vec[*data_idx as usize];
             index_query_results.push(IndexQueryResult {
                 wkb: build_wkb,
@@ -297,37 +290,6 @@ impl SpatialIndex for DefaultSpatialIndex {
 
     fn get_indexed_batch(&self, batch_idx: usize) -> &RecordBatch {
         &self.inner.indexed_batches[batch_idx].batch
-    }
-
-    /// This method implements [`SpatialIndex::query`], which is a two-phase spatial join:
-    /// 1. **Filter phase**: Uses the R-tree index with the probe geometry's bounding rectangle
-    ///    to quickly identify candidate geometries that might satisfy the spatial predicate
-    /// 2. **Refinement phase**: Evaluates the exact spatial predicate on candidates to determine
-    ///    actual matches
-    fn query(
-        &self,
-        probe_wkb: &Wkb,
-        probe_rect: &Rect<f32>,
-        distance: &Option<f64>,
-        build_batch_positions: &mut Vec<(i32, i32)>,
-    ) -> Result<QueryResultMetrics> {
-        let min = probe_rect.min();
-        let max = probe_rect.max();
-        let mut candidates = self.inner.rtree.search(min.x, min.y, max.x, max.y);
-        if candidates.is_empty() {
-            return Ok(QueryResultMetrics {
-                count: 0,
-                candidate_count: 0,
-            });
-        }
-
-        // Sort and dedup candidates to avoid duplicate results when we index one geometry
-        // using several boxes.
-        candidates.sort_unstable();
-        candidates.dedup();
-
-        // Refine the candidates retrieved from the r-tree index by evaluating the actual spatial predicate
-        self.refine(probe_wkb, &candidates, distance, build_batch_positions)
     }
 
     /// This method implements [`SpatialIndex::query_knn`] by:
@@ -557,8 +519,8 @@ impl SpatialIndex for DefaultSpatialIndex {
             ));
         }
 
-        let rects = evaluated_batch.rects();
-        let dist = evaluated_batch.distance();
+        let rects = evaluated_batch.geom_array.rects();
+        let dist = evaluated_batch.geom_array.distance();
         let mut total_candidates_count = 0;
         let mut total_count = 0;
         let mut current_row_idx = range.start;
@@ -575,7 +537,7 @@ impl SpatialIndex for DefaultSpatialIndex {
                 continue;
             }
 
-            let Some(probe_wkb) = evaluated_batch.wkb(row_idx) else {
+            let Some(probe_wkb) = evaluated_batch.geom_array.wkb(row_idx) else {
                 return sedona_internal_err!(
                     "Failed to get WKB for row {} in evaluated batch",
                     row_idx
@@ -752,7 +714,7 @@ mod tests {
             SpatialRelationType::Intersects,
         ));
 
-        let builder = DefaultSpatialIndexBuilder::new(
+        let mut builder = DefaultSpatialIndexBuilder::new(
             schema.clone(),
             spatial_predicate,
             options,
@@ -1226,7 +1188,7 @@ mod tests {
             JoinSide::Left,
         ));
 
-        let builder = DefaultSpatialIndexBuilder::new(
+        let mut builder = DefaultSpatialIndexBuilder::new(
             schema.clone(),
             spatial_predicate,
             options,
