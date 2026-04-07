@@ -17,26 +17,26 @@
 
 pub mod evaluated_batch;
 pub mod exec;
-mod index;
-mod join_provider;
+pub mod index;
+pub mod join_provider;
 pub mod operand_evaluator;
 pub mod partitioning;
-pub mod planner;
+pub mod physical_planner;
 mod prepare;
 mod probe;
 pub mod refine;
-pub mod spatial_predicate;
+pub use sedona_query_planner::spatial_predicate;
 mod stream;
 pub mod utils;
 
 pub use exec::SpatialJoinExec;
 
 // Re-export function for register the spatial join planner
-pub use planner::register_planner;
+pub use physical_planner::DefaultSpatialJoinPhysicalPlanner;
 
 // Re-export ProbeShuffleExec so that integration tests (and other crates) can verify
 // its presence in optimized physical plans.
-pub use planner::probe_shuffle_exec::ProbeShuffleExec;
+pub use sedona_query_planner::probe_shuffle_exec::ProbeShuffleExec;
 
 // Re-export types needed for external usage (e.g., in Comet)
 pub use spatial_predicate::SpatialPredicate;
