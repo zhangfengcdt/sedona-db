@@ -495,3 +495,90 @@ def test_st_relate(eng, geom1, geom2, expected):
         f"SELECT ST_Relate({geom_or_null(geom1)}, {geom_or_null(geom2)})",
         expected,
     )
+
+
+@pytest.mark.parametrize("eng", [SedonaDB, PostGIS])
+@pytest.mark.parametrize(
+    ("geom1", "geom2", "pattern", "expected"),
+    [
+        (None, None, None, None),
+        ("POINT (0 0)", None, "FF0FFF0F2", None),
+        (None, "POINT (0 0)", "FF0FFF0F2", None),
+        ("POINT (0 0)", "POINT (0 0)", None, None),
+        # Exact match — disjoint points
+        ("POINT (0 0)", "POINT (1 1)", "FF0FFF0F2", True),
+        # Exact match — point inside polygon
+        ("POINT (0.5 0.5)", "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", "0FFFFF212", True),
+        # Pattern does not match — point on boundary vs interior pattern
+        ("POINT (0 0)", "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", "0FFFFF212", False),
+        # Polygon contains point — exact DE-9IM from polygon's perspective
+        (
+            "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
+            "POINT (0.5 0.5)",
+            "0F2FF1FF2",
+            True,
+        ),
+        # Touching polygons
+        (
+            "POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))",
+            "POLYGON ((2 0, 4 0, 4 2, 2 2, 2 0))",
+            "FF2F11212",
+            True,
+        ),
+        # Overlapping polygons match overlap pattern
+        (
+            "POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))",
+            "POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1))",
+            "212101212",
+            True,
+        ),
+        # Point in polygon hole — point is inside the hole, not the polygon interior
+        (
+            "POLYGON ((0 0, 6 0, 6 6, 0 6, 0 0), (2 2, 4 2, 4 4, 2 4, 2 2))",
+            "POINT (1 1)",
+            "0F2FF1FF2",
+            True,
+        ),
+        # Linestring relates to linestring
+        (
+            "LINESTRING (0 0, 2 2)",
+            "LINESTRING (1 1, 3 3)",
+            "1010F0102",
+            True,
+        ),
+        # Geometry collection relates to point
+        (
+            "GEOMETRYCOLLECTION (POINT (0 0), LINESTRING (0 0, 1 1))",
+            "POINT (0 0)",
+            "FF10F0FF2",
+            True,
+        ),
+        # False cases — wrong pattern for the geometry pair
+        (
+            "POINT (0 0)",
+            "POINT (1 1)",
+            "0FFFFFFF2",
+            False,
+        ),
+        (
+            "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
+            "POLYGON ((5 5, 6 5, 6 6, 5 6, 5 5))",
+            "212101212",
+            False,
+        ),
+        # Disjoint — does not match contains pattern
+        (
+            "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
+            "POINT (5 5)",
+            "0F2FF1FF2",
+            False,
+        ),
+    ],
+)
+def test_st_relate_pattern(eng, geom1, geom2, pattern, expected):
+    eng = eng.create_or_skip()
+    pattern_sql = "NULL" if pattern is None else f"'{pattern}'"
+    eng.assert_query_result(
+        f"SELECT ST_Relate({geom_or_null(geom1)}, {geom_or_null(geom2)}, {pattern_sql})",
+        expected,
+    )
