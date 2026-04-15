@@ -179,6 +179,14 @@ impl SpatialJoinExec {
         })
     }
 
+    /// Create a new [`SpatialJoinExec`] with customized [`SpatialJoinProvider`]
+    pub fn with_spatial_join_provider(
+        mut self,
+        join_provider: Arc<dyn SpatialJoinProvider>,
+    ) -> Self {
+        self.join_provider = join_provider;
+        self
+    }
     /// How the join is performed
     pub fn join_type(&self) -> &JoinType {
         &self.join_type
