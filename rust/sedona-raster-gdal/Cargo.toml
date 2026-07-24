@@ -72,6 +72,11 @@ path = "benches/rs_clip.rs"
 
 [[bench]]
 harness = false
+name = "rs_from_gdal_raster"
+path = "benches/rs_from_gdal_raster.rs"
+
+[[bench]]
+harness = false
 name = "rs_frompath"
 path = "benches/rs_frompath.rs"
 
