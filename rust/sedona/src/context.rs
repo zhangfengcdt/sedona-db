@@ -178,6 +178,21 @@ impl SedonaContext {
                     GpuSpatialJoinPhysicalPlanner::new(),
                 ));
             }
+
+            // Register the raster join last so it is consulted before the GPU
+            // planner (planners are tried in reverse registration order). It
+            // recognizes raster/geometry predicates and declines everything else
+            // with `None`, so a raster predicate is handled here rather than
+            // reaching the GPU planner — which would otherwise hard-error on a
+            // raster operand when `GpuOptions.fallback_to_cpu` is false. Anything
+            // it declines falls through to the GPU/geography/default planners.
+            {
+                use sedona_spatial_join_raster::physical_planner::RasterSpatialJoinPhysicalPlanner;
+
+                planner = planner.with_spatial_join_physical_planner(Arc::new(
+                    RasterSpatialJoinPhysicalPlanner::new(),
+                ));
+            }
         }
 
         // Register the geography bounder for spherical edge types. This enables geography
