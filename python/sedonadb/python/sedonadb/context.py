@@ -52,6 +52,12 @@ from sedonadb.expr.literal import lit as lit_expr, Literal as LiteralExpr
 from sedonadb.utility import sedona  # noqa: F401
 
 
+# Single-file OGR formats auto-registered (via pyogrio/GDAL) when a context is
+# created, so that `SELECT * FROM 'file:///path/to/data.<ext>'` works without a
+# manual `register()` call. Add an extension here to enable another format.
+_DEFAULT_PYOGRIO_EXTENSIONS = ("fgb", "gpkg", "shp", "geojson")
+
+
 class SedonaContext:
     """Context for executing queries using Sedona
 
@@ -121,7 +127,22 @@ class SedonaContext:
             impl = InternalContext(opts)
             self.__impl = impl
             self.options.freeze_runtime()
+            self._register_default_formats()
         return self.__impl
+
+    def _register_default_formats(self):
+        """Auto-register the built-in single-file OGR formats.
+
+        This makes `SELECT * FROM 'file:///path/to/data.<ext>'` work
+        zero-config for the common pyogrio/GDAL formats, matching the way
+        Parquet is handled. Registering does not import pyogrio — that happens
+        lazily in `PyogrioFormatSpec.open_reader` when a file is actually read —
+        so this is safe even when pyogrio is not installed.
+        """
+        from sedonadb.datasource import PyogrioFormatSpec
+
+        for extension in _DEFAULT_PYOGRIO_EXTENSIONS:
+            self.register(PyogrioFormatSpec(extension))
 
     def create_data_frame(self, obj: Any, schema: Any = None) -> DataFrame:
         """Create a DataFrame from an in-memory or protocol-enabled object.
