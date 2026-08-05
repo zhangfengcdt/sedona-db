@@ -29,6 +29,7 @@ use arrow_schema::{ffi::FFI_ArrowSchema, Schema, SchemaRef};
 use datafusion_common::{exec_err, Result, Statistics};
 use datafusion_execution::TaskContext;
 use datafusion_physical_plan::{
+    displayable,
     execution_plan::{Boundedness, CardinalityEffect, EmissionType},
     metrics::{CustomMetricValue, Metric, MetricValue, MetricsSet},
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
@@ -41,7 +42,9 @@ use crate::extension::{SedonaCError, SedonaCExecutionPlan, SedonaCExecutionPlanA
 use crate::runtime::RuntimeHandle;
 use crate::set_ffi_error;
 use crate::streaming::{ffi_stream_to_sendable, CancelChecker, StreamingRecordBatchReader};
-use crate::utils::{cstr_from_ptr_or_empty, get_plan_property, get_plan_string_property, ERRNO_OK};
+use crate::utils::{
+    cstr_from_ptr_or_empty, get_plan_property, get_plan_string_property, PropertyValue, ERRNO_OK,
+};
 
 /// Wrapper around an [ExecutionPlan] that can be exported across FFI.
 ///
@@ -91,36 +94,9 @@ impl ExportedExecutionPlan {
                 })
             }
             "debug_string" => Ok(format!("{:?}", self.plan)),
-            "display_default" => {
-                use std::fmt::Write;
-                let mut s = String::new();
-                let _ = write!(
-                    s,
-                    "{}",
-                    DisplayAsWrapper(&self.plan, DisplayFormatType::Default)
-                );
-                Ok(s)
-            }
-            "display_verbose" => {
-                use std::fmt::Write;
-                let mut s = String::new();
-                let _ = write!(
-                    s,
-                    "{}",
-                    DisplayAsWrapper(&self.plan, DisplayFormatType::Verbose)
-                );
-                Ok(s)
-            }
-            "display_tree_render" => {
-                use std::fmt::Write;
-                let mut s = String::new();
-                let _ = write!(
-                    s,
-                    "{}",
-                    DisplayAsWrapper(&self.plan, DisplayFormatType::TreeRender)
-                );
-                Ok(s)
-            }
+            "display_default" => Ok(displayable(self.plan.as_ref()).indent(false).to_string()),
+            "display_verbose" => Ok(displayable(self.plan.as_ref()).indent(true).to_string()),
+            "display_tree_render" => Ok(displayable(self.plan.as_ref()).tree_render().to_string()),
             "name" => Ok(self.plan.name().to_string()),
             "cardinality_effect" => {
                 let effect = match self.plan.cardinality_effect() {
@@ -241,12 +217,7 @@ unsafe extern "C" fn c_exec_plan_get_property(
 
     match plan.get_property(&property_str) {
         Ok(value) => {
-            // Return the string as a single-element string array
-            use arrow_array::{builder::StringBuilder, Array};
-            let mut builder = StringBuilder::new();
-            builder.append_value(&value);
-            let array = builder.finish();
-            let ffi_array = arrow_array::ffi::FFI_ArrowArray::new(&array.to_data());
+            let ffi_array = PropertyValue::String(value).into_ffi_array();
             std::ptr::write(out, ffi_array);
             ERRNO_OK
         }
@@ -412,17 +383,17 @@ impl ImportedSedonaCExec {
 
 impl DisplayAs for ImportedSedonaCExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let property = match t {
-            DisplayFormatType::Default => "display_default",
-            DisplayFormatType::Verbose => "display_verbose",
-            DisplayFormatType::TreeRender => "display_tree_render",
+        let (property, sep) = match t {
+            DisplayFormatType::Default => ("display_default", ": "),
+            DisplayFormatType::Verbose => ("display_verbose", ": "),
+            DisplayFormatType::TreeRender => ("display_tree_render", "\n"),
         };
 
         // Always show the wrapper name, with the inner plan's display info
         if let Ok(display_str) = get_plan_string_property(&self.inner, property) {
-            write!(f, "ImportedSedonaCExec: {}", display_str)
+            write!(f, "ImportedSedonaCExec{sep}{display_str}")
         } else {
-            write!(f, "ImportedSedonaCExec")
+            write!(f, "ImportedSedonaCExec (error computing display)")
         }
     }
 }
@@ -678,15 +649,6 @@ impl PlanPropertiesArgs {
     }
 }
 
-/// Helper wrapper to format an ExecutionPlan with a specific DisplayFormatType.
-struct DisplayAsWrapper<'a>(&'a Arc<dyn ExecutionPlan>, DisplayFormatType);
-
-impl std::fmt::Display for DisplayAsWrapper<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt_as(self.1, f)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -935,18 +897,26 @@ mod tests {
         // ImportedSedonaCExec shows itself with the inner plan's display
         assert_eq!(
             format!("{}", DisplayAsFormat(&imported, DisplayFormatType::Default)),
-            "ImportedSedonaCExec: DummyExec: default format"
+            "ImportedSedonaCExec: DummyExec: default format\n"
         );
         assert_eq!(
             format!("{}", DisplayAsFormat(&imported, DisplayFormatType::Verbose)),
-            "ImportedSedonaCExec: DummyExec: verbose format with schema"
+            "ImportedSedonaCExec: DummyExec: verbose format with schema\n"
         );
         assert_eq!(
             format!(
                 "{}",
                 DisplayAsFormat(&imported, DisplayFormatType::TreeRender)
             ),
-            "ImportedSedonaCExec: DummyExec: tree render format"
+            "\
+ImportedSedonaCExec
+┌───────────────────────────┐
+│         DummyExec         │
+│    --------------------   │
+│   DummyExec: tree render  │
+│           format          │
+└───────────────────────────┘
+"
         );
     }
 

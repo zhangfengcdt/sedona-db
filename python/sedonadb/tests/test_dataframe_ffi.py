@@ -16,9 +16,11 @@
 # under the License.
 
 import pandas as pd
+import pyarrow as pa
 import pytest
 
 import sedonadb
+from sedonadb import udf
 from sedonadb.testing import skip_if_not_exists
 
 
@@ -121,3 +123,109 @@ def test_ffi_roundtrip(geoarrow_data, producer_sql, consumer_sql):
     result_over_ffi = sd_consumer.sql(consumer_sql).to_pandas()
 
     pd.testing.assert_frame_equal(result_no_ffi, result_over_ffi)
+
+
+def test_filter_pushdown_into_ffi_producer(geoarrow_data):
+    path = geoarrow_data / "ns-water" / "files" / "ns-water_water-point_geo.parquet"
+    skip_if_not_exists(path)
+
+    sd_producer = sedonadb.connect()
+    sd_consumer = sedonadb.connect()
+
+    # Producer exposes all columns without filtering
+    sd_producer.read_parquet(path).to_view("water_point")
+    df_producer = sd_producer.sql('SELECT "OBJECTID", "FEAT_CODE" FROM water_point')
+
+    # Consumer applies a filter
+    sd_consumer.create_data_frame(df_producer).to_view("df_producer")
+    df_filtered = sd_consumer.sql('SELECT * FROM df_producer WHERE "OBJECTID" < 50')
+
+    # Get the physical plan (second row)
+    plan_df = df_filtered.explain().to_pandas()
+    plan_text = str(plan_df["plan"].iloc[1])
+
+    # The filter should appear inside ImportedSedonaCExec, indicating it was pushed down
+    # Look for the filter predicate appearing after ImportedSedonaCExec in the plan
+    assert "ImportedSedonaCExec" in plan_text, (
+        f"Expected ImportedSedonaCExec in plan:\n{plan_text}"
+    )
+
+    # The filter "OBJECTID < 50" should be pushed into the producer, not applied as a
+    # separate FilterExec on top of the ImportedSedonaCExec
+    # If pushdown works, the filter should appear within the ImportedSedonaCExec display
+    imported_idx = plan_text.find("ImportedSedonaCExec")
+    filter_idx = plan_text.find("FilterExec")
+
+    # If there's a FilterExec, it should NOT be wrapping the ImportedSedonaCExec
+    # (i.e., filter should come after imported in the plan text, meaning it's inside)
+    if filter_idx != -1:
+        # FilterExec appearing before ImportedSedonaCExec means filter is NOT pushed down
+        assert filter_idx > imported_idx, (
+            f"Filter was not pushed down into FFI producer. "
+            f"FilterExec at {filter_idx}, ImportedSedonaCExec at {imported_idx}.\n"
+            f"Plan:\n{plan_text}"
+        )
+
+
+def test_udf_filter_not_pushed_down_into_ffi_producer(geoarrow_data):
+    """Verify that filters using consumer-side UDFs are NOT pushed down into the FFI producer.
+
+    UDFs are session-specific, so a UDF registered on the consumer cannot be
+    evaluated by the producer. The filter must remain on the consumer side.
+    """
+    path = geoarrow_data / "ns-water" / "files" / "ns-water_water-point_geo.parquet"
+    skip_if_not_exists(path)
+
+    sd_producer = sedonadb.connect()
+    sd_consumer = sedonadb.connect()
+
+    # Define a simple UDF on the consumer side only
+    @udf.arrow_udf(pa.bool_(), [pa.int64()])
+    def is_small_id(ids):
+        import pyarrow.compute as pc
+
+        # Convert from SedonaDB internal type to PyArrow array
+        ids_arr = pa.array(ids.to_array())
+        return pc.less(ids_arr, 50)
+
+    sd_consumer.register(is_small_id)
+
+    # Producer exposes all columns without filtering
+    sd_producer.read_parquet(path).to_view("water_point")
+    df_producer = sd_producer.sql('SELECT "OBJECTID", "FEAT_CODE" FROM water_point')
+
+    # Consumer applies a filter using the UDF (which only exists on consumer)
+    sd_consumer.create_data_frame(df_producer).to_view("df_producer")
+    df_filtered = sd_consumer.sql(
+        'SELECT * FROM df_producer WHERE is_small_id("OBJECTID")'
+    )
+
+    # Get the physical plan (second row)
+    plan_df = df_filtered.explain().to_pandas()
+    plan_text = str(plan_df["plan"].iloc[1])
+
+    assert "ImportedSedonaCExec" in plan_text, (
+        f"Expected ImportedSedonaCExec in plan:\n{plan_text}"
+    )
+
+    # The UDF filter should NOT be pushed down - it must stay on the consumer side
+    # This means FilterExec should appear BEFORE ImportedSedonaCExec in the plan
+    # (FilterExec wraps ImportedSedonaCExec, not inside it)
+    imported_idx = plan_text.find("ImportedSedonaCExec")
+    filter_idx = plan_text.find("FilterExec")
+
+    assert filter_idx != -1, (
+        f"Expected FilterExec in plan (UDF filter should not be pushed down):\n{plan_text}"
+    )
+
+    # FilterExec appearing before ImportedSedonaCExec means it's wrapping it (not pushed)
+    assert filter_idx < imported_idx, (
+        f"UDF filter was incorrectly pushed down into FFI producer. "
+        f"FilterExec at {filter_idx}, ImportedSedonaCExec at {imported_idx}.\n"
+        f"Plan:\n{plan_text}"
+    )
+
+    # Also verify the query actually works and returns correct results
+    result = df_filtered.to_pandas()
+    assert len(result) > 0, "Expected some results"
+    assert all(result["OBJECTID"] < 50), "UDF filter should have been applied"
