@@ -68,6 +68,7 @@ jobs:
 
       - name: Build and test wheels (sedonadb)
         run: |
+          Remove-Item -Force .test_failed -ErrorAction SilentlyContinue
           cd ci/scripts
           .\wheels-build-windows.ps1
         env:
@@ -76,12 +77,19 @@ jobs:
           CMAKE_TOOLCHAIN_FILE: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
           CIBW_BUILD: "*-win_amd64"
           CIBW_TEST_REQUIRES: pytest adbc_driver_manager geoarrow-pyarrow geopandas
-          CIBW_TEST_COMMAND: pytest {package}/tests -vv -o faulthandler_timeout=600
+          # Test command exits 0 even on failure so CIBW continues building all wheels;
+          # failures are recorded in .test_failed and checked after upload.
+          # We use Python here to be absolutely sure there are no shell escaping issues.
+          CIBW_TEST_COMMAND: >-
+            python -c "import subprocess,sys,pathlib; proj=pathlib.Path(r'{project}'); r=subprocess.run([sys.executable,'-m','pytest',str(pathlib.Path(r'{package}')/'tests'),'-vv','-o','faulthandler_timeout=600']); r.returncode and (print(f'Tests failed (exit {r.returncode}), creating .test_failed marker at {proj.absolute()}') or (proj/'.test_failed').touch() or True); sys.exit(0)"
 
       - uses: actions/upload-artifact@v7
         with:
           name: release-wheels-windows-x86_64
           path: python/sedonadb/dist/*.whl
+
+      - name: Fail if tests failed
+        run: python -c "import sys,pathlib; f=pathlib.Path('.test_failed'); print(f'Checking for {f.absolute()}, exists={f.exists()}'); sys.exit(1 if f.exists() else 0)"
 
   macOS-arm64:
     runs-on: macOS-latest
@@ -107,17 +115,23 @@ jobs:
 
       - name: Build and test wheels (sedonadb)
         run: |
+          rm -f .test_failed
           cd ci/scripts
           ./wheels-build-macos.sh sedonadb
         env:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
           CIBW_TEST_REQUIRES: pytest adbc_driver_manager geoarrow-pyarrow geopandas duckdb
-          CIBW_TEST_COMMAND: pytest {package}/tests -vv -o faulthandler_timeout=600
+          # Test command exits 0 even on failure so CIBW continues building all wheels;
+          # failures are recorded in .test_failed and checked after upload.
+          CIBW_TEST_COMMAND: "pytest {package}/tests -vv -o faulthandler_timeout=600 || touch {project}/.test_failed"
 
       - uses: actions/upload-artifact@v7
         with:
           name: release-wheels-macOS-arm64
           path: python/sedonadb/dist/*.whl
+
+      - name: Fail if tests failed
+        run: test ! -f .test_failed
 
   macOS-amd64:
     runs-on: macos-15-intel
@@ -143,12 +157,15 @@ jobs:
 
       - name: Build and test wheels (sedonadb)
         run: |
+          rm -f .test_failed
           cd ci/scripts
           ./wheels-build-macos.sh sedonadb
         env:
           VCPKG_ROOT: ${{ github.workspace }}/vcpkg
           CIBW_TEST_REQUIRES: pytest adbc_driver_manager geoarrow-pyarrow geopandas duckdb
-          CIBW_TEST_COMMAND: pytest {package}/tests -vv -o faulthandler_timeout=600
+          # Test command exits 0 even on failure so CIBW continues building all wheels;
+          # failures are recorded in .test_failed and checked after upload.
+          CIBW_TEST_COMMAND: "pytest {package}/tests -vv -o faulthandler_timeout=600 || touch {project}/.test_failed"
           SEDONADB_MACOS_ARCH: x86_64
 
       - uses: actions/upload-artifact@v7
@@ -156,11 +173,15 @@ jobs:
           name: release-wheels-macOS-amd64
           path: python/sedonadb/dist/*.whl
 
+      - name: Fail if tests failed
+        run: test ! -f .test_failed
+
   wheels-linux:
     name: ${{ matrix.config.label }}
     runs-on: ${{ matrix.config.os }}
     timeout-minutes: 150
     strategy:
+      fail-fast: false
       matrix:
         config:
           - {os: "ubuntu-latest", label: "linux-x86_64", arch: "x86_64"}
@@ -176,29 +197,38 @@ jobs:
 
       - name: Build and test wheels (sedonadb)
         run: |
+          rm -f .test_failed
           cd ci/scripts
           ./wheels-build-linux.sh ${{ matrix.config.arch }} sedonadb
         env:
           CIBW_SKIP: "*musllinux*"
           CIBW_TEST_REQUIRES: pytest adbc_driver_manager geoarrow-pyarrow geopandas duckdb
-          CIBW_TEST_COMMAND: pytest {package}/tests -vv -o faulthandler_timeout=600
+          # Test command exits 0 even on failure so CIBW continues building all wheels;
+          # failures are recorded in .test_failed and checked after upload.
+          CIBW_TEST_COMMAND: "pytest {package}/tests -vv -o faulthandler_timeout=600 || touch {project}/.test_failed"
 
       - uses: actions/upload-artifact@v7
         with:
           name: release-wheels-${{ matrix.config.label }}
           path: python/sedonadb/dist/*.whl
 
+      - name: Fail if tests failed
+        run: test ! -f .test_failed
+
   # Extension wheels build in their own reusable workflow, gated on the
   # sedonadb jobs (so they run in the same run and can download those wheels
   # to test against) but isolated so an extension failure can't block the
   # core package's nightly. Future extensions follow the same shape.
+  # !cancelled() ensures extensions build even if sedonadb tests failed.
   expr:
     needs: ["windows-x86_64", "macOS-arm64", "macOS-amd64", "wheels-linux"]
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/wheels-expr.yml
     secrets: inherit
 
   zarr:
     needs: ["windows-x86_64", "macOS-arm64", "macOS-amd64", "wheels-linux"]
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/wheels-zarr.yml
     secrets: inherit
 
