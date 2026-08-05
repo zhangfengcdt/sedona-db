@@ -586,7 +586,7 @@ mod tests {
 
     use crate::utils::Grid;
     use sedona_raster::array::RasterStructArray;
-    use sedona_raster::builder::RasterBuilder;
+    use sedona_raster::builder::{RasterBuilder, StartBandArgs};
     use sedona_testing::rasters::{build_in_db_raster, InDbTestBand};
 
     fn single_raster<'a>(
@@ -931,15 +931,11 @@ mod tests {
             .start_raster_2d(1, 1, 0.0, 1.0, 1.0, -1.0, 0.0, 0.0, None)
             .unwrap();
         builder
-            .start_band_nd(
-                None,
-                &["y", "x"],
-                &[1, 1],
-                BandDataType::UInt8,
-                Some(&[0u8]),
-                Some("/tmp/test.tif#band=1"),
-                None,
-            )
+            .start_band(StartBandArgs {
+                nodata: Some(&[0u8]),
+                outdb_uri: Some("/tmp/test.tif#band=1"),
+                ..StartBandArgs::new(&["y", "x"], &[1, 1], BandDataType::UInt8)
+            })
             .unwrap();
         builder.band_data_writer().append_value([]);
         builder.finish_band().unwrap();
@@ -964,15 +960,10 @@ mod tests {
             .start_raster_2d(2, 2, 0.0, 2.0, 1.0, -1.0, 0.0, 0.0, None)
             .unwrap();
         builder
-            .start_band_nd(
-                Some("cube"),
-                &["time", "y", "x"],
-                &[3, 2, 2],
-                BandDataType::UInt8,
-                None,
-                None,
-                None,
-            )
+            .start_band(StartBandArgs {
+                name: Some("cube"),
+                ..StartBandArgs::new(&["time", "y", "x"], &[3, 2, 2], BandDataType::UInt8)
+            })
             .unwrap();
         builder.band_data_writer().append_value(&data);
         builder.finish_band().unwrap();
@@ -1015,28 +1006,19 @@ mod tests {
             .start_raster_2d(2, 2, 0.0, 2.0, 1.0, -1.0, 0.0, 0.0, None)
             .unwrap();
         builder
-            .start_band_nd(
-                Some("flat"),
-                &["y", "x"],
-                &[2, 2],
-                BandDataType::UInt8,
-                None,
-                None,
-                None,
-            )
+            .start_band(StartBandArgs {
+                name: Some("flat"),
+                ..StartBandArgs::new(&["y", "x"], &[2, 2], BandDataType::UInt8)
+            })
             .unwrap();
         builder.band_data_writer().append_value(&band0);
         builder.finish_band().unwrap();
         builder
-            .start_band_nd(
-                Some("cube"),
-                &["time", "y", "x"],
-                &[3, 2, 2],
-                BandDataType::UInt8,
-                Some(&[7u8]),
-                None,
-                None,
-            )
+            .start_band(StartBandArgs {
+                name: Some("cube"),
+                nodata: Some(&[7u8]),
+                ..StartBandArgs::new(&["time", "y", "x"], &[3, 2, 2], BandDataType::UInt8)
+            })
             .unwrap();
         builder.band_data_writer().append_value(&band1);
         builder.finish_band().unwrap();
@@ -1097,15 +1079,14 @@ mod tests {
             .start_raster_2d(2, 2, 0.0, 2.0, 1.0, -1.0, 0.0, 0.0, None)
             .unwrap();
         builder
-            .start_band_nd(
-                Some("hypercube"),
-                &["time", "level", "y", "x"],
-                &[2, 2, 2, 2],
-                BandDataType::UInt8,
-                None,
-                None,
-                None,
-            )
+            .start_band(StartBandArgs {
+                name: Some("hypercube"),
+                ..StartBandArgs::new(
+                    &["time", "level", "y", "x"],
+                    &[2, 2, 2, 2],
+                    BandDataType::UInt8,
+                )
+            })
             .unwrap();
         builder.band_data_writer().append_value(&data);
         builder.finish_band().unwrap();
@@ -1144,15 +1125,11 @@ mod tests {
             .start_raster_2d(2, 2, 0.0, 2.0, 1.0, -1.0, 0.0, 0.0, None)
             .unwrap();
         builder
-            .start_band_nd(
-                None,
+            .start_band(StartBandArgs::new(
                 &["y", "x", "time"],
                 &[2, 2, 3],
                 BandDataType::UInt8,
-                None,
-                None,
-                None,
-            )
+            ))
             .unwrap();
         builder
             .band_data_writer()

@@ -40,7 +40,7 @@ use datafusion_expr::{
 };
 use sedona_common::{sedona_internal_datafusion_err, sedona_internal_err};
 use sedona_raster::array::RasterStructArray;
-use sedona_raster::builder::RasterBuilder;
+use sedona_raster::builder::{RasterBuilder, StartBandArgs};
 use sedona_raster::raster_loader::{
     AsyncRasterLoader, RasterLoadRequest, RasterLoaderConfig, RasterLoaderRegistry,
 };
@@ -350,7 +350,7 @@ where
                 let outdb_format: Option<String> = band.outdb_format().map(|s| s.to_string());
                 let is_indb = band.is_indb();
                 // A non-identity view can't be passed through yet: the rebuild
-                // via `start_band_nd` below emits an identity band, so the view
+                // via `start_band` below emits an identity band, so the view
                 // would be silently dropped — the zero-copy passthrough shares
                 // the source bytes but does not carry the view. Unreachable
                 // today (the read boundary rejects non-identity views), but
@@ -379,18 +379,16 @@ where
 
             let dim_names: Vec<&str> = dim_names_owned.iter().map(String::as_str).collect();
             builder
-                .start_band_nd(
-                    band_name.as_deref(),
-                    &dim_names,
-                    &source_shape,
-                    data_type,
-                    nodata.as_deref(),
-                    outdb_uri.as_deref(),
-                    outdb_format.as_deref(),
-                )
+                .start_band(StartBandArgs {
+                    name: band_name.as_deref(),
+                    nodata: nodata.as_deref(),
+                    outdb_uri: outdb_uri.as_deref(),
+                    outdb_format: outdb_format.as_deref(),
+                    ..StartBandArgs::new(&dim_names, &source_shape, data_type)
+                })
                 .map_err(|e| {
                     sedona_internal_datafusion_err!(
-                        "RS_EnsureLoaded: start_band_nd failed at ({raster_idx},{band_idx}): {e}"
+                        "RS_EnsureLoaded: start_band failed at ({raster_idx},{band_idx}): {e}"
                     )
                 })?;
 
@@ -449,9 +447,10 @@ where
                 }
 
                 // We can only build identity-view output bands today
-                // (`start_band_nd`). A loader that resolved/cropped the view —
-                // returning a different `source_shape` or a non-identity
-                // `view` — needs `start_band_with_view`. Reserved for
+                // (`start_band` with `view: None`). A loader that
+                // resolved/cropped the view — returning a different
+                // `source_shape` or a non-identity `view` — needs `start_band`
+                // with a `Some` view. Reserved for
                 // https://github.com/apache/sedona-db/issues/897.
                 let result = &result[0];
                 if result.source_shape != source_shape
@@ -518,7 +517,7 @@ mod tests {
     use arrow_array::Array;
     use arrow_buffer::Buffer;
     use sedona_raster::array::RasterStructArray;
-    use sedona_raster::builder::RasterBuilder;
+    use sedona_raster::builder::{RasterBuilder, StartBandArgs};
     use sedona_raster::raster_loader::{RasterLoadResult, RasterLoaderRegistry};
     use sedona_raster::traits::RasterRef;
     use sedona_schema::raster::BandDataType;
@@ -569,15 +568,12 @@ mod tests {
             None,
         )
         .unwrap();
-        b.start_band_nd(
-            Some("band0"),
-            &["y", "x"],
-            source_shape,
-            BandDataType::UInt8,
-            None,
-            Some(uri),
-            Some(format),
-        )
+        b.start_band(StartBandArgs {
+            name: Some("band0"),
+            outdb_uri: Some(uri),
+            outdb_format: Some(format),
+            ..StartBandArgs::new(&["y", "x"], source_shape, BandDataType::UInt8)
+        })
         .unwrap();
         // OutDb bands write empty data.
         b.band_data_writer().append_value([0u8; 0]);
@@ -597,15 +593,10 @@ mod tests {
             None,
         )
         .unwrap();
-        b.start_band_nd(
-            Some("band0"),
-            &["y", "x"],
-            source_shape,
-            BandDataType::UInt8,
-            None,
-            None,
-            None,
-        )
+        b.start_band(StartBandArgs {
+            name: Some("band0"),
+            ..StartBandArgs::new(&["y", "x"], source_shape, BandDataType::UInt8)
+        })
         .unwrap();
         b.band_data_writer().append_value(data);
         b.finish_band().unwrap();
@@ -949,15 +940,12 @@ mod tests {
         let mut b = RasterBuilder::new(2);
         b.start_raster_nd(&[0.0, 1.0, 0.0, 0.0, 0.0, -1.0], &["y", "x"], &[2, 3], None)
             .unwrap();
-        b.start_band_nd(
-            Some("band0"),
-            &["y", "x"],
-            &[2, 3],
-            BandDataType::UInt8,
-            None,
-            Some("file:///tmp/foo.tif"),
-            Some("mock"),
-        )
+        b.start_band(StartBandArgs {
+            name: Some("band0"),
+            outdb_uri: Some("file:///tmp/foo.tif"),
+            outdb_format: Some("mock"),
+            ..StartBandArgs::new(&["y", "x"], &[2, 3], BandDataType::UInt8)
+        })
         .unwrap();
         b.band_data_writer().append_value([0u8; 0]);
         b.finish_band().unwrap();
