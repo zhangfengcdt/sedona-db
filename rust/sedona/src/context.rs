@@ -21,6 +21,7 @@ use std::{
 
 use crate::exec::create_plan_from_sql;
 use crate::object_storage::ensure_object_store_registered_with_options;
+use crate::url_table::enable_sedona_url_table;
 use crate::{
     catalog::DynamicObjectStoreCatalog,
     random_geometry_provider::RandomGeometryFunction,
@@ -249,8 +250,12 @@ impl SedonaContext {
             state.register_file_format(Arc::new(LasFormatFactory::new(Extension::Las)), false)?;
         }
 
-        // Enable dynamic file query (i.e., select * from 'filename')
-        let ctx = SessionContext::new_with_state(state).enable_url_table();
+        // Enable dynamic file query (i.e., select * from 'filename').
+        // Uses SedonaDB's resolver instead of DataFusion's
+        // `enable_url_table` so directory-shaped external formats (Zarr)
+        // resolve to a single-object table rather than a listing over the
+        // directory's contents.
+        let ctx = enable_sedona_url_table(SessionContext::new_with_state(state));
 
         // Install dynamic catalog provider that can register required object stores
         ctx.refresh_catalogs().await?;

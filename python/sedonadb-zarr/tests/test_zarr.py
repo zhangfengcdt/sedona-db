@@ -65,6 +65,57 @@ def test_format_spec_via_read(zarr_group):
     )
 
 
+def test_zarr_url_as_table(tmp_path):
+    """`SELECT * FROM '<.zarr url>'` reads a Zarr group with no explicit format.
+
+    This is the motivating case for the URL-as-table resolver: a bare
+    `FROM '<url>'` keys off the `.zarr` extension and routes the directory
+    through the single-object table path, yielding the same rasters as the
+    explicit `read(url, format="zarr")`. DataFusion's default resolver instead
+    lists the directory's inner chunks and tries to parse one as the wrong
+    format, failing with `Json error: Not valid JSON: EOF ...`.
+    """
+    zarr = pytest.importorskip("zarr", minversion="3.0")
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("sedonadb_zarr")
+
+    # The resolver keys off the path extension, so the group must live at a
+    # `.zarr`-suffixed directory (pytest's `tmp_path` itself has no suffix).
+    # Same 2x2 UInt8 / (1, 2)-chunk layout as the `zarr_group` fixture, so it
+    # reads as two OutDb raster rows (one per chunk).
+    zarr_path = tmp_path / "temperature.zarr"
+    root = zarr.open_group(str(zarr_path), mode="w")
+    arr = root.create_array(
+        "temperature",
+        shape=(2, 2),
+        chunks=(1, 2),
+        dtype="uint8",
+        dimension_names=["y", "x"],
+    )
+    arr[:] = np.array([[10, 11], [20, 21]], dtype=np.uint8)
+
+    con = sedonadb.connect()
+    con.register(sedonadb_zarr.ZarrExtension())
+
+    url = zarr_path.as_uri()
+
+    # Ground truth: the working explicit-format read of the same `.zarr` group.
+    expected = con.read(url, format="zarr").to_arrow_table()
+
+    def assert_matches_expected(table):
+        # A row count of 2 already distinguishes the group resolving as a single
+        # table from a listing over its chunks (which would have a different
+        # count), so matching the explicit read's row count is enough here.
+        assert table.num_rows == expected.num_rows == 2
+        assert table.column_names == ["raster"]
+
+    # The `file://` URL form is the primary SQL-text feature under test.
+    assert_matches_expected(con.sql(f"SELECT * FROM '{url}'").to_arrow_table())
+
+    # A bare filesystem path (no `file://` scheme) resolves the same way.
+    assert_matches_expected(con.sql(f"SELECT * FROM '{zarr_path}'").to_arrow_table())
+
+
 # A north-up affine in spatial:transform order [a, b, c, d, e, f]: origin
 # (10, 20), 1x-1 pixels. A single-chunk 2x2 raster then spans x in [10, 12],
 # y in [18, 20]. Encoding the *same* georeferencing under different attribute

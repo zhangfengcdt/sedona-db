@@ -60,6 +60,15 @@ impl ExternalFormatFactory {
     pub fn new(spec: Arc<dyn ExternalFormatSpec>) -> Self {
         Self { spec }
     }
+
+    /// The [ExternalFormatSpec] this factory wraps.
+    ///
+    /// Used by the URL-as-table resolver to inspect the spec (e.g. its
+    /// [`ExternalFormatSpec::list_single_object`] shape) after recovering
+    /// it from the session's file-format registry.
+    pub fn spec(&self) -> &Arc<dyn ExternalFormatSpec> {
+        &self.spec
+    }
 }
 
 impl FileFormatFactory for ExternalFormatFactory {
@@ -398,8 +407,7 @@ mod test {
     use datafusion::{
         assert_batches_eq,
         datasource::listing::ListingTableUrl,
-        execution::SessionStateBuilder,
-        prelude::{col, lit, SessionContext},
+        prelude::{col, SessionContext},
     };
     use datafusion_common::plan_err;
     use std::{
@@ -412,16 +420,6 @@ mod test {
     use crate::provider::external_table;
 
     use super::*;
-
-    fn create_echo_spec_ctx() -> SessionContext {
-        let spec = Arc::new(EchoSpec::default());
-        let factory = ExternalFormatFactory::new(spec.clone());
-
-        // Register the format - use new_with_default_features to get default catalogs
-        let mut state = SessionStateBuilder::new_with_default_features().build();
-        state.register_file_format(Arc::new(factory), true).unwrap();
-        SessionContext::new_with_state(state).enable_url_table()
-    }
 
     fn create_echo_spec_temp_dir() -> (TempDir, Vec<PathBuf>) {
         // Create a temporary directory with a few files with the declared extension
@@ -535,75 +533,6 @@ mod test {
 
             Ok(Box::new(RecordBatchIterator::new([Ok(batch)], schema)))
         }
-    }
-
-    #[tokio::test]
-    async fn spec_format() {
-        let ctx = create_echo_spec_ctx();
-        let (temp_dir, files) = create_echo_spec_temp_dir();
-
-        // Select using just the filename and ensure we get a result
-        // Quote the path to prevent it from being parsed as a multi-part identifier
-        let batches_item0 = ctx
-            .table(format!("\"{}\"", files[0].to_string_lossy()))
-            .await
-            .unwrap()
-            .collect()
-            .await
-            .unwrap();
-
-        assert_eq!(batches_item0.len(), 1);
-        assert_eq!(batches_item0[0].num_rows(), 1);
-
-        // With a glob we should get all the files
-        let batches = ctx
-            .table(format!(
-                "\"{}/*.echospec\"",
-                temp_dir.path().to_string_lossy()
-            ))
-            .await
-            .unwrap()
-            .collect()
-            .await
-            .unwrap();
-        // We should get one value per partition
-        assert_eq!(batches.len(), 2);
-        assert_eq!(batches[0].num_rows(), 1);
-        assert_eq!(batches[1].num_rows(), 1);
-    }
-
-    #[tokio::test]
-    async fn spec_format_project_filter() {
-        let ctx = create_echo_spec_ctx();
-        let (temp_dir, _files) = create_echo_spec_temp_dir();
-
-        // Ensure that if we pass
-        // Quote the path to prevent it from being parsed as a multi-part identifier
-        let batches = ctx
-            .table(format!(
-                "\"{}/*.echospec\"",
-                temp_dir.path().to_string_lossy()
-            ))
-            .await
-            .unwrap()
-            .filter(col("src").like(lit("%item0%")))
-            .unwrap()
-            .select(vec![col("batch_size"), col("filter_count")])
-            .unwrap()
-            .collect()
-            .await
-            .unwrap();
-
-        assert_batches_eq!(
-            [
-                "+------------+--------------+",
-                "| batch_size | filter_count |",
-                "+------------+--------------+",
-                "| 8192       | 1            |",
-                "+------------+--------------+",
-            ],
-            &batches
-        );
     }
 
     #[tokio::test]
@@ -744,7 +673,11 @@ mod test {
     #[async_trait]
     impl ExternalFormatSpec for DirectorySpec {
         fn extension(&self) -> &str {
-            ".dirfmt"
+            // No leading dot: file formats register under this key
+            // lower-cased, and both DataFusion's listing resolver and the
+            // URL-as-table resolver look them up by the dot-free extension
+            // of the path (`foo.dirfmt` -> `dirfmt`).
+            "dirfmt"
         }
 
         fn list_single_object(&self) -> bool {

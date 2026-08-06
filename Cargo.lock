@@ -5746,10 +5746,12 @@ dependencies = [
  "aws-credential-types",
  "comfy-table",
  "datafusion",
+ "datafusion-catalog",
  "datafusion-common",
  "datafusion-expr",
  "datafusion-ffi",
  "datafusion-optimizer",
+ "datafusion-session",
  "dirs",
  "futures",
  "geo-traits",
@@ -6450,7 +6452,7 @@ dependencies = [
 
 [[package]]
 name = "sedona-spatial-join-raster"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
