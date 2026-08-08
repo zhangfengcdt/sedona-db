@@ -127,6 +127,11 @@ fn sedona_type_to_formatted_type(sedona_type: &SedonaType) -> Result<SedonaType>
             }
         }
         SedonaType::Raster => Ok(SedonaType::Arrow(DataType::Utf8)),
+        // No generic formatting for an extension type this crate doesn't
+        // recognize -- pass through unchanged rather than guessing at
+        // semantics. A concrete UDT wanting sd_format support would need
+        // its own extension point; not built here.
+        SedonaType::UnrecognizedExtension(_) => Ok(sedona_type.clone()),
     }
 }
 
@@ -145,6 +150,8 @@ fn columnar_value_to_formatted_value(
             geospatial_value_to_formatted_value(sedona_type, columnar_value, maybe_width_hint)
         }
         SedonaType::Raster => raster_value_to_formatted_value(columnar_value, maybe_width_hint),
+        // See the matching arm in `sedona_type_to_formatted_type` above.
+        SedonaType::UnrecognizedExtension(_) => Ok(columnar_value.clone()),
         SedonaType::Arrow(arrow_type) => match arrow_type {
             DataType::Struct(fields) => match columnar_value {
                 ColumnarValue::Array(array) => {
