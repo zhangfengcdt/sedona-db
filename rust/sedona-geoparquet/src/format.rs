@@ -38,8 +38,11 @@ use datafusion::{
     },
 };
 use datafusion_catalog::{memory::DataSourceExec, Session};
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{plan_err, GetExt, Result, Statistics};
+use datafusion_common::{
+    tree_node::{Transformed, TreeNode, TreeNodeRecursion},
+    DataFusionError,
+};
 use datafusion_datasource_parquet::metadata::DFParquetMetadata;
 use datafusion_datasource_parquet::{CachedParquetFileReaderFactory, ParquetFileReaderFactory};
 use datafusion_execution::cache::cache_manager::FileMetadataCache;
@@ -391,7 +394,35 @@ impl FileFormat for GeoParquetFormat {
         )
         .unwrap();
         source.options = self.options.clone();
-        Arc::new(source)
+
+        // DataFusion 52 has an issue where field metadata (like ARROW:extension:name)
+        // is stripped when evaluating embedded projections in ParquetOpener. This is
+        // because the batch schema comes from the parquet reader (which doesn't have
+        // extension metadata), and Column::return_field() looks up fields from that schema.
+        // This isn't a bug in DataFusion because we're the ones that advertised the table
+        // schema as having metadata'd expressions in the first place.
+        //
+        // We fix this by wrapping Column expressions with MetadataPreservingColumn,
+        // which stores the correct field from the file schema and returns it from
+        // return_field() regardless of the input schema.
+        let initial_projection = source.projection().cloned().unwrap_or_else(|| {
+            let indices: Vec<usize> =
+                (0..source.table_schema().table_schema().fields().len()).collect();
+            ProjectionExprs::from_indices(&indices, source.table_schema().table_schema())
+        });
+        let projection_with_types = wrap_columns_with_metadata_preserving(
+            initial_projection,
+            source.table_schema().table_schema(),
+        )
+        .map(|projection_with_types| source.try_pushdown_projection(&projection_with_types));
+
+        // These are both failable but we can't fail here, so defer the error so that it is
+        // communicated on file open.
+        match projection_with_types {
+            Ok(Ok(Some(modified))) => modified,
+            Err(err) | Ok(Err(err)) => Arc::new(source.with_deferred_error(err)),
+            _ => Arc::new(source),
+        }
     }
 }
 
@@ -415,6 +446,7 @@ pub struct GeoParquetFileSource {
     /// Enables spatial pruning for both GEOMETRY and GEOGRAPHY columns.
     /// This is typically obtained from `SedonaOptions::runtime.bounder_factory()`.
     bounder_factory: WkbBounder2DFactory,
+    deferred_error: Option<Arc<DataFusionError>>,
 }
 
 impl GeoParquetFileSource {
@@ -428,7 +460,14 @@ impl GeoParquetFileSource {
             options,
             metadata_cache: None,
             bounder_factory: WkbBounder2DFactory::default(),
+            deferred_error: None,
         }
+    }
+
+    /// Construct with a deferred error from a previously unfailable operation
+    pub fn with_deferred_error(mut self, deferred_error: DataFusionError) -> Self {
+        self.deferred_error = Some(Arc::new(deferred_error));
+        self
     }
 
     /// Set the bounder factory for spatial pruning support
@@ -496,6 +535,7 @@ impl GeoParquetFileSource {
                 ),
                 metadata_cache: None,
                 bounder_factory: WkbBounder2DFactory::default(),
+                deferred_error: None,
             })
         } else {
             sedona_internal_err!("GeoParquetFileSource constructed from non-ParquetSource")
@@ -511,6 +551,7 @@ impl GeoParquetFileSource {
             options: self.options.clone(),
             metadata_cache: self.metadata_cache.clone(),
             bounder_factory: self.bounder_factory.clone(),
+            deferred_error: self.deferred_error.clone(),
         }
     }
 
@@ -523,6 +564,7 @@ impl GeoParquetFileSource {
             options: self.options.clone(),
             metadata_cache: self.metadata_cache.clone(),
             bounder_factory: self.bounder_factory.clone(),
+            deferred_error: self.deferred_error.clone(),
         }
     }
 
@@ -538,6 +580,7 @@ impl GeoParquetFileSource {
             options: self.options.clone(),
             metadata_cache: self.metadata_cache.clone(),
             bounder_factory: self.bounder_factory.clone(),
+            deferred_error: self.deferred_error.clone(),
         }
     }
 }
@@ -549,6 +592,10 @@ impl FileSource for GeoParquetFileSource {
         base_config: &FileScanConfig,
         partition: usize,
     ) -> Result<Arc<dyn FileOpener>> {
+        if let Some(err) = &self.deferred_error {
+            return sedona_internal_err!("Error constructing GeoParquetFileSource: {err}");
+        }
+
         let inner_opener =
             self.inner
                 .create_file_opener(object_store.clone(), base_config, partition)?;
@@ -578,6 +625,10 @@ impl FileSource for GeoParquetFileSource {
         filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
+        if let Some(err) = &self.deferred_error {
+            return sedona_internal_err!("Error constructing GeoParquetFileSource: {err}");
+        }
+
         let inner_result = self.inner.try_pushdown_filters(filters.clone(), config)?;
         match &inner_result.updated_node {
             Some(updated_node) => {
@@ -609,6 +660,7 @@ impl FileSource for GeoParquetFileSource {
         source.options = self.options.clone();
         source.metadata_cache = self.metadata_cache.clone();
         source.bounder_factory = self.bounder_factory.clone();
+        source.deferred_error = self.deferred_error.clone();
         Arc::new(source)
     }
 
@@ -616,24 +668,12 @@ impl FileSource for GeoParquetFileSource {
         &self,
         projection: &ProjectionExprs,
     ) -> Result<Option<Arc<dyn FileSource>>> {
-        // DataFusion 52 has an issue where field metadata (like ARROW:extension:name)
-        // is stripped when evaluating embedded projections in ParquetOpener. This is
-        // because the batch schema comes from the parquet reader (which doesn't have
-        // extension metadata), and Column::return_field() looks up fields from that schema.
-        // This isn't a bug in DataFusion because we're the ones that advertised the table
-        // schema as having metadata'd expressions in the first place.
-        //
-        // We fix this by wrapping Column expressions with MetadataPreservingColumn,
-        // which stores the correct field from the file schema and returns it from
-        // return_field() regardless of the input schema.
-        let transformed_projection = wrap_columns_with_metadata_preserving(
-            projection.clone(),
-            self.inner.table_schema().table_schema(),
-        )?;
+        if let Some(err) = &self.deferred_error {
+            return sedona_internal_err!("Error constructing GeoParquetFileSource: {err}");
+        }
 
-        let inner_result = self
-            .inner
-            .try_pushdown_projection(&transformed_projection)?;
+        let inner_result = self.inner.try_pushdown_projection(projection)?;
+
         match inner_result {
             Some(updated_inner) => {
                 let mut updated_source = Self::try_from_file_source(
@@ -691,8 +731,15 @@ fn wrap_expr_columns(
     expr.transform_down(|node| {
         if let Some(column) = node.as_any().downcast_ref::<Column>() {
             let index = column.index();
+
+            if index >= file_schema.fields().len() {
+                return sedona_internal_err!(
+                    "Unexpected projection expression in GeoParquet source: index {index} out of bounds"
+                );
+            }
+
             let field = file_schema.field(index);
-            // Only wrap columns that have extension metadata to preserve
+            // Only wrap columns that have extension metadata
             if field.metadata().contains_key("ARROW:extension:name") {
                 let field: FieldRef = Arc::new(field.clone());
                 let wrapped = Arc::new(MetadataPreservingColumn::new(column.clone(), field));
@@ -1080,5 +1127,107 @@ mod test {
                 .unwrap();
         let geo_source_with_predicate = geo_source.with_predicate(predicate);
         assert!(geo_source_with_predicate.inner.filter().is_some());
+    }
+
+    /// Test that columns with extension metadata are correctly wrapped
+    #[test]
+    fn test_wrap_expr_columns_wraps_geometry_column() {
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "ARROW:extension:name".to_string(),
+            "geoarrow.wkb".to_string(),
+        );
+        let file_schema = Schema::new(vec![
+            Field::new("geometry", DataType::Binary, true).with_metadata(metadata)
+        ]);
+
+        // Column expression for the geometry column (index 0 in file schema)
+        let geometry_column: Arc<dyn PhysicalExpr> = Arc::new(Column::new("geometry", 0));
+
+        let result = wrap_expr_columns(geometry_column, &file_schema).unwrap();
+
+        // The result should be wrapped in MetadataPreservingColumn
+        assert!(result
+            .as_any()
+            .downcast_ref::<MetadataPreservingColumn>()
+            .is_some());
+    }
+
+    /// Test that columns without extension metadata are not wrapped
+    #[test]
+    fn test_wrap_expr_columns_skips_non_geometry_column() {
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "ARROW:extension:name".to_string(),
+            "geoarrow.wkb".to_string(),
+        );
+        let file_schema = Schema::new(vec![
+            Field::new("name", DataType::Utf8, true),
+            Field::new("geometry", DataType::Binary, true).with_metadata(metadata),
+        ]);
+
+        // Column expression for a non-geometry column (no extension metadata)
+        let name_column: Arc<dyn PhysicalExpr> = Arc::new(Column::new("name", 0));
+
+        let result = wrap_expr_columns(name_column, &file_schema).unwrap();
+
+        // The result should NOT be wrapped (still a Column)
+        assert!(result.as_any().downcast_ref::<Column>().is_some());
+    }
+
+    /// Test that column index out of file schema bounds returns an error
+    #[test]
+    fn test_wrap_expr_columns_errors_on_out_of_bounds_index() {
+        let file_schema = Schema::new(vec![
+            Field::new("name", DataType::Utf8, true),
+            Field::new("age", DataType::Int32, true),
+        ]);
+
+        // Column expression with index 5, but schema only has 2 fields (indices 0 and 1)
+        let out_of_bounds_column: Arc<dyn PhysicalExpr> = Arc::new(Column::new("phantom", 5));
+
+        let result = wrap_expr_columns(out_of_bounds_column, &file_schema);
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("index 5 out of bounds"),
+            "Error message should mention out of bounds index, got: {err_msg}"
+        );
+    }
+
+    /// Integration test for projection with multiple derived columns plus geometry accessor
+    /// Regression test for https://github.com/apache/sedona-db/issues/1115
+    #[tokio::test]
+    async fn projection_with_derived_columns_and_geometry_accessor() {
+        let ctx = setup_context();
+        let example = test_geoparquet("example", "geometry").unwrap();
+
+        // Query that adds multiple literal columns alongside the scanned geometry
+        // This mimics: SELECT 'a' AS c1, 'b' AS c2, geometry FROM ...
+        let df = ctx
+            .sql(&format!(
+                "SELECT 'a' AS c1, 'b' AS c2, geometry FROM '{}' LIMIT 1",
+                example
+            ))
+            .await
+            .unwrap();
+
+        // This should not panic - the issue was "index out of bounds" when
+        // projection pushdown tried to wrap columns with indices beyond the
+        // file schema's bounds
+        let batches = df.collect().await.unwrap();
+        assert!(!batches.is_empty());
+        assert_eq!(batches[0].num_columns(), 3);
+
+        // Verify the geometry column's extension metadata survives into the batch schema
+        let batch_schema = batches[0].schema();
+        let geometry_field = batch_schema.field(2);
+        assert_eq!(geometry_field.name(), "geometry");
+        assert_eq!(
+            geometry_field.metadata().get("ARROW:extension:name"),
+            Some(&"geoarrow.wkb".to_string()),
+            "Geometry column should preserve geoarrow extension metadata"
+        );
     }
 }
