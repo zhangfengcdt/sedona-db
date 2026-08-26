@@ -883,6 +883,7 @@ mod tests {
         // Source: a CRS, a nodata sentinel, and pixel values to preserve.
         let source = RasterSpec::d2(2, 1)
             .band_values(&[1u8, 2])
+            .name("temperature")
             .nodata(9u8)
             .crs(Some("OGC:CRS84"))
             .build();
@@ -899,9 +900,11 @@ mod tests {
             .unwrap();
         let out: ArrayRef = Arc::new(builder.finish().unwrap());
 
-        // Only the transform changed; CRS, nodata, and pixels carried over.
+        // Only the transform changed; CRS, nodata, band name, and pixels
+        // carried over.
         let expected = RasterSpec::d2(2, 1)
             .band_values(&[1u8, 2])
+            .name("temperature")
             .nodata(9u8)
             .crs(Some("OGC:CRS84"))
             .transform([100.0, 2.0, 0.0, 200.0, 0.0, -3.0]);
