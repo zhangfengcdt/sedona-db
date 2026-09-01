@@ -20,7 +20,7 @@ use std::sync::Arc;
 use arrow_schema::{ArrowError, DataType, Field, Schema};
 use geoarrow_schema::{CoordType, Crs, Dimension, Metadata, PointType, WkbType};
 use las::Header;
-use las_crs::{get_epsg_from_geotiff_crs, get_epsg_from_wkt_crs_bytes};
+use las_crs::EPSG_RANGE;
 
 use crate::las::options::{GeometryEncoding, LasExtraBytes};
 
@@ -30,20 +30,20 @@ pub fn try_schema_from_header(
     geometry_encoding: GeometryEncoding,
     extra_bytes: LasExtraBytes,
 ) -> Result<Schema, ArrowError> {
-    let epsg_crs = if header.has_wkt_crs() {
+    let crs = if header.has_wkt_crs() {
         header
             .get_wkt_crs_bytes()
-            .and_then(|bytes| get_epsg_from_wkt_crs_bytes(bytes).ok())
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+            .map(|wkt| Crs::from_wkt2_2019(wkt.trim_end_matches('\0').to_string()))
+            .unwrap_or_default()
     } else {
         header
             .get_geotiff_crs()
-            .map(|gtc| gtc.and_then(|gtc| get_epsg_from_geotiff_crs(&gtc).ok()))
+            .map(|gtc| gtc.and_then(|gtc| get_epsg_from_geotiff_crs(&gtc)))
+            .unwrap_or_default()
+            .map(|epsg_code| Crs::from_authority_code(format!("EPSG:{epsg_code}")))
             .unwrap_or_default()
     };
-
-    let crs = epsg_crs
-        .map(|epsg_crs| Crs::from_authority_code(format!("EPSG:{}", epsg_crs.get_horizontal())))
-        .unwrap_or_default();
 
     let mut fields = match geometry_encoding {
         GeometryEncoding::Plain => vec![
@@ -105,6 +105,16 @@ pub fn try_schema_from_header(
     }
 
     Ok(Schema::new(fields))
+}
+
+fn get_epsg_from_geotiff_crs(geotiff_crs: &las::crs::GeoTiffCrs) -> Option<u16> {
+    let epsg_code = match geotiff_crs.get_gt_model_type_geo_key_value()? {
+        1 => geotiff_crs.get_projected_crs_geo_key_value(),
+        2 | 3 => geotiff_crs.get_geodetic_crs_geo_key_value(),
+        _ => None,
+    }?;
+
+    EPSG_RANGE.contains(&epsg_code).then_some(epsg_code)
 }
 
 fn extra_bytes_fields(header: &Header) -> Result<Vec<Field>, ArrowError> {
