@@ -36,7 +36,7 @@ then every side carries the same CRS.
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass
 from typing import Any, List, Mapping, Optional, Tuple
 
 import numpy as np
@@ -46,18 +46,38 @@ import numpy as np
 class DecodedRaster:
     """One raster decoded to plain values.
 
-    `pixels` is `(band, rows, cols)`, `gdal_transform` is GDAL-order
-    `(origin_x, scale_x, skew_x, origin_y, skew_y, scale_y)`, and `nodata`
-    holds one sentinel per band (unpacked in the band's dtype).
+    `pixels` is `(band, rows, cols)` and `nodata` holds one sentinel per band
+    (unpacked in the band's dtype). The grid is stated as exactly one of
+    `gdal_transform` — GDAL-order `(origin_x, scale_x, skew_x, origin_y,
+    skew_y, scale_y)` — or, for a north-up grid, the readable `bbox` spelling
+    `(minx, miny, maxx, maxy)` (pixel size derived from the data's shape),
+    mirroring `write_geotiff`. Either way the instance carries a
+    `gdal_transform`: decoders produce transforms and `assert_decoded_equal`
+    compares them, so `bbox` is construction sugar for anchors, not a second
+    stored representation.
     `compression` is the codec name of the decoded container when one was
     read (GeoTIFF decodes only); it is carried for encoder tests to assert
     on and deliberately not part of `assert_decoded_equal`.
     """
 
     pixels: "np.ndarray"
-    gdal_transform: Tuple[float, ...]
-    nodata: List[Any]
+    gdal_transform: Optional[Tuple[float, ...]] = None
+    nodata: Optional[List[Any]] = None
     compression: Optional[str] = None
+    bbox: InitVar[Optional[Tuple[float, float, float, float]]] = None
+
+    def __post_init__(self, bbox):
+        if self.nodata is None:
+            raise ValueError("nodata is required (one entry per band)")
+        # A plain-transform construction skips _resolve_transform so decoders
+        # (which never pass bbox) stay rasterio-free.
+        if bbox is not None or self.gdal_transform is None:
+            _, height, width = self.pixels.shape
+            self.gdal_transform = tuple(
+                _resolve_transform(
+                    bbox, self.gdal_transform, width=width, height=height
+                ).to_gdal()
+            )
 
 
 def _is_nodata(sampled, nodata) -> bool:
@@ -127,19 +147,33 @@ def decode_geotiff_bytes(data: bytes) -> DecodedRaster:
         )
 
 
+def _resolve_transform(bbox, gdal_transform, *, width, height):
+    """The rasterio `Affine` from exactly one of `bbox`/`gdal_transform`."""
+    from rasterio.transform import Affine, from_bounds
+
+    if (gdal_transform is None) == (bbox is None):
+        raise ValueError("pass exactly one of gdal_transform or bbox")
+    if bbox is not None:
+        return from_bounds(*bbox, width=width, height=height)
+    return Affine.from_gdal(*gdal_transform)
+
+
 def write_geotiff(
-    path, data: "np.ndarray", *, gdal_transform, nodata=None, crs=None
+    path, data: "np.ndarray", *, bbox=None, gdal_transform=None, nodata=None, crs=None
 ) -> None:
     """Write a `(bands, height, width)` array as a GeoTIFF.
 
-    `gdal_transform` is GDAL-order `(origin_x, scale_x, skew_x, origin_y,
-    skew_y, scale_y)`; `nodata` (optional) becomes the per-band nodata of
-    every band. `crs` (optional) is any CRS rasterio accepts; parity fixtures
-    stay CRS-less unless an engine requires one, and then use the same CRS
-    everywhere so nothing reprojects.
+    The grid is placed by exactly one of `bbox` — `(minx, miny, maxx, maxy)`,
+    the readable spelling: north-up, no skew, pixel size derived from the
+    data's shape (rasterio's `transform.from_bounds`) — or `gdal_transform` —
+    GDAL-order `(origin_x, scale_x, skew_x, origin_y, skew_y, scale_y)`, for
+    grids a bbox cannot express (skew, south-up).
+    `nodata` (optional) becomes the per-band nodata of every band. `crs`
+    (optional) is any CRS rasterio accepts; parity fixtures stay CRS-less
+    unless an engine requires one, and then use the same CRS everywhere so
+    nothing reprojects.
     """
     import rasterio
-    from rasterio.transform import Affine
 
     bands, height, width = data.shape
     with rasterio.open(
@@ -150,7 +184,7 @@ def write_geotiff(
         width=width,
         count=bands,
         dtype=str(data.dtype),
-        transform=Affine.from_gdal(*gdal_transform),
+        transform=_resolve_transform(bbox, gdal_transform, width=width, height=height),
         nodata=nodata,
         crs=crs,
     ) as dst:
@@ -164,7 +198,8 @@ def write_random_geotiff(
     bands,
     height,
     width,
-    gdal_transform,
+    bbox=None,
+    gdal_transform=None,
     crs=None,
     nodata=None,
     plants=None,
@@ -173,23 +208,28 @@ def write_random_geotiff(
 
     Combines `random_raster_data` (dtype extremes planted in opposite corners)
     with `write_geotiff` — the input-raster fixture shape shared by raster warp
-    parity tests. `gdal_transform`, `crs`, and `nodata` are as `write_geotiff`;
-    `plants` is as `random_raster_data`.
+    parity tests. `bbox`/`gdal_transform` (exactly one), `crs`, and `nodata`
+    are as `write_geotiff`; `plants` is as `random_raster_data`.
     """
     data = random_raster_data(
         dtype, bands=bands, height=height, width=width, plants=plants
     )
-    write_geotiff(path, data, gdal_transform=gdal_transform, nodata=nodata, crs=crs)
+    write_geotiff(
+        path, data, bbox=bbox, gdal_transform=gdal_transform, nodata=nodata, crs=crs
+    )
 
 
-def write_grid_geotiff(path, *, gdal_transform, width, height, crs=None) -> None:
+def write_grid_geotiff(
+    path, *, bbox=None, gdal_transform=None, width, height, crs=None
+) -> None:
     """Write a zeroed single-band GeoTIFF whose only role is to define a grid.
 
     Its pixels are never read — only its extent, resolution, and CRS matter,
-    e.g. as the reference grid for `RS_ReprojectMatch`.
+    e.g. as the reference grid for `RS_ReprojectMatch`. `bbox`/`gdal_transform`
+    (exactly one) are as `write_geotiff`.
     """
     data = np.zeros((1, height, width), dtype="uint8")
-    write_geotiff(path, data, gdal_transform=gdal_transform, crs=crs)
+    write_geotiff(path, data, bbox=bbox, gdal_transform=gdal_transform, crs=crs)
 
 
 def assert_transform_and_nodata(got: DecodedRaster, expected: DecodedRaster) -> None:
