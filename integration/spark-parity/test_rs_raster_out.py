@@ -37,11 +37,31 @@ operation divergence — it isolates the transport. Pixel-transforming ops
 
 import pytest
 
+from sedonadb.raster_testing import DecodedRaster, random_raster_data
 from sedonadb.testing import SedonaDB, compare
 from sedonadb.testing_spark import SedonaSpark
 
 # Each value is representable in its dtype, so it packs into the band exactly.
 BAND_NODATA = {"uint8": 200.0, "int32": -99999.0, "float64": -12345.5}
+
+# The grid the anchored tests write and reconstruct. Anchors must state the
+# exact raster they expect, so the placement is passed to
+# create_random_raster_view explicitly rather than relying on its defaults
+# staying in sync — and the anchors state the same BBOX.
+BANDS, HEIGHT, WIDTH = 2, 6, 7
+BBOX = (100.0, 482.0, 114.0, 500.0)
+
+
+def _anchor(dtype, nodata, *, bands=BANDS, plants=None):
+    """The `DecodedRaster` a pixel-preserving setter must return on the
+    standard grid: the seeded pixels unchanged, with `nodata` per band."""
+    return DecodedRaster(
+        random_raster_data(
+            dtype, bands=bands, height=HEIGHT, width=WIDTH, plants=plants
+        ),
+        nodata=nodata,
+        bbox=BBOX,
+    )
 
 
 @pytest.mark.parametrize("dtype", list(BAND_NODATA))
@@ -50,6 +70,7 @@ def test_rs_setbandnodata(dtype, tmp_path):
     SedonaDB and Sedona Spark must return the same raster: identical pixels and
     geotransform, band 1's nodata set, band 2's still absent."""
     sedona, spark = SedonaDB(), SedonaSpark()
+    plants = {(1, 1): BAND_NODATA[dtype]}
     for eng in (sedona, spark):
         # The new nodata value is also planted into the pixels: setting a
         # band's nodata must not mask or rewrite pixels that happen to hold
@@ -58,11 +79,21 @@ def test_rs_setbandnodata(dtype, tmp_path):
             "src",
             tmp_path / "src.tif",
             dtype=dtype,
-            plants={(1, 1): BAND_NODATA[dtype]},
+            bands=BANDS,
+            height=HEIGHT,
+            width=WIDTH,
+            bbox=BBOX,
+            plants=plants,
         )
 
     sql = f"SELECT RS_SetBandNoDataValue(rast, 1, {BAND_NODATA[dtype]}) FROM src"
-    compare(sql, sedona, spark)
+    # Anchored: parity alone would also pass if both engines no-opped.
+    compare(
+        sql,
+        sedona,
+        spark,
+        expected=_anchor(dtype, [BAND_NODATA[dtype], None], plants=plants),
+    )
 
 
 def test_rs_setbandnodata_band2(tmp_path):
@@ -71,10 +102,16 @@ def test_rs_setbandnodata_band2(tmp_path):
     sedona, spark = SedonaDB(), SedonaSpark()
     for eng in (sedona, spark):
         eng.create_random_raster_view(
-            "band2_src", tmp_path / "band2_src.tif", dtype="float64"
+            "band2_src",
+            tmp_path / "band2_src.tif",
+            dtype="float64",
+            bands=BANDS,
+            height=HEIGHT,
+            width=WIDTH,
+            bbox=BBOX,
         )
     sql = "SELECT RS_SetBandNoDataValue(rast, 2, 5.0) FROM band2_src"
-    compare(sql, sedona, spark)
+    compare(sql, sedona, spark, expected=_anchor("float64", [None, 5.0]))
 
 
 def test_rs_setbandnodata_overwrite(tmp_path):
@@ -83,13 +120,19 @@ def test_rs_setbandnodata_overwrite(tmp_path):
     sedona, spark = SedonaDB(), SedonaSpark()
     for eng in (sedona, spark):
         eng.create_random_raster_view(
-            "ow_src", tmp_path / "ow_src.tif", bands=1, nodata=7.0
+            "ow_src",
+            tmp_path / "ow_src.tif",
+            bands=1,
+            height=HEIGHT,
+            width=WIDTH,
+            bbox=BBOX,
+            nodata=7.0,
         )
-    for sql in (
-        "SELECT RS_SetBandNoDataValue(rast, 1, 9.0) FROM ow_src",
-        "SELECT RS_SetBandNoDataValue(rast, 1, 7.0) FROM ow_src",
+    for sql, new_nodata in (
+        ("SELECT RS_SetBandNoDataValue(rast, 1, 9.0) FROM ow_src", 9.0),
+        ("SELECT RS_SetBandNoDataValue(rast, 1, 7.0) FROM ow_src", 7.0),
     ):
-        compare(sql, sedona, spark)
+        compare(sql, sedona, spark, expected=_anchor("uint8", [new_nodata], bands=1))
 
 
 def test_rs_setbandnodata_two_arg_single_band(tmp_path):
@@ -98,10 +141,15 @@ def test_rs_setbandnodata_two_arg_single_band(tmp_path):
     sedona, spark = SedonaDB(), SedonaSpark()
     for eng in (sedona, spark):
         eng.create_random_raster_view(
-            "two_arg_src", tmp_path / "two_arg_src.tif", bands=1
+            "two_arg_src",
+            tmp_path / "two_arg_src.tif",
+            bands=1,
+            height=HEIGHT,
+            width=WIDTH,
+            bbox=BBOX,
         )
     sql = "SELECT RS_SetBandNoDataValue(rast, 5.0) FROM two_arg_src"
-    compare(sql, sedona, spark)
+    compare(sql, sedona, spark, expected=_anchor("uint8", [5.0], bands=1))
 
 
 @pytest.mark.xfail(
@@ -190,20 +238,42 @@ def test_rs_setbandnodata_nan_on_float(dtype, tmp_path):
     compare(sql, sedona, spark)
 
 
-def test_rs_setbandnodata_null_band_and_value(tmp_path):
-    """A NULL band index or a NULL nodata value yields a NULL raster on both
-    engines."""
+def test_rs_setbandnodata_null_band(tmp_path):
+    """A NULL band index yields a NULL raster on both engines."""
     sedona, spark = SedonaDB(), SedonaSpark()
     for eng in (sedona, spark):
         eng.create_random_raster_view(
-            "null_arg_src", tmp_path / "null_arg_src.tif", dtype="float64"
+            "null_band_src", tmp_path / "null_band_src.tif", dtype="float64"
         )
-    for sql in (
+    sql = (
         "SELECT RS_SetBandNoDataValue(rast, CASE WHEN 1 = 0 THEN 1 END, 5.0) "
-        "FROM null_arg_src",
-        "SELECT RS_SetBandNoDataValue(rast, 1, CAST(NULL AS DOUBLE)) FROM null_arg_src",
-    ):
-        compare(sql, sedona, spark)
+        "FROM null_band_src"
+    )
+    compare(sql, sedona, spark)
+
+
+@pytest.mark.xfail(
+    reason="SedonaDB reads a NULL nodata as 'clear this band's nodata' (the "
+    "trinary override semantics from #1198) and returns the raster; Sedona "
+    "Spark propagates the NULL and returns a NULL raster"
+)
+def test_rs_setbandnodata_null_value(tmp_path):
+    """A NULL nodata value gets the same treatment from both engines. The
+    fixture bands carry a nodata so a clear is observable (SedonaDB returns
+    band 1 cleared, band 2 still 7.0)."""
+    sedona, spark = SedonaDB(), SedonaSpark()
+    for eng in (sedona, spark):
+        eng.create_random_raster_view(
+            "null_value_src",
+            tmp_path / "null_value_src.tif",
+            dtype="float64",
+            nodata=7.0,
+        )
+    sql = (
+        "SELECT RS_SetBandNoDataValue(rast, 1, CAST(NULL AS DOUBLE)) "
+        "FROM null_value_src"
+    )
+    compare(sql, sedona, spark)
 
 
 @pytest.mark.xfail(
